@@ -6,7 +6,7 @@
   import { createEventDispatcher } from 'svelte';
   import { PlanStatusMessages } from '../../enums/planStatusMessages';
   import { TIME_MS } from '../../enums/time';
-  import { planReadOnly } from '../../stores/plan';
+  import { planReadOnly, timeCursorMs } from '../../stores/plan';
   import { view, viewUpdateGrid } from '../../stores/views';
   import type { ActivityDirective, ActivityDirectivesMap } from '../../types/activity';
   import type { User } from '../../types/app';
@@ -148,6 +148,10 @@
     const cursorDOY = getDoyTime(date);
     const newVerticalGuide = createVerticalGuide(timelines, cursorDOY);
     dispatch('updateVerticalGuides', [...verticalGuides, newVerticalGuide]);
+  }
+
+  function setTimeCursor(date: Date) {
+    timeCursorMs.set(date.getTime());
   }
 
   function switchToSimulation() {
@@ -315,6 +319,16 @@
       >
         Place Guide at Directive Start
       </ContextMenu.Item>
+      <ContextMenu.Item
+        size="sm"
+        on:click={() => {
+          if (activityDirectiveStartDate !== null) {
+            setTimeCursor(activityDirectiveStartDate);
+          }
+        }}
+      >
+        Set Time Cursor at Directive Start
+      </ContextMenu.Item>
       <ContextMenu.Separator />
       <div
         use:permissionHandler={{
@@ -391,6 +405,18 @@
       </ContextMenu.Sub>
 
       <ContextMenu.Sub>
+        <ContextMenu.SubTrigger size="sm">Set Time Cursor</ContextMenu.SubTrigger>
+        <ContextMenu.SubContent class="w-48">
+          <ContextMenu.Item size="sm" on:click={() => span && setTimeCursor(getSpanDate(span))}>
+            At Simulated Activity Start
+          </ContextMenu.Item>
+          <ContextMenu.Item size="sm" on:click={() => span && setTimeCursor(getSpanDate(span, true))}>
+            At Simulated Activity End
+          </ContextMenu.Item>
+        </ContextMenu.SubContent>
+      </ContextMenu.Sub>
+
+      <ContextMenu.Sub>
         <ContextMenu.SubTrigger size="sm">Set Simulation Start</ContextMenu.SubTrigger>
         <ContextMenu.SubContent class="w-48">
           <ContextMenu.Item size="sm" on:click={() => span && updateSimulationStartTime(getSpanDate(span))}>
@@ -421,6 +447,12 @@
         on:click={() => xScaleView && offsetX !== undefined && addVerticalGuide(xScaleView.invert(offsetX))}
       >
         Place Guide
+      </ContextMenu.Item>
+      <ContextMenu.Item
+        size="sm"
+        on:click={() => xScaleView && offsetX !== undefined && setTimeCursor(xScaleView.invert(offsetX))}
+      >
+        Set Time Cursor
       </ContextMenu.Item>
       <ContextMenu.Separator />
       <div

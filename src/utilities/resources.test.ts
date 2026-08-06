@@ -1,6 +1,14 @@
 import { describe, expect, test } from 'vitest';
-import type { Profile, ProfileSegment, Resource } from '../types/simulation';
-import { sampleProfiles } from './resources';
+import type { ValueSchema } from '../types/schema';
+import type { Profile, ProfileSegment, Resource, ResourceValue } from '../types/simulation';
+import {
+  formatResourceNumber,
+  formatResourceValue,
+  getResourceSparkline,
+  getResourceValueAtTime,
+  getResourceWindowStats,
+  sampleProfiles,
+} from './resources';
 
 const START = '2024-01-01T00:00:00';
 const startMs = new Date(START).getTime();
@@ -266,5 +274,282 @@ describe('sampleProfiles', () => {
     expect(result).toHaveLength(2);
     expect(result[0].name).toEqual('a');
     expect(result[1].name).toEqual('b');
+  });
+});
+
+function resource(schema: ValueSchema, values: ResourceValue[]): Resource {
+  return { name: 'r', schema, values };
+}
+
+const realSchema: ValueSchema = { type: 'real' };
+const stringSchema: ValueSchema = { type: 'string' };
+const booleanSchema: ValueSchema = { type: 'boolean' };
+
+describe('getResourceValueAtTime', () => {
+  test('interpolates linearly between the bracketing values', () => {
+    const r = resource(realSchema, [
+      { is_gap: false, x: 0, y: 10 },
+      { is_gap: false, x: 100, y: 20 },
+    ]);
+    expect(getResourceValueAtTime(r, 25, true)).toEqual({ isGap: false, value: 12.5 });
+    expect(getResourceValueAtTime(r, 50, true)).toEqual({ isGap: false, value: 15 });
+  });
+
+  test('snaps to the nearer neighbor when not interpolating, with the halfway point going right', () => {
+    const r = resource(realSchema, [
+      { is_gap: false, x: 0, y: 10 },
+      { is_gap: false, x: 100, y: 20 },
+    ]);
+    expect(getResourceValueAtTime(r, 49, false)).toEqual({ isGap: false, value: 10 });
+    expect(getResourceValueAtTime(r, 50, false)).toEqual({ isGap: false, value: 20 });
+    expect(getResourceValueAtTime(r, 51, false)).toEqual({ isGap: false, value: 20 });
+  });
+
+  test('steps rather than ramps for discrete schemas, even when interpolating', () => {
+    // sampleProfiles emits two points per discrete segment, so a value holds across the segment.
+    const r = resource(stringSchema, [
+      { is_gap: false, x: 0, y: 'A' },
+      { is_gap: false, x: 100, y: 'A' },
+      { is_gap: false, x: 100, y: 'B' },
+      { is_gap: false, x: 200, y: 'B' },
+    ]);
+    expect(getResourceValueAtTime(r, 50, true)).toEqual({ isGap: false, value: 'A' });
+    expect(getResourceValueAtTime(r, 150, true)).toEqual({ isGap: false, value: 'B' });
+  });
+
+  test('lands on the new value exactly at a segment boundary', () => {
+    const r = resource(stringSchema, [
+      { is_gap: false, x: 0, y: 'A' },
+      { is_gap: false, x: 100, y: 'A' },
+      { is_gap: false, x: 100, y: 'B' },
+      { is_gap: false, x: 200, y: 'B' },
+    ]);
+    // Two values share x=100; the left neighbor must be the later of them, so the step has taken
+    // effect. This is also what keeps the interpolation denominator from being zero.
+    expect(getResourceValueAtTime(r, 100, true)).toEqual({ isGap: false, value: 'B' });
+    expect(getResourceValueAtTime(r, 100, false)).toEqual({ isGap: false, value: 'B' });
+  });
+
+  test('never averages a boolean across a segment boundary', () => {
+    const r = resource(booleanSchema, [
+      { is_gap: false, x: 0, y: 0 },
+      { is_gap: false, x: 100, y: 1 },
+    ]);
+    expect(getResourceValueAtTime(r, 50, true)).toEqual({ isGap: false, value: 0 });
+  });
+
+  test('reports a gap instead of a value when either neighbor is a gap', () => {
+    const r = resource(realSchema, [
+      { is_gap: false, x: 0, y: 10 },
+      { is_gap: true, x: 100, y: null },
+    ]);
+    expect(getResourceValueAtTime(r, 50, true)).toEqual({ isGap: true, value: null });
+  });
+
+  test('treats a null y as no value even when is_gap is unset', () => {
+    const r = resource(realSchema, [
+      { x: 0, y: 10 },
+      { x: 100, y: null },
+    ]);
+    expect(getResourceValueAtTime(r, 50, true)).toEqual({ isGap: false, value: null });
+  });
+
+  test('falls back to the single adjacent value outside the sampled extent', () => {
+    const r = resource(realSchema, [
+      { is_gap: false, x: 100, y: 10 },
+      { is_gap: false, x: 200, y: 20 },
+    ]);
+    expect(getResourceValueAtTime(r, 50, true)).toEqual({ isGap: false, value: 10 });
+    expect(getResourceValueAtTime(r, 300, true)).toEqual({ isGap: false, value: 20 });
+  });
+
+  test('handles a single-value and an empty resource', () => {
+    expect(getResourceValueAtTime(resource(realSchema, [{ is_gap: false, x: 100, y: 7 }]), 50, true)).toEqual({
+      isGap: false,
+      value: 7,
+    });
+    expect(getResourceValueAtTime(resource(realSchema, []), 50, true)).toEqual({ isGap: false, value: null });
+  });
+
+  test('resolves values from a profile sampled by sampleProfiles', () => {
+    // A real profile ramping at 10 units/second for a minute.
+    const profile = realProfile('00:01:00', [{ initial: 0, rate: 10, start_offset: '00:00:00' }]);
+    const [sampled] = sampleProfiles([profile], START);
+    expect(getResourceValueAtTime(sampled, startMs + 30_000, true)).toEqual({ isGap: false, value: 300 });
+    expect(getResourceValueAtTime(sampled, startMs + 60_000, true)).toEqual({ isGap: false, value: 600 });
+  });
+});
+
+describe('formatResourceValue', () => {
+  test('appends the unit from schema metadata', () => {
+    expect(formatResourceValue(12.5, { metadata: { unit: { value: 'W' } }, type: 'real' })).toEqual('12.5 (W)');
+  });
+
+  test('omits the parenthetical when no unit is declared', () => {
+    expect(formatResourceValue(12.5, realSchema)).toEqual('12.5');
+  });
+
+  test('converts a duration from microseconds', () => {
+    expect(formatResourceValue(90_000_000, { type: 'duration' })).toEqual('1m 30s');
+  });
+
+  test('leaves a non-positive duration as a plain number', () => {
+    expect(formatResourceValue(0, { type: 'duration' })).toEqual('0');
+  });
+
+  test('renders strings and null', () => {
+    expect(formatResourceValue('IDLE', stringSchema)).toEqual('IDLE');
+    expect(formatResourceValue(null, realSchema)).toEqual('');
+  });
+
+  test('serializes a composite value rather than rendering [object Object]', () => {
+    const structSchema: ValueSchema = { items: { id: { type: 'int' } }, type: 'struct' };
+    const value = { id: 7 } as unknown as number;
+    expect(formatResourceValue(value, structSchema)).toEqual('{"id":7}');
+  });
+});
+
+describe('getResourceValueAtTime schema handling', () => {
+  test('steps a composite struct instead of averaging it into NaN', () => {
+    const structSchema: ValueSchema = { items: { id: { type: 'int' } }, type: 'struct' };
+    const r = resource(structSchema, [
+      { is_gap: false, x: 0, y: { id: 1 } as unknown as number },
+      { is_gap: false, x: 100, y: { id: 2 } as unknown as number },
+    ]);
+    expect(getResourceValueAtTime(r, 50, true)).toEqual({ isGap: false, value: { id: 1 } });
+  });
+
+  test('still interpolates a real-valued {initial, rate} struct', () => {
+    const rateSchema: ValueSchema = {
+      items: { initial: { type: 'real' }, rate: { type: 'real' } },
+      type: 'struct',
+    };
+    const r = resource(rateSchema, [
+      { is_gap: false, x: 0, y: 0 },
+      { is_gap: false, x: 100, y: 100 },
+    ]);
+    expect(getResourceValueAtTime(r, 25, true)).toEqual({ isGap: false, value: 25 });
+  });
+});
+
+describe('formatResourceNumber', () => {
+  test('collapses large magnitudes to a suffix', () => {
+    expect(formatResourceNumber(12_480_000_000)).toEqual('12.48G');
+    expect(formatResourceNumber(2_500_000)).toEqual('2.50M');
+  });
+
+  test('uses thousands separators in the mid range', () => {
+    expect(formatResourceNumber(152_436)).toEqual('152,436');
+  });
+
+  test('keeps fixed decimals for small values', () => {
+    expect(formatResourceNumber(108.08590357490047)).toEqual('108.09');
+    expect(formatResourceNumber(108.08590357490047, 0)).toEqual('108');
+  });
+
+  test('renders an en dash for missing values', () => {
+    expect(formatResourceNumber(null)).toEqual('–');
+    expect(formatResourceNumber(NaN)).toEqual('–');
+  });
+
+  test('handles negatives on both sides of the suffix threshold', () => {
+    expect(formatResourceNumber(-2_500_000)).toEqual('-2.50M');
+    expect(formatResourceNumber(-12.5)).toEqual('-12.50');
+  });
+});
+
+describe('getResourceWindowStats', () => {
+  test('time-weights the average rather than averaging samples', () => {
+    // 0 held for 900 units, then a ramp to 100 over 100 units. A naive per-sample mean would say
+    // ~33; the honest time-weighted answer is dominated by the long flat stretch.
+    const r = resource(realSchema, [
+      { is_gap: false, x: 0, y: 0 },
+      { is_gap: false, x: 900, y: 0 },
+      { is_gap: false, x: 900, y: 0 },
+      { is_gap: false, x: 1000, y: 100 },
+    ]);
+    const stats = getResourceWindowStats(r, 0, 1000);
+    expect(stats?.avg).toBeCloseTo(5, 6);
+    expect(stats?.min).toEqual(0);
+    expect(stats?.max).toEqual(100);
+    expect(stats?.durationMs).toEqual(1000);
+  });
+
+  test('integrates a flat segment exactly', () => {
+    const r = resource(realSchema, [
+      { is_gap: false, x: 0, y: 10 },
+      { is_gap: false, x: 100, y: 10 },
+    ]);
+    const stats = getResourceWindowStats(r, 0, 100);
+    expect(stats?.area).toEqual(1000);
+    expect(stats?.avg).toEqual(10);
+  });
+
+  test('clips a window that starts and ends mid-segment', () => {
+    const r = resource(realSchema, [
+      { is_gap: false, x: 0, y: 0 },
+      { is_gap: false, x: 100, y: 100 },
+    ]);
+    const stats = getResourceWindowStats(r, 25, 75);
+    expect(stats?.min).toBeCloseTo(25, 6);
+    expect(stats?.max).toBeCloseTo(75, 6);
+    expect(stats?.avg).toBeCloseTo(50, 6);
+    expect(stats?.durationMs).toEqual(50);
+  });
+
+  test('reports a degenerate window when both cursors coincide', () => {
+    const r = resource(realSchema, [
+      { is_gap: false, x: 0, y: 0 },
+      { is_gap: false, x: 100, y: 100 },
+    ]);
+    const stats = getResourceWindowStats(r, 50, 50);
+    expect(stats).toEqual({ area: 0, avg: 50, durationMs: 0, max: 50, min: 50, sampleCount: 0 });
+  });
+
+  test('is order independent', () => {
+    const r = resource(realSchema, [
+      { is_gap: false, x: 0, y: 0 },
+      { is_gap: false, x: 100, y: 100 },
+    ]);
+    expect(getResourceWindowStats(r, 75, 25)).toEqual(getResourceWindowStats(r, 25, 75));
+  });
+
+  test('skips gap segments', () => {
+    const r = resource(realSchema, [
+      { is_gap: false, x: 0, y: 10 },
+      { is_gap: false, x: 100, y: 10 },
+      { is_gap: true, x: 100, y: null },
+      { is_gap: true, x: 200, y: null },
+    ]);
+    const stats = getResourceWindowStats(r, 0, 200);
+    expect(stats?.durationMs).toEqual(100);
+    expect(stats?.avg).toEqual(10);
+  });
+});
+
+describe('getResourceSparkline', () => {
+  test('builds a path normalized to the resource range', () => {
+    const r = resource(realSchema, [
+      { is_gap: false, x: 0, y: 0 },
+      { is_gap: false, x: 100, y: 10 },
+    ]);
+    const spark = getResourceSparkline(r, 0, 100, 40, 20);
+    expect(spark?.min).toEqual(0);
+    expect(spark?.max).toEqual(10);
+    // Starts at the left edge on the baseline and ends at the right edge on the top.
+    expect(spark?.d).toEqual('M0.0 18.5 L40.0 1.5');
+  });
+
+  test('decimates to at most the requested point count', () => {
+    const values = Array.from({ length: 500 }, (_, i) => ({ is_gap: false, x: i, y: i }));
+    const spark = getResourceSparkline(resource(realSchema, values), 0, 499, 40, 20, 10);
+    expect((spark?.d.match(/[ML]/g) ?? []).length).toBeLessThanOrEqual(11);
+  });
+
+  test('returns null when there is nothing to draw', () => {
+    expect(getResourceSparkline(resource(realSchema, []), 0, 100, 40, 20)).toBeNull();
+    expect(
+      getResourceSparkline(resource(realSchema, [{ is_gap: false, x: 0, y: 1 }]), 0, 100, 40, 20),
+    ).toBeNull();
   });
 });

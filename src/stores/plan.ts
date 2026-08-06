@@ -18,6 +18,20 @@ export const creatingPlan: Writable<boolean> = writable(false);
 
 export const viewTimeRange: Writable<TimeRange> = writable({ end: 0, start: 0 });
 
+// Position of the timeline time cursor in absolute unix ms, or null when no cursor is set.
+// The timeline is the sole authority for this value; the playhead drag, the inspector panel's
+// time input, and the context menu all write here, and every consumer reads it. Kept as a store
+// (rather than an event) so a panel that mounts after the cursor was placed can still read it.
+export const timeCursorMs: Writable<number | null> = writable(null);
+
+// Second cursor for A/B comparison, in absolute unix ms. Null when comparison is off — which is
+// also the signal the inspector uses to decide between single-value and A/B/delta columns.
+export const timeCursorCompareMs: Writable<number | null> = writable(null);
+
+// True while either cursor is being dragged. The transient hover cursor reads this and hides
+// itself, so a drag is not accompanied by a second marker chasing the pointer.
+export const timeCursorDragging: Writable<boolean> = writable(false);
+
 // Display-only override of the plan's effective time bounds, used while previewing a plan snapshot
 // taken at different bounds so activities (esp. plan-end-anchored) and the timeline render correctly.
 // Null when not previewing (or for snapshots that predate stored bounds).
@@ -175,6 +189,9 @@ export function resetPlanStores() {
   creatingPlan.set(false);
   initialPlan.set(null);
   planBoundsPreviewOverride.set(null);
+  timeCursorCompareMs.set(null);
+  timeCursorDragging.set(false);
+  timeCursorMs.set(null);
   viewTimeRange.set({ end: 0, start: 0 });
 }
 

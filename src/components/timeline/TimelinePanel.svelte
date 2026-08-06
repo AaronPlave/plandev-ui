@@ -142,6 +142,10 @@
     viewSetSelectedRow(row.id);
   }
 
+  function openTimeCursorPanel() {
+    viewTogglePanel({ state: true, type: 'right', update: { rightComponentTop: 'TimeCursorPanel' } });
+  }
+
   function onEditRow(event: CustomEvent<Row>) {
     const { detail: row } = event;
     editRow(row);
@@ -258,6 +262,7 @@
       on:jumpToActivityDirective={jumpToActivityDirective}
       on:jumpToSpan={jumpToSpan}
       on:mouseDown={onMouseDown}
+      on:openInspector={openTimeCursorPanel}
       on:toggleActivityComposition={onToggleActivityComposition}
       on:toggleRowExpansion={({ detail: { expanded, rowId } }) => {
         viewUpdateRow('expanded', expanded, timelineId, rowId);

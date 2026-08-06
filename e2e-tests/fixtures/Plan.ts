@@ -51,6 +51,7 @@ export class Plan {
   panelSchedulingGoals: Locator;
   panelSimulatedActivitiesTable: Locator;
   panelSimulation: Locator;
+  panelTimeCursor: Locator;
   panelTimeline: Locator;
   panelTimelineEditor: Locator;
   planCollaboratorInput: Locator;
@@ -86,6 +87,10 @@ export class Plan {
   simulateButton: Locator;
   simulationHistoryList: Locator;
   simulationStatusSelector: (status: string) => string;
+  timeCursor: Locator;
+  timeCursorCompare: Locator;
+  timelinePlayheadLane: Locator;
+  timelineViewCopyLinkButton: Locator;
 
   constructor(
     public page: Page,
@@ -777,8 +782,13 @@ export class Plan {
     this.panelSchedulingGoals = page.locator('[data-component-name="SchedulingGoalsPanel"]');
     this.panelSimulatedActivitiesTable = page.locator('[data-component-name="ActivitySpansTablePanel"]');
     this.panelSimulation = page.locator('[data-component-name="SimulationPanel"]');
+    this.panelTimeCursor = page.locator('[data-component-name="TimeCursorPanel"]');
     this.panelTimeline = page.locator('[data-component-name="TimelinePanel"]');
     this.panelTimelineEditor = page.locator('[data-component-name="TimelineEditorPanel"]');
+    this.timelineViewCopyLinkButton = page.getByRole('button', { name: 'Copy Link to Timeline View' });
+    this.timelinePlayheadLane = page.getByTestId('timeline-playhead-lane');
+    this.timeCursor = page.getByRole('slider', { name: 'Time Cursor' });
+    this.timeCursorCompare = page.getByRole('slider', { name: 'Comparison Cursor' });
     this.planTitle = page.locator(`.plan-title:has-text("${this.planName}")`);
     this.planCollaboratorInputContainer = this.panelPlanMetadata.getByLabel('collaborators combobox');
     this.planCollaboratorInput = this.planCollaboratorInputContainer.getByPlaceholder('Search collaborators or plans');
@@ -884,6 +894,7 @@ export enum PanelNames {
   SCHEDULING_CONDITIONS = 'Scheduling Conditions',
   SELECTED_ACTIVITY = 'Selected Activity',
   SIMULATION = 'Simulation',
+  TIME_CURSOR = 'Time Cursor',
   TIMELINE_EDITOR = 'Timeline Editor',
   EXTERNAL_SOURCES = 'External Sources',
 }

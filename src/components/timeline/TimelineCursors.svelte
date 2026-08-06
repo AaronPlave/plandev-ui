@@ -3,6 +3,7 @@
 
   import type { ScaleTime } from 'd3-scale';
   import { createEventDispatcher } from 'svelte';
+  import { timeCursorDragging } from '../../stores/plan';
   import { plugins } from '../../stores/plugins';
   import { view } from '../../stores/views';
   import type { Label, MouseOver, Timeline, VerticalGuide } from '../../types/timeline';
@@ -183,7 +184,11 @@
       on:click={() => removeVerticalGuide(guide.id)}
     />
   {/each}
-  {#if cursorEnabled && cursorWithinView}
+  <!--
+    The transient hover cursor is suppressed while a time cursor is being dragged: two markers
+    chasing the pointer at once reads as a glitch, and the one being dragged is the one that matters.
+  -->
+  {#if cursorEnabled && cursorWithinView && !$timeCursorDragging}
     <TimelineCursor
       x={cursorX}
       label={cursorTimeLabel}

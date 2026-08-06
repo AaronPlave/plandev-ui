@@ -41,6 +41,7 @@
   import RowHeaderDragHandleWidth from './RowHeaderDragHandleWidth.svelte';
   import TimelineContextMenu from './TimelineContextMenu.svelte';
   import TimelineCursors from './TimelineCursors.svelte';
+  import TimelinePlayhead from './TimelinePlayhead.svelte';
   import TimelineHistogram from './TimelineHistogram.svelte';
   import TimelineSimulationRange from './TimelineSimulationRange.svelte';
   import TimelineTimeDisplay from './TimelineTimeDisplay.svelte';
@@ -462,6 +463,20 @@
       verticalGuides={timeline?.verticalGuides}
       {xScaleView}
       on:updateVerticalGuides
+    />
+    <TimelinePlayhead
+      {activityDirectivesMap}
+      {drawWidth}
+      marginLeft={timeline?.marginLeft}
+      {maxTimeRange}
+      {simulationDataset}
+      {spans}
+      verticalGuides={timeline?.verticalGuides}
+      {viewTimeRange}
+      {xScaleView}
+      on:openInspector
+      on:updateVerticalGuides
+      on:viewTimeRangeChanged={event => viewTimeRangeChanged(event.detail)}
     />
 
     <div

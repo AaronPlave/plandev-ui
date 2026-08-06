@@ -14,9 +14,7 @@
     externalSources,
     planDerivationGroupLinks,
   } from '../../stores/external-source';
-  import { createExternalResourceSubscription } from '../../stores/externalResource';
   import { planModelActivityTypes } from '../../stores/plan';
-  import { createProfileSubscription } from '../../stores/profile';
   import { resourceTypes, resourceTypesLoading } from '../../stores/simulation';
   import { selectedRow, viewAddFilterToRow } from '../../stores/views';
   import type {
@@ -62,6 +60,7 @@
   import { getExternalEventRowId } from '../../utilities/externalEvents';
   import { classNames } from '../../utilities/generic';
   import { showConfirmActivityCreationModal } from '../../utilities/modal';
+  import { createResourceSubscription } from '../../utilities/resourceSubscription';
   import { pluralize } from '../../utilities/text';
   import { getDoyTime } from '../../utilities/time';
   import {
@@ -243,7 +242,6 @@
       }
     });
 
-    const simProfileStartYmd = simulationDataset?.simulation_start_time ?? plan.start_time;
     resourceNames.forEach(name => {
       if (
         resourceRequestMap[name] &&
@@ -253,16 +251,8 @@
         return;
       }
 
-      const isExternal = !$resourceTypes.find(type => type.name === name);
-      // External datasets are matched by the simulation_dataset *id* (what
-      // plan_dataset.simulation_dataset_id references), whereas internal
-      // profiles are fetched by dataset_id. These are distinct id spaces;
-      // passing dataset_id to the external factory makes its sim-tied
-      // plan_dataset row preference silently never match.
-      const subscription = isExternal
-        ? createExternalResourceSubscription(simulationDataset.id, name, plan.start_time, user)
-        : createProfileSubscription(simulationDatasetId, name, simProfileStartYmd, user);
-      const type: 'external' | 'internal' = isExternal ? 'external' : 'internal';
+      const subscription = createResourceSubscription(name, simulationDataset, plan.start_time, $resourceTypes, user);
+      const type = subscription.kind;
       // subscription.store.subscribe() runs its callback immediately,
       // before it returns. That callback creates an unsubscribe function
       // that references this variable — so it must already exist.

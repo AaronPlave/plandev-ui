@@ -11,6 +11,7 @@
     ChevronDown,
     ChevronsLeftRight,
     Clipboard,
+    Crosshair,
     FlipHorizontal2,
     LucideEdit,
     PlaySquare,
@@ -155,6 +156,13 @@
     >
       <Table2 size={16} />
       Simulation Events Table
+    </DropdownMenu.Item>
+    <DropdownMenu.Item
+      class="flex cursor-pointer select-none items-center gap-2 rounded-sm py-2.5 text-[13px] font-medium"
+      on:click={() => onClickMenuItem('TimeCursorPanel')}
+    >
+      <Crosshair size={16} />
+      Time Cursor
     </DropdownMenu.Item>
     <DropdownMenu.Item
       class="flex cursor-pointer select-none items-center gap-2 rounded-sm py-2.5 text-[13px] font-medium"
