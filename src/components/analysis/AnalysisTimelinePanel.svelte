@@ -7,7 +7,6 @@
 -->
 <script lang="ts">
   import { Button } from '@nasa-jpl/stellar-svelte';
-  import { Crosshair } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
   import {
     addSourceActivityRow,
@@ -19,7 +18,6 @@
     selectedAnalysisActivity,
   } from '../../stores/analysis';
   import { getAnalysisActivityTimes } from '../../stores/analysisActivities';
-  import { inspectMode, inspectTimeMs } from '../../stores/analysisInspection';
   import { viewTimeRange } from '../../stores/plan';
   import {
     timelineInteractionMode,
@@ -117,27 +115,11 @@
     $selectedAnalysisActivity = span ? getActivityRefFromSpan(span) : null;
   }
 
-  function onInspectTime(time: number | null) {
-    // Pinning a time is asking what is there: show it, but only the first time, not while it is dragged around.
-    if ($inspectTimeMs === null && time !== null) {
-      dispatch('openAtTime');
-    }
-    $inspectTimeMs = time;
-  }
-
-  function onKeyDown(event: KeyboardEvent) {
-    if (event.key === 'Escape' && $inspectMode) {
-      $inspectMode = false;
-    }
-  }
-
   function onEditRow(row: Row) {
     viewSetSelectedRow(row.id);
     dispatch('editRow', row);
   }
 </script>
-
-<svelte:window on:keydown={onKeyDown} />
 
 <!-- Panel takes its height from a grid cell, as in the Plan page's grid. -->
 <div class="panel-cell">
@@ -146,17 +128,6 @@
       <div class="st-typography-medium timeline-title">Timeline</div>
       <PanelHeaderActions>
         <div class="header-actions timeline-icon-tray">
-          <!-- Inspecting a time changes nothing in the analysis, so it is offered read-only too. -->
-          <Button
-            size="xs"
-            variant={$inspectMode ? 'default' : 'outline'}
-            aria-label="Inspect time"
-            aria-pressed={$inspectMode}
-            title="Click or drag on the timeline to pin a time and see what each source says then. Esc to stop."
-            on:click={() => ($inspectMode = !$inspectMode)}
-          >
-            <Crosshair size={14} class="mr-1" />Inspect time
-          </Button>
           <TimelineViewControls
             planControls={false}
             maxTimeRange={$analysisMaxTimeRange}
@@ -200,9 +171,7 @@
           timelineLockStatus={$timelineLockStatus}
           {user}
           viewTimeRange={$viewTimeRange}
-          inspectMode={$inspectMode}
-          inspectTimeMs={$inspectTimeMs}
-          on:inspectTime={({ detail }) => onInspectTime(detail)}
+          on:openInspector={() => dispatch('openAtTime')}
           on:dblClick={() => dispatch('inspect')}
           on:mouseDown={onMouseDown}
           on:toggleRowExpansion={({ detail: { expanded, rowId } }) =>

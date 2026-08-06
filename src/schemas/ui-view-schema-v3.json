@@ -243,8 +243,11 @@
         "SchedulingGoalsPanel",
         "SimulationEventsPanel",
         "SimulationPanel",
+        "TimeCursorPanel",
         "TimelineEditorPanel",
-        "ExternalSourcesPanel"
+        "ExternalSourcesPanel",
+        "ExternalEventFormPanel",
+        "ExternalEventsTablePanel"
       ]
     },
     "yAxisId": {

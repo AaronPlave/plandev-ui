@@ -92,6 +92,7 @@
     planStartTimeYmd,
     planTags,
     resetPlanStores,
+    timeCursorMs,
     viewTimeRange,
   } from '../../../stores/plan';
   import {
@@ -328,6 +329,17 @@
       end: !isNaN(end) ? end : $maxTimeRange.end,
       start: !isNaN(start) ? start : $maxTimeRange.start,
     });
+
+    // Restores a cursor captured by the timeline's copy-link button. Consumed like the time-window
+    // params above, so a reload does not keep re-applying it.
+    const cursorTimeStr = $page.url.searchParams.get(SearchParameters.CURSOR_TIME);
+    if (cursorTimeStr) {
+      const cursorTime = new Date(cursorTimeStr).getTime();
+      if (!isNaN(cursorTime)) {
+        timeCursorMs.set(cursorTime);
+      }
+      removeQueryParam(SearchParameters.CURSOR_TIME);
+    }
 
     planModelActivityTypes.updateValue(() => data.initialActivityTypes);
     activityArgumentDefaults.set(data.initialActivityArguments);

@@ -45,8 +45,7 @@
     renameAnalysis,
     selectedAnalysisActivity,
   } from '../../../stores/analysis';
-  import { inspectTimeMs } from '../../../stores/analysisInspection';
-  import { viewTimeRange } from '../../../stores/plan';
+  import { timeCursorMs, viewTimeRange } from '../../../stores/plan';
   import { setTimelineSourcesContext } from '../../../stores/timelineSources';
   import { getUserStore } from '../../../stores/user';
   import { featurePermissions } from '../../../utilities/permissions';
@@ -332,7 +331,7 @@
               user={$user}
               on:inspectAt={() => {
                 openInspector('time');
-                timelinePanel?.reveal($inspectTimeMs ?? 0, $inspectTimeMs ?? 0);
+                timelinePanel?.reveal($timeCursorMs ?? 0, $timeCursorMs ?? 0);
               }}
               on:zoom={({ detail }) => timelinePanel?.zoomTo(detail.startMs, detail.endMs)}
             />

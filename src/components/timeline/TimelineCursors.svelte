@@ -12,6 +12,7 @@
 
   import type { ScaleTime } from 'd3-scale';
   import { createEventDispatcher } from 'svelte';
+  import { timeCursorDragging } from '../../stores/plan';
   import { plugins } from '../../stores/plugins';
   import { view } from '../../stores/views';
   import type { Label, MouseOver, Timeline, VerticalGuide } from '../../types/timeline';
@@ -260,7 +261,11 @@
     />
   {/each}
 </div>
-{#if cursorEnabled && cursorWithinView}
+<!--
+  The transient hover cursor is suppressed while a time cursor is being dragged: two markers
+  chasing the pointer at once reads as a glitch, and the one being dragged is the one that matters.
+-->
+{#if cursorEnabled && cursorWithinView && !$timeCursorDragging}
   <!-- The transient hover cursor lives in its own layer so it can draw above section
        bands, while persistent guides (above) stay below them. -->
   <div class="timeline-cursor-container timeline-cursor-container--active">

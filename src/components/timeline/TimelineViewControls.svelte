@@ -18,7 +18,7 @@
   import { PlanStatusMessages } from '../../enums/planStatusMessages';
   import { SearchParameters } from '../../enums/searchParameters';
   import { activityDirectivesMap, selectedActivityDirective } from '../../stores/activities';
-  import { plan, planReadOnly } from '../../stores/plan';
+  import { plan, planReadOnly, timeCursorMs } from '../../stores/plan';
   import {
     selectedSpan,
     simulationDataset,
@@ -73,11 +73,16 @@
   $: try {
     if (
       typeof window !== 'undefined' &&
-      ($selectedActivityDirective || $selectedSpan || $simulationDatasetId !== null)
+      ($selectedActivityDirective || $selectedSpan || $simulationDatasetId !== null || $timeCursorMs !== null)
     ) {
       viewURL = new URL(window.location.href);
       viewURL.searchParams.set(SearchParameters.START_TIME, new Date(viewTimeRange.start).toISOString());
       viewURL.searchParams.set(SearchParameters.END_TIME, new Date(viewTimeRange.end).toISOString());
+      // The time cursor is deliberately not kept in the URL as it moves — it is only captured here,
+      // when the user explicitly asks for a shareable link to this moment.
+      if ($timeCursorMs !== null) {
+        viewURL.searchParams.set(SearchParameters.CURSOR_TIME, new Date($timeCursorMs).toISOString());
+      }
       if ($selectedActivityDirective) {
         viewURL.searchParams.set(SearchParameters.ACTIVITY_ID, $selectedActivityDirective.id.toFixed());
       }

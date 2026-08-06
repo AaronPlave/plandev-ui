@@ -47,9 +47,8 @@ import {
   getRevisionActivities,
   getSimulationDatasetSpans,
 } from './analysisActivities';
-import { resetAnalysisInspection } from './analysisInspection';
 import { createImportedResourceSubscription, getSourceQuery } from './importedResource';
-import { viewTimeRange } from './plan';
+import { timeCursorCompareMs, timeCursorMs, viewTimeRange } from './plan';
 import { createProfileSubscription } from './profile';
 import { gqlSubscribable } from './subscribable';
 import { sources } from './sources';
@@ -298,7 +297,9 @@ export function closeAnalysis() {
   analysisSimulationTypeCounts.set({});
   selectedAnalysisActivity.set(null);
   clearAnalysisImports();
-  resetAnalysisInspection();
+  // The time cursors are page state of whichever page is open.
+  timeCursorCompareMs.set(null);
+  timeCursorMs.set(null);
   view.set(null);
 }
 

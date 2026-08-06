@@ -46,6 +46,7 @@ export type ViewGridComponent =
   | 'SchedulingGoalsPanel'
   | 'SimulationPanel'
   | 'SimulationEventsPanel'
+  | 'TimeCursorPanel'
   | 'TimelineEditorPanel';
 
 export type ViewGridSection = 'LeftBottom' | 'LeftTop' | 'MiddleBottom' | 'RightBottom' | 'RightTop';

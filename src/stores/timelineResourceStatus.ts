@@ -27,6 +27,11 @@ export type TimelineResourceError = {
   name: string;
 };
 
+export type TimelineResourceEntry = {
+  kind: TimelineResourceKind;
+  resource: Resource;
+};
+
 // datasetId/name are carried on the entry (not parsed back out of the key)
 // so the key format stays an internal detail and the id space we keyed on
 // (dataset_id for sim, simulation_dataset id for external) is preserved
@@ -52,6 +57,26 @@ export const timelineResourcesLoading: Readable<boolean> = derived(resourceState
   }
   return false;
 });
+
+// Every resource the timeline currently holds sampled values for, keyed by name. Covers both sim
+// and external profiles, since both subscription factories write here. Consumers that need
+// values-at-a-time (e.g. the time cursor inspector) read this instead of fetching again.
+//
+// Note that `setTimelineResourceState` rebuilds the Map on every emit, and during a live simulation
+// every subscription emits ~1 Hz — so this derivation is deliberately kept to a filter, and
+// consumers should guard any per-resource computation on the values they actually care about.
+export const timelineResources: Readable<Map<string, TimelineResourceEntry>> = derived(
+  resourceStates,
+  $resourceStates => {
+    const resources = new Map<string, TimelineResourceEntry>();
+    for (const state of $resourceStates.values()) {
+      if (state.resource) {
+        resources.set(state.name, { kind: state.kind, resource: state.resource });
+      }
+    }
+    return resources;
+  },
+);
 
 export const timelineResourcesErroring: Readable<TimelineResourceError[]> = derived(resourceStates, $resourceStates => {
   const errors: TimelineResourceError[] = [];

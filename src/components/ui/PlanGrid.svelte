@@ -18,6 +18,7 @@
   import SchedulingGoalsPanel from '../scheduling/SchedulingGoalsPanel.svelte';
   import SimulationEventsPanel from '../simulation/SimulationEventsPanel.svelte';
   import SimulationPanel from '../simulation/SimulationPanel.svelte';
+  import TimeCursorPanel from '../timeline/TimeCursorPanel.svelte';
   import TimelinePanel from '../timeline/TimelinePanel.svelte';
   import TimelineEditorPanel from '../timeline/form/TimelineEditorPanel.svelte';
   import CssGrid from './CssGrid.svelte';
@@ -62,6 +63,7 @@
     SchedulingGoalsPanel,
     SimulationEventsPanel,
     SimulationPanel,
+    TimeCursorPanel,
     TimelineEditorPanel,
     TimelineItemsPanel,
   };

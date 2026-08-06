@@ -3,6 +3,7 @@ export enum SearchParameters {
   ACTION_RUN_ID = 'actionRunId',
   ACTIVITY_ID = 'activityId',
   CONSTRAINT_ID = 'constraintId',
+  CURSOR_TIME = 'cursorTime',
   MODEL_ID = 'modelId',
   REASON = 'reason',
   REDIRECT_TO = 'redirectTo',

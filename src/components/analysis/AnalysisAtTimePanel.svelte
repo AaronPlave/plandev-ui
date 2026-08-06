@@ -1,7 +1,7 @@
 <svelte:options immutable={true} />
 
 <!--
-  What the analysis's sources say at the pinned inspection time (see stores/analysisInspection.ts).
+  What the analysis's sources say at the time cursor (the timeline's time cursor, `timeCursorMs`; with the comparison cursor set, the values at both and their difference).
 
   Resources: the ones the timeline's rows draw, each read at that instant from its own source and labelled for what
   the value is: a recorded sample, a sample still held, a line between samples, a value computed from a simulation, or
@@ -19,7 +19,7 @@
   import { debounce } from 'lodash-es';
   import { createEventDispatcher, onDestroy } from 'svelte';
   import { analysisSimulationDatasets, analysisSourceRevisions, selectedAnalysisActivity } from '../../stores/analysis';
-  import { inspectMode, inspectTimeMs } from '../../stores/analysisInspection';
+  import { timeCursorCompareMs, timeCursorMs } from '../../stores/plan';
   import { plugins } from '../../stores/plugins';
   import { getTimelineResourceState } from '../../stores/timelineResourceStatus';
   import { view } from '../../stores/views';
@@ -70,13 +70,14 @@
 
   type ResourceReading = { reading: AtTimeValue; resource: InspectedResource; units: string | null };
   type ActivityListing = { rows: AnalysisActivityRow[]; sourceId: string; total: number };
+  /** Everything read at one instant. */
+  type Snapshot = { listings: ActivityListing[]; readings: ResourceReading[]; time: number };
 
-  let readings: ResourceReading[] = [];
-  let listings: ActivityListing[] = [];
+  /** What the time cursor (A) and, in comparison, the second cursor (B) were read as; they lag the cursors while those move. */
+  let a: Snapshot | null = null;
+  let b: Snapshot | null = null;
   let error: string = '';
   let loading: boolean = false;
-  /** The instant `readings` and `listings` are of (they lag the pinned time while it moves and settles). */
-  let readAt: number | null = null;
   let request = 0;
 
   $: timeline = $view?.definition.plan.timelines[0];
@@ -85,26 +86,26 @@
   $: inspectedKey = inspected.map(({ name, sourceId }) => `${sourceId}::${name}`).join('|');
   $: bindingsKey = bindings.map(binding => JSON.stringify(binding)).join('|');
   $: dataKey = `${$analysisSourceRevisions.length}:${$analysisSimulationDatasets.length}`;
-  $: schedule($inspectTimeMs, inspectedKey, bindingsKey, dataKey);
-  $: groups = groupByRow(readings);
+  $: schedule($timeCursorMs, $timeCursorCompareMs, inspectedKey, bindingsKey, dataKey);
+  $: comparing = $timeCursorCompareMs !== null;
+  $: groups = groupByRow(a?.readings ?? []);
   $: selected = $selectedAnalysisActivity;
   $: outsideLimit = inspected.length > MAX_INSPECTED_RESOURCES;
 
   const run = debounce(read, SETTLE_MS);
 
-  function schedule(time: number | null, ..._keys: string[]) {
+  function schedule(time: number | null, compareTime: number | null, ..._keys: string[]) {
     if (time === null) {
       run.cancel();
       request++;
-      readings = [];
-      listings = [];
-      readAt = null;
+      a = null;
+      b = null;
       loading = false;
       error = '';
       return;
     }
     loading = true;
-    run(time);
+    run(time, compareTime);
   }
 
   onDestroy(() => {
@@ -218,23 +219,27 @@
     );
   }
 
-  async function read(time: number) {
+  async function readAt(time: number): Promise<Snapshot> {
+    const [readings, listings] = await Promise.all([
+      readResources(
+        time,
+        inspected.slice(0, MAX_INSPECTED_RESOURCES),
+        $analysisSourceRevisions,
+        $analysisSimulationDatasets,
+      ),
+      readActivities(time),
+    ]);
+    return { listings, readings, time };
+  }
+
+  async function read(time: number, compareTime: number | null) {
     const id = ++request;
     loading = true;
     try {
-      const [nextReadings, nextListings] = await Promise.all([
-        readResources(
-          time,
-          inspected.slice(0, MAX_INSPECTED_RESOURCES),
-          $analysisSourceRevisions,
-          $analysisSimulationDatasets,
-        ),
-        readActivities(time),
-      ]);
+      const [nextA, nextB] = await Promise.all([readAt(time), compareTime === null ? null : readAt(compareTime)]);
       if (id === request) {
-        readings = nextReadings;
-        listings = nextListings;
-        readAt = time;
+        a = nextA;
+        b = nextB;
         error = '';
       }
     } catch (e) {
@@ -260,6 +265,28 @@
         .slice(0, 2)
         .join(' ') || '0s';
     return `${delta < 0 ? '−' : '+'}${span}`;
+  }
+
+  function showValue(reading: AtTimeValue): string {
+    return reading.basis === 'unavailable' || reading.basis === 'gap' ? '—' : formatAtTimeValue(reading.value);
+  }
+
+  /** B minus A, when both are numbers. */
+  function getDelta(first: AtTimeValue, second: AtTimeValue): string {
+    if (typeof first.value === 'number' && typeof second.value === 'number') {
+      const delta = second.value - first.value;
+      return delta === 0 ? 'no change' : `Δ ${delta > 0 ? '+' : '−'}${formatAtTimeValue(Math.abs(delta))}`;
+    }
+    return first.value === second.value ? 'no change' : 'changed';
+  }
+
+  function toggleCompare() {
+    if ($timeCursorCompareMs !== null) {
+      $timeCursorCompareMs = null;
+    } else if ($timeCursorMs !== null) {
+      // As the playhead does: far enough from A to be a cursor of its own.
+      $timeCursorCompareMs = $timeCursorMs + 3_600_000;
+    }
   }
 
   const basisLabels: Record<AtTimeBasis, string> = {
@@ -303,49 +330,65 @@
 <div class="at-time">
   <div class="time-bar">
     <Crosshair size={14} class="shrink-0 text-muted-foreground" />
-    {#if $inspectTimeMs === null}
-      <span class="text-muted-foreground">No time pinned</span>
+    {#if $timeCursorMs === null}
+      <span class="text-muted-foreground">No time cursor</span>
     {:else}
-      <span class="st-typography-medium time" aria-label="Inspection time">
-        {formatTime($inspectTimeMs)}
-        {$plugins.time.primary.label}
+      <span class="time-lines">
+        <span class="st-typography-medium time" aria-label="Time cursor">
+          {#if comparing}<span class="badge-ab">A</span>{/if}{formatTime($timeCursorMs)}
+          {$plugins.time.primary.label}
+        </span>
+        {#if $timeCursorCompareMs !== null}
+          <span class="st-typography-medium time" aria-label="Comparison cursor">
+            <span class="badge-ab">B</span>{formatTime($timeCursorCompareMs)}
+            {$plugins.time.primary.label}
+            <span class="text-muted-foreground">({offset($timeCursorCompareMs, $timeCursorMs)})</span>
+          </span>
+        {/if}
       </span>
     {/if}
     <span class="grow" />
-    <Button
-      size="xs"
-      variant={$inspectMode ? 'default' : 'outline'}
-      aria-pressed={$inspectMode}
-      on:click={() => ($inspectMode = !$inspectMode)}>{$inspectTimeMs === null ? 'Pin a time' : 'Move'}</Button
-    >
-    {#if $inspectTimeMs !== null}
+    {#if $timeCursorMs !== null}
       <Button
         size="xs"
         variant="outline"
-        title="Bring the pinned time into view on the timeline"
-        on:click={() => $inspectTimeMs !== null && dispatch('reveal', $inspectTimeMs)}>Show</Button
+        title="Bring the time cursor into view on the timeline"
+        on:click={() => $timeCursorMs !== null && dispatch('reveal', $timeCursorMs)}>Show</Button
       >
-      <Button size="xs" variant="outline" on:click={() => ($inspectTimeMs = null)}>Clear</Button>
+      <Button
+        size="xs"
+        variant="outline"
+        aria-pressed={comparing}
+        title="Read the sources at a second time too, and compare"
+        on:click={toggleCompare}>{comparing ? 'Stop comparing' : 'Compare'}</Button
+      >
+      <Button
+        size="xs"
+        variant="outline"
+        on:click={() => {
+          $timeCursorCompareMs = null;
+          $timeCursorMs = null;
+        }}>Clear</Button
+      >
     {/if}
   </div>
 
-  {#if $inspectTimeMs === null}
+  {#if $timeCursorMs === null}
     <div class="empty">
-      Pin a time on the timeline to see what each source says then. Turn on <span class="st-typography-medium"
-        >Inspect time</span
-      >
-      and click, or drag, where you want to look. The pinned time stays put while you zoom and pan.
+      Press on the ruler above the rows, or right-click the timeline and choose <span class="st-typography-medium"
+        >Set Time Cursor</span
+      >, to see what each source says at that time. The cursor stays put while you zoom and pan, and drag it to scrub.
     </div>
   {:else}
     <div class="body" class:stale={loading}>
-      {#if readAt !== null && readAt !== $inspectTimeMs}
+      {#if loading}
         <div class="note">Updating…</div>
       {/if}
       {#if error}
         <div class="note error" role="alert">{error}</div>
       {/if}
 
-      <section aria-label="Resource values at the pinned time">
+      <section aria-label="Resource values at the time cursor">
         <h3 class="st-typography-medium">Resources</h3>
         {#if !inspected.length}
           <div class="note">
@@ -355,19 +398,39 @@
         {#each groups as group (group.name + group.readings[0].resource.rowId)}
           <div class="row-name st-typography-label">{group.name}</div>
           {#each group.readings as { reading, resource, units } (resource.sourceId + resource.name)}
+            {@const other = b?.readings.find(
+              r => r.resource.sourceId === resource.sourceId && r.resource.name === resource.name,
+            )?.reading}
             <div class="reading" class:muted={reading.basis === 'unavailable'}>
               <div class="reading-line">
                 <span class="resource-name" title={resource.name}>{resource.name}</span>
                 <span class="value" class:none={reading.value === null}>
-                  {reading.basis === 'unavailable' || reading.basis === 'gap' ? '—' : formatAtTimeValue(reading.value)}
+                  {showValue(reading)}
                   {#if units && reading.value !== null}<span class="units">{units}</span>{/if}
                 </span>
                 <span class="basis {reading.basis}">{basisLabels[reading.basis]}</span>
               </div>
+              {#if comparing}
+                <div class="reading-line">
+                  <span class="resource-name text-muted-foreground">
+                    at B
+                    {#if other}<span class="delta">{getDelta(reading, other)}</span>{/if}
+                  </span>
+                  <span class="value" class:none={!other || other.value === null}>
+                    {other ? showValue(other) : '—'}
+                    {#if units && other && other.value !== null}<span class="units">{units}</span>{/if}
+                  </span>
+                  <span class="basis {other?.basis ?? 'unavailable'}">{basisLabels[other?.basis ?? 'unavailable']}</span
+                  >
+                </div>
+              {/if}
               <div class="detail">
                 <span class="source-label">{sourceLabels[resource.sourceId] ?? resource.sourceId}</span>
-                · {explain(reading, readAt ?? $inspectTimeMs)}
+                · {explain(reading, a?.time ?? $timeCursorMs)}
               </div>
+              {#if comparing && other}
+                <div class="detail">B: {explain(other, b?.time ?? $timeCursorMs)}</div>
+              {/if}
             </div>
           {/each}
         {/each}
@@ -378,41 +441,45 @@
         {/if}
       </section>
 
-      <section aria-label="Activities overlapping the pinned time">
-        <h3 class="st-typography-medium">Activities</h3>
-        {#each listings as listing (listing.sourceId)}
-          {@const binding = bindings.find(({ id }) => id === listing.sourceId)}
-          <div class="row-name st-typography-label">
-            {sourceLabels[listing.sourceId] ?? listing.sourceId}
-            <span class="count">
-              {listing.total.toLocaleString()} at this time{listing.total > listing.rows.length
-                ? `, latest ${listing.rows.length} shown`
-                : ''}
-            </span>
-          </div>
-          {#each listing.rows as row (row.activity_id)}
-            {@const ref = getAnalysisActivityRowRef(bindings, row)}
-            <button
-              class="activity"
-              class:selected={analysisActivityRefsEqual(ref, selected)}
-              on:click={() => select(row)}
-            >
-              <span class="activity-type">{row.type}</span>
-              {#if row.name && row.name !== row.type}<span class="activity-name">{row.name}</span>{/if}
-              <span class="activity-time">
-                {offset(Date.parse(row.start_time), readAt ?? $inspectTimeMs)}
-                →
-                {row.end_time ? offset(Date.parse(row.end_time), readAt ?? $inspectTimeMs) : 'no end'}
-              </span>
-            </button>
-          {/each}
-          {#if binding?.kind === 'plan'}
-            <div class="note">A plan's directives have no end: only those starting at this instant are listed.</div>
-          {/if}
-        {:else}
-          <div class="note">This analysis has no sources.</div>
-        {/each}
-      </section>
+      {#each [a, b] as snapshot, index}
+        {#if snapshot}
+          <section aria-label="Activities overlapping the time cursor">
+            <h3 class="st-typography-medium">Activities{comparing ? ` at ${index === 0 ? 'A' : 'B'}` : ''}</h3>
+            {#each snapshot.listings as listing (listing.sourceId)}
+              {@const binding = bindings.find(({ id }) => id === listing.sourceId)}
+              <div class="row-name st-typography-label">
+                {sourceLabels[listing.sourceId] ?? listing.sourceId}
+                <span class="count">
+                  {listing.total.toLocaleString()} at this time{listing.total > listing.rows.length
+                    ? `, latest ${listing.rows.length} shown`
+                    : ''}
+                </span>
+              </div>
+              {#each listing.rows as row (row.activity_id)}
+                {@const ref = getAnalysisActivityRowRef(bindings, row)}
+                <button
+                  class="activity"
+                  class:selected={analysisActivityRefsEqual(ref, selected)}
+                  on:click={() => select(row)}
+                >
+                  <span class="activity-type">{row.type}</span>
+                  {#if row.name && row.name !== row.type}<span class="activity-name">{row.name}</span>{/if}
+                  <span class="activity-time">
+                    {offset(Date.parse(row.start_time), snapshot.time)}
+                    →
+                    {row.end_time ? offset(Date.parse(row.end_time), snapshot.time) : 'no end'}
+                  </span>
+                </button>
+              {/each}
+              {#if binding?.kind === 'plan'}
+                <div class="note">A plan's directives have no end: only those starting at this instant are listed.</div>
+              {/if}
+            {:else}
+              <div class="note">This analysis has no sources.</div>
+            {/each}
+          </section>
+        {/if}
+      {/each}
     </div>
   {/if}
 </div>
@@ -435,6 +502,25 @@
 
   .time {
     font-variant-numeric: tabular-nums;
+  }
+
+  .time-lines {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .badge-ab {
+    background: var(--st-gray-100);
+    border-radius: 3px;
+    color: white;
+    font-size: 10px;
+    margin-right: 4px;
+    padding: 0 3px;
+  }
+
+  .delta {
+    color: var(--st-gray-60);
+    margin-left: 6px;
   }
 
   .grow {

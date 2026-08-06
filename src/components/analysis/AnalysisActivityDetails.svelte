@@ -10,7 +10,7 @@
   import { Crosshair, ZoomIn } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
   import { analysisPlanDirectives, showAnalysisActivityType } from '../../stores/analysis';
-  import { inspectTimeMs } from '../../stores/analysisInspection';
+  import { timeCursorMs } from '../../stores/plan';
   import { view } from '../../stores/views';
   import { plugins } from '../../stores/plugins';
   import type {
@@ -194,11 +194,11 @@
           size="xs"
           variant="outline"
           on:click={() => {
-            $inspectTimeMs = endMs === null ? startMs : (startMs + endMs) / 2;
+            $timeCursorMs = endMs === null ? startMs : (startMs + endMs) / 2;
             dispatch('inspectAt');
           }}
-          title="Pin the inspection time at the middle of this activity and see what the sources say then"
-          ><Crosshair size={12} class="mr-1" />Inspect during</Button
+          title="Put the time cursor at the middle of this activity and see what the sources say then"
+          ><Crosshair size={12} class="mr-1" />Cursor at middle</Button
         >
       </div>
     {/if}
