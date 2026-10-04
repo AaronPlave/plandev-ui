@@ -33,6 +33,8 @@
   import Panel from '../ui/Panel.svelte';
   import PanelHeaderActions from '../ui/PanelHeaderActions.svelte';
 
+  /** Shows the rows without offering any change to them: see Timeline's `readOnly`. */
+  export let readOnly: boolean = false;
   export let user: User | null;
 
   const dispatch = createEventDispatcher<{ editRow: Row; inspect: void }>();
@@ -127,6 +129,7 @@
           maxTimeRange={$analysisMaxTimeRange}
           planEndTimeDoy=""
           planStartTimeYmd=""
+          {readOnly}
           {timeline}
           timelineInteractionMode={$timelineInteractionMode}
           selectedActivityDirectiveId={null}

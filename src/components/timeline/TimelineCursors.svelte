@@ -16,6 +16,7 @@
   export let marginLeft: number = 50;
   export let mouseOver: MouseOver | null;
   export let histogramCursorTime: Date | null = null;
+  export let readOnly: boolean = false;
   export let xScaleView: ScaleTime<number, number> | null = null;
   export let verticalGuides: VerticalGuide[] = [];
 
@@ -92,11 +93,17 @@
   }
 
   function removeVerticalGuide(verticalGuideId: number) {
+    if (readOnly) {
+      return;
+    }
     const filteredVerticalGuides = verticalGuides.filter(guide => guide.id !== verticalGuideId);
     dispatch('updateVerticalGuides', filteredVerticalGuides);
   }
 
   function addVerticalGuide(doyTimestamp: string) {
+    if (readOnly) {
+      return;
+    }
     const newVerticalGuide = createVerticalGuide(timelines, doyTimestamp);
     dispatch('updateVerticalGuides', [...verticalGuides, newVerticalGuide]);
     cursorWithinView = false; // Hide active cursor that would overlap the created guide until mouse is moved again

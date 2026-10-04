@@ -79,6 +79,8 @@
   export let interpolateHoverValue: boolean = false;
   export let showTimelineTooltip: boolean = false;
   export let limitTooltipToLine: boolean = false;
+  /** Rows, layers and guides can't be changed: the timeline is only looked at. */
+  export let readOnly: boolean = false;
 
   const dispatch = createEventDispatcher<{
     mouseDown: MouseDown;
@@ -257,7 +259,7 @@
 
   function onMouseDownRowMove(event: Event) {
     event.preventDefault();
-    rowDragMoveDisabled = false;
+    rowDragMoveDisabled = readOnly;
   }
 
   function onMouseUpRowMove(event: Event) {
@@ -355,6 +357,10 @@
     // in order to copy text within the tooltips
     const a = e.detail.e.target as HTMLElement;
     if (a && a.classList.value && a.classList.value.indexOf('tippy') > -1) {
+      return;
+    }
+    // A read-only row header has nothing to offer: its menu is all row edits.
+    if (readOnly && e.detail.origin === 'row-header') {
       return;
     }
     contextMenu = { ...e.detail, row };
@@ -460,6 +466,7 @@
       marginLeft={timeline?.marginLeft}
       {mouseOver}
       verticalGuides={timeline?.verticalGuides}
+      {readOnly}
       {xScaleView}
       on:updateVerticalGuides
     />
@@ -499,6 +506,7 @@
             {planEndTimeDoy}
             {plan}
             {planStartTimeYmd}
+            {readOnly}
             {rowDragMoveDisabled}
             {decimate}
             {interpolateHoverValue}
@@ -552,6 +560,7 @@
     {hasUpdateDirectivePermission}
     {hasUpdateSimulationPermission}
     {maxTimeRange}
+    {readOnly}
     on:collapseDiscreteTree={onCollapseDiscreteTree}
     on:deleteActivityDirective
     on:jumpToActivityDirective

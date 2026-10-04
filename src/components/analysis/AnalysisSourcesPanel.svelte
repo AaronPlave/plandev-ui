@@ -150,6 +150,7 @@
     <SourceBrowser
       groups={['Imported Sources', 'Simulations']}
       emptyGroupMessages={{ 'Imported Sources': 'No imported sources added', Simulations: 'No simulations added' }}
+      {readOnly}
       showUpload={false}
       {user}
     />

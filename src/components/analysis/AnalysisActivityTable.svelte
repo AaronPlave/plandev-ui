@@ -42,7 +42,7 @@
   let direction: 'asc' | 'desc' = 'asc';
   let total: number | null = null;
   let version = 0;
-  /** The selection this table made itself: it needs no scrolling to. */
+  /** The selection this table just made itself, until it arrives back as `selected`: it needs no scrolling to. */
   let clicked: AnalysisActivityRef | null = null;
 
   const setText = debounce((value: string) => (text = value), 300);
@@ -59,8 +59,19 @@
   }
   $: selectedKey = selected ? `${selected.sourceId}::${selected.activityId}` : null;
   $: redrawSelection(gridApi, selectedKey);
-  $: if (gridApi && selected && !analysisActivityRefsEqual(selected, clicked)) {
-    reveal(selected, where);
+  $: onSelected(gridApi, selected, where);
+
+  function onSelected(
+    api: GridApi<AnalysisActivityRow> | null,
+    ref: AnalysisActivityRef | null,
+    currentWhere: Record<string, unknown>,
+  ) {
+    // One-shot: whatever selection arrives next, a later one of the same activity (from the timeline) is revealed.
+    const fromThisTable = analysisActivityRefsEqual(ref, clicked);
+    clicked = null;
+    if (api && ref && !fromThisTable) {
+      reveal(ref, currentWhere);
+    }
   }
 
   function redrawSelection(api: GridApi<AnalysisActivityRow> | null, _key: string | null) {

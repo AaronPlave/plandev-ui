@@ -41,6 +41,7 @@
   export let hasUpdateSimulationPermission: boolean = false;
   export let maxTimeRange: TimeRange = { end: 0, start: 0 };
   export let plan: Plan | null = null;
+  export let readOnly: boolean = false;
   export let simulation: Simulation | null;
   export let spansMap: SpansMap;
   export let spanUtilityMaps: SpanUtilityMaps;
@@ -376,17 +377,19 @@
     {:else if span}
       <ContextMenu.Item size="sm" on:click={jumpToActivityDirective}>Jump to Activity Directive</ContextMenu.Item>
       <ContextMenu.Separator />
-      <ContextMenu.Sub>
-        <ContextMenu.SubTrigger size="sm">Place Guide</ContextMenu.SubTrigger>
-        <ContextMenu.SubContent class="w-48">
-          <ContextMenu.Item size="sm" on:click={() => span && addVerticalGuide(getSpanDate(span))}>
-            At Simulated Activity Start
-          </ContextMenu.Item>
-          <ContextMenu.Item size="sm" on:click={() => span && addVerticalGuide(getSpanDate(span, true))}>
-            At Simulated Activity End
-          </ContextMenu.Item>
-        </ContextMenu.SubContent>
-      </ContextMenu.Sub>
+      {#if !readOnly}
+        <ContextMenu.Sub>
+          <ContextMenu.SubTrigger size="sm">Place Guide</ContextMenu.SubTrigger>
+          <ContextMenu.SubContent class="w-48">
+            <ContextMenu.Item size="sm" on:click={() => span && addVerticalGuide(getSpanDate(span))}>
+              At Simulated Activity Start
+            </ContextMenu.Item>
+            <ContextMenu.Item size="sm" on:click={() => span && addVerticalGuide(getSpanDate(span, true))}>
+              At Simulated Activity End
+            </ContextMenu.Item>
+          </ContextMenu.SubContent>
+        </ContextMenu.Sub>
+      {/if}
 
       <ContextMenu.Sub>
         <ContextMenu.SubTrigger size="sm">Set Simulation Start</ContextMenu.SubTrigger>
@@ -414,13 +417,15 @@
         </ContextMenu.SubContent>
       </ContextMenu.Sub>
     {:else}
-      <ContextMenu.Item
-        size="sm"
-        on:click={() => xScaleView && offsetX !== undefined && addVerticalGuide(xScaleView.invert(offsetX))}
-      >
-        Place Guide
-      </ContextMenu.Item>
-      <ContextMenu.Separator />
+      {#if !readOnly}
+        <ContextMenu.Item
+          size="sm"
+          on:click={() => xScaleView && offsetX !== undefined && addVerticalGuide(xScaleView.invert(offsetX))}
+        >
+          Place Guide
+        </ContextMenu.Item>
+        <ContextMenu.Separator />
+      {/if}
       <div
         use:permissionHandler={{
           hasPermission: hasUpdateSimulationPermission && !$planReadOnly,
@@ -523,24 +528,28 @@
       <ContextMenu.Separator />
     {/if}
   {/if}
-  <ContextMenu.Item size="sm" on:click={onEditRow}>Edit Row</ContextMenu.Item>
-  <ContextMenu.Item size="sm" on:click={onMoveRowUp}>Move Row Up</ContextMenu.Item>
-  <ContextMenu.Item size="sm" on:click={onMoveRowDown}>Move Row Down</ContextMenu.Item>
-  <ContextMenu.Item size="sm" on:click={onInsertRow}>Insert Row</ContextMenu.Item>
-  <ContextMenu.Item size="sm" on:click={onDuplicateRow}>Duplicate Row</ContextMenu.Item>
-  <ContextMenu.Item size="sm" on:click={onDeleteRow}>Delete Row</ContextMenu.Item>
+  {#if !readOnly}
+    <ContextMenu.Item size="sm" on:click={onEditRow}>Edit Row</ContextMenu.Item>
+    <ContextMenu.Item size="sm" on:click={onMoveRowUp}>Move Row Up</ContextMenu.Item>
+    <ContextMenu.Item size="sm" on:click={onMoveRowDown}>Move Row Down</ContextMenu.Item>
+    <ContextMenu.Item size="sm" on:click={onInsertRow}>Insert Row</ContextMenu.Item>
+    <ContextMenu.Item size="sm" on:click={onDuplicateRow}>Duplicate Row</ContextMenu.Item>
+    <ContextMenu.Item size="sm" on:click={onDeleteRow}>Delete Row</ContextMenu.Item>
+  {/if}
   {#if hasActivityLayer}
     {#if discreteOptions?.displayMode === 'grouped'}
       <ContextMenu.Separator />
       <ContextMenu.Item size="sm" on:click={onCollapseDiscreteTree}>Collapse All Hierarchies</ContextMenu.Item>
     {/if}
-    <ContextMenu.Separator />
-    <ContextMenu.RadioGroup onValueChange={onShowDirectivesAndActivitiesChange} value={activityOptions?.composition}>
-      <ContextMenu.RadioItem size="sm" value="directives" id="directives"
-        >Show activity directives</ContextMenu.RadioItem
-      >
-      <ContextMenu.RadioItem size="sm" value="spans" id="spans">Show simulated activities</ContextMenu.RadioItem>
-      <ContextMenu.RadioItem size="sm" value="both" id="both">Show both</ContextMenu.RadioItem>
-    </ContextMenu.RadioGroup>
+    {#if !readOnly}
+      <ContextMenu.Separator />
+      <ContextMenu.RadioGroup onValueChange={onShowDirectivesAndActivitiesChange} value={activityOptions?.composition}>
+        <ContextMenu.RadioItem size="sm" value="directives" id="directives"
+          >Show activity directives</ContextMenu.RadioItem
+        >
+        <ContextMenu.RadioItem size="sm" value="spans" id="spans">Show simulated activities</ContextMenu.RadioItem>
+        <ContextMenu.RadioItem size="sm" value="both" id="both">Show both</ContextMenu.RadioItem>
+      </ContextMenu.RadioGroup>
+    {/if}
   {/if}
 </ContextMenuInternal>

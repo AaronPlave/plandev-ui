@@ -52,7 +52,7 @@
   ].sort();
   // Adding a row from the Sources browser selects it: show it in the editor.
   $: selectedRowId = $selectedRow?.id;
-  $: if (selectedRowId !== undefined) {
+  $: if (selectedRowId !== undefined && !readOnly) {
     rightTab = 'editor';
   }
 
@@ -115,6 +115,7 @@
           <Resizable.Pane defaultSize={62} minSize={20}>
             <AnalysisTimelinePanel
               bind:this={timelinePanel}
+              {readOnly}
               user={$user}
               on:editRow={() => (rightTab = 'editor')}
               on:inspect={() => (rightTab = 'details')}
@@ -147,15 +148,17 @@
               class:active={rightTab === 'details'}
               on:click={() => (rightTab = 'details')}>Activity</button
             >
-            <button
-              role="tab"
-              aria-selected={rightTab === 'editor'}
-              class:active={rightTab === 'editor'}
-              on:click={() => (rightTab = 'editor')}>Timeline Editor</button
-            >
+            {#if !readOnly}
+              <button
+                role="tab"
+                aria-selected={rightTab === 'editor'}
+                class:active={rightTab === 'editor'}
+                on:click={() => (rightTab = 'editor')}>Timeline Editor</button
+              >
+            {/if}
           </div>
           <div class="tab-body">
-            {#if rightTab === 'details'}
+            {#if rightTab === 'details' || readOnly}
               <AnalysisActivityDetails
                 bindings={$analysisSourceBindings}
                 datasets={$analysisSimulationDatasets}

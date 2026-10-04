@@ -30,7 +30,12 @@ const {
 const { viewTimeRange } = await import('./plan');
 const { view } = await import('./views');
 
-const user = { activeRole: 'user', id: 'test', token: 't' } as unknown as User;
+const user = {
+  activeRole: 'user',
+  id: 'test',
+  permissibleQueries: { update_analysis: true },
+  token: 't',
+} as unknown as User;
 
 const revision = {
   activity_types: [{ category: 'DSN', count: 2, first_start: null, last_end: null, type: 'DSN_Pass' }],
@@ -163,6 +168,16 @@ describe('analysis store', () => {
     closeAnalysis();
     await openAnalysis(savedAnalysis(definition), user);
     expect(get(analysisSourceBindings)).toEqual(definition.sources);
+  });
+
+  it("doesn't save for someone who can't update the analysis", async () => {
+    vi.useFakeTimers();
+    await openAnalysis({ ...savedAnalysis(createAnalysisDefinition()), owner: 'someone-else' }, user);
+    const stop = autosaveAnalysis(user);
+    await addAnalysisSource({ kind: 'simulation', simulationDatasetId: 1 }, user);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(effects.updateAnalysis).not.toHaveBeenCalled();
+    stop();
   });
 
   it('removing a source removes the rows only it filled and keeps the rest of a shared row', async () => {

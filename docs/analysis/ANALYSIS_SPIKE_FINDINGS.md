@@ -91,7 +91,7 @@ Its rows hold imported battery resources, imported DSN passes, downlinks and sci
 - **Histogram feed** of all 670k activity times: 60 MB of JSON and 3.9 s, once per revision per session.
 - **Table:** first page in under 100 ms. An ILIKE text filter count is about 0.6 s. Scroll-to-selected deep in the table is one count query.
 - **Revision delete:** about 0.4 s, by dropping partitions.
-- **Drawing** is the ceiling now, not loading. Before the packing fix, a row with about 8k visible activities took seconds per redraw. The discrete renderer still stops drawing a row above 10,000 visible items and says so; zooming in draws them.
+- **Drawing** is the ceiling now, not loading. Before the packing fix, a row with about 8k visible activities took seconds per redraw. The discrete renderer still stops drawing a row above 10,000 visible items and says so; zooming in draws them. Nothing is sampled or silently left out.
 
 ## UX observations
 
@@ -113,7 +113,7 @@ Its rows hold imported battery resources, imported DSN passes, downlinks and sci
   - a way to rebind a slot from the UI;
   - telling apart two simulations from the same plan.
 - **Autosave.**
-  - It is quiet and works for one user.
+  - It is quiet and works for one user. It only runs for someone who can update the analysis; for anyone else the page is read only, with no row, layer or guide edits and no Timeline Editor.
   - The time window is not saved. Saving it on every pan made the header flicker and set off conflicts between people only looking, and saving it only with other edits would restore an arbitrary window. An analysis opens on its sources' range (the simulations', else everything loaded).
   - Two clients on the same analysis conflict. The second save is refused, with "Changed elsewhere, not saving" and Reload. Without that refusal it silently overwrote the other client's rows.
 
@@ -125,4 +125,4 @@ These are ordered by value per cost. None are implemented beyond what is noted a
 2. **Source-scoped selection in the timeline.** Make selection an `{sourceId, id}` reference end to end, so the drawing-id encoding stays an internal renderer detail. Plan directives and spans become the `plan` source's ids.
 3. **One activity provider shape for Plan and non-Plan sources.** The Plan's directives and spans would be just another `intervals.subscribe`. Row would then have a single activity path instead of two.
 4. **A shared server-paged activity table component.** The analysis table is the starting point; the Plan's span table could adopt it when simulations grow.
-5. **Activity LOD in the discrete renderer.** This was out of scope here. Drawing, not loading, is now where large sources hit limits.
+5. **Exact viewport queries, and a dense representation that still counts everything.** Out of scope here; the whole-revision load is fine for the workflows tried so far. The invariant: an activity that matches a row's filter and intersects the shown range is part of the result, never sampled or cut to the first N. So a viewport query means the types plus _all_ activities intersecting the viewport and some overscan, which at a ten-year zoom is still hundreds of thousands. Where the renderer can't draw that density, it says so (as the 10,000-item cap does today) or draws a representation that accounts for every activity. The histogram's all-activity-times transfer is the first candidate: it exists only to produce aggregate counts.

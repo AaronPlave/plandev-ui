@@ -19,6 +19,8 @@
   export let expanded: Record<string, boolean> = {};
   export let forceExpanded: boolean = false;
   export let nodes: SourceBrowserNode[] = [];
+  /** Items can be browsed but not added to rows. */
+  export let readOnly: boolean = false;
   export let rows: Row[] = [];
 
   const dispatch = createEventDispatcher<{
@@ -47,7 +49,7 @@
     <div
       class="source-browser-item st-typography-body"
       style:padding-left={`${8 + depth * 12}px`}
-      draggable="true"
+      draggable={!readOnly}
       role="treeitem"
       tabindex="0"
       aria-selected="false"
@@ -62,19 +64,21 @@
       {#if node.badge}
         <span class="badge st-typography-label">{node.badge}</span>
       {/if}
-      <LayerPicker
-        layerItem={action.item}
-        sourceId={action.sourceId ?? undefined}
-        {rows}
-        chartType={chartTypeFor(action)}
-        on:select={({ detail: { layer, row } }) => dispatch('add', { action, layer, row })}
-        let:builders
-      >
-        <Button {builders} variant="ghost" size="icon-sm" aria-label={`Add ${node.label} to row`}>
-          <Filter size={14} />
-        </Button>
-      </LayerPicker>
-      <span class="drag"><GripVertical size={14} /></span>
+      {#if !readOnly}
+        <LayerPicker
+          layerItem={action.item}
+          sourceId={action.sourceId ?? undefined}
+          {rows}
+          chartType={chartTypeFor(action)}
+          on:select={({ detail: { layer, row } }) => dispatch('add', { action, layer, row })}
+          let:builders
+        >
+          <Button {builders} variant="ghost" size="icon-sm" aria-label={`Add ${node.label} to row`}>
+            <Filter size={14} />
+          </Button>
+        </LayerPicker>
+        <span class="drag"><GripVertical size={14} /></span>
+      {/if}
     </div>
   {:else}
     {@const open = isExpanded(node, expanded, forceExpanded)}
@@ -103,6 +107,7 @@
           {expanded}
           {forceExpanded}
           nodes={node.children}
+          {readOnly}
           {rows}
           on:add
           on:dragstart

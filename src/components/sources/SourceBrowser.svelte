@@ -30,6 +30,7 @@
     'External Events': 'No derivation groups are linked to this plan',
     'Imported Sources': 'No imported sources are attached to this plan',
   };
+  export let readOnly: boolean = false;
   export let showUpload: boolean = true;
   export let user: User | null;
 
@@ -133,6 +134,7 @@
       {expanded}
       forceExpanded={!!filterText.trim()}
       {nodes}
+      {readOnly}
       {rows}
       on:add={onAdd}
       on:dragstart={onDragStart}

@@ -23,6 +23,7 @@ import {
 } from '../utilities/analysis';
 import effects from '../utilities/effects';
 import gql from '../utilities/gql';
+import { featurePermissions } from '../utilities/permissions';
 import { applyViewDefinitionMigrations } from '../utilities/view';
 import {
   createLoadedActivitySubscription,
@@ -104,8 +105,15 @@ export const analysisTimelineSources: Readable<TimelineSourceRegistry> = derived
   }),
 );
 
-/** Loads what the bound revisions and simulation datasets are, and the time they cover. */
+let sourceDetailsRequest = 0;
+
+/**
+ * Loads what the bound revisions and simulation datasets are, and the time they cover. Resolves to `undefined` when a
+ * later call superseded this one.
+ */
 async function loadSourceDetails(bindings: AnalysisSourceBinding[], user: User | null) {
+  // Sources can change again before this finishes: only the latest request may set the stores.
+  const request = ++sourceDetailsRequest;
   analysisSourcesLoading.set(true);
   const revisionIds = bindings.flatMap(binding => (binding.kind === 'imported' ? [binding.revisionId] : []));
   const datasetIds = bindings.flatMap(binding => (binding.kind === 'simulation' ? [binding.simulationDatasetId] : []));
@@ -113,6 +121,9 @@ async function loadSourceDetails(bindings: AnalysisSourceBinding[], user: User |
     effects.getAnalysisSourceRevisions(revisionIds, user),
     effects.getAnalysisSimulationDatasets(datasetIds, user),
   ]);
+  if (request !== sourceDetailsRequest) {
+    return undefined;
+  }
   analysisSourceRevisions.set(revisions);
   analysisSimulationDatasets.set(datasets);
   analysisSourcesLoading.set(false);
@@ -123,6 +134,9 @@ async function loadSourceDetails(bindings: AnalysisSourceBinding[], user: User |
   // A simulation's activity types are those present in its spans (it has no type catalog of its own).
   datasets.forEach(async dataset => {
     const spans = await getSimulationDatasetSpans(dataset, user);
+    if (request !== sourceDetailsRequest) {
+      return;
+    }
     const counts = new Map<string, number>();
     spans.forEach(span => counts.set(span.type, (counts.get(span.type) ?? 0) + 1));
     analysisSimulationTypeCounts.update(current => ({
@@ -150,12 +164,16 @@ export async function openAnalysis(initial: Analysis, user: User | null) {
   });
   analysisSaveStatus.set('saved');
   const ranges = await loadSourceDetails(initial.definition.sources, user);
+  if (ranges === undefined) {
+    return;
+  }
   // The time window is not saved: an analysis opens on its sources' range.
   viewTimeRange.set(ranges?.initial ?? { end: Date.now(), start: Date.now() - 864e5 });
 }
 
 export function closeAnalysis() {
   saveSoon.cancel();
+  sourceDetailsRequest++;
   analysis.set(null);
   analysisSourceBindings.set([]);
   analysisSourceRevisions.set([]);
@@ -232,8 +250,15 @@ async function save() {
 
 const saveSoon = debounce(save, 1000);
 
-/** Saves the analysis whenever its sources or view change. Returns the function that stops it. */
+/**
+ * Saves the analysis whenever its sources or view change. Returns the function that stops it. Does nothing for a user
+ * who can't update the analysis: their saves could only fail.
+ */
 export function autosaveAnalysis(user: User | null): () => void {
+  const current = get(analysis);
+  if (!user || !current || !featurePermissions.analysis.canUpdate(user, current)) {
+    return () => {};
+  }
   saveUser = user;
   let first = true;
   const unsubscribe = derived([analysisSourceBindings, view], values => values).subscribe(() => {

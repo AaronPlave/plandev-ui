@@ -137,6 +137,7 @@
   export let planEndTimeDoy: string;
   export let plan: Plan | null = null;
   export let planStartTimeYmd: string;
+  export let readOnly: boolean = false;
   export let rowDragMoveDisabled = true;
   export let rowHeaderDragHandleWidthPx: number = 2;
   export let selectedActivityDirectiveId: ActivityDirectiveId | null = null;
@@ -1103,6 +1104,7 @@
       {expanded}
       rowId={id}
       title={name}
+      {readOnly}
       {rowDragMoveDisabled}
       {layers}
       resources={loadedResources}

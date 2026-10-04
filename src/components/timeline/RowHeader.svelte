@@ -37,6 +37,7 @@
   export let height: number = 0;
   export let layers: Layer[];
   export let resources: Resource[];
+  export let readOnly: boolean = false;
   export let rowDragMoveDisabled: boolean = false;
   export let rowHeaderDragHandleWidthPx: number = 2;
   export let rowId: number = 0;
@@ -132,7 +133,7 @@
 >
   <DropTarget on:drop hint="Add Filter">
     <div class="row-header-left-column">
-      {#if expanded}
+      {#if expanded && !readOnly}
         {#if height > 60}
           <div
             class="row-drag-handle-container"
