@@ -191,6 +191,11 @@ export type SpanDB = {
 export type Span = SpanDB & {
   durationMs: number;
   endMs: number;
+  /**
+   * An activity whose source records no end, such as a plan's directive in an analysis. It is drawn as a point
+   * (durationMs 0, endMs its start), and no duration is shown for it.
+   */
+  endUnknown?: true;
   /** Activities from a source other than the Plan: their name, if they have their own. */
   name?: string;
   /** Activities from a source other than the Plan: their id within that source (span_id is then a drawing id). */

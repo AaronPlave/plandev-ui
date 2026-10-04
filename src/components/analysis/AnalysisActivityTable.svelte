@@ -11,9 +11,11 @@
   import { plugins } from '../../stores/plugins';
   import type { AnalysisActivityRef, AnalysisActivityRow, AnalysisSourceBinding } from '../../types/analysis';
   import type { User } from '../../types/app';
+  import type { TimeRange } from '../../types/timeline';
   import {
     analysisActivityRefsEqual,
     getAnalysisActivitiesBeforeWhere,
+    getAnalysisActivitySource,
     getAnalysisActivityOrderBy,
     getAnalysisActivityRowRef,
     getAnalysisActivityWhere,
@@ -26,6 +28,10 @@
   export let sourceLabels: Record<string, string> = {};
   export let typeOptions: string[] = [];
   export let user: User | null;
+  /** Changes when a live source (a plan) changes, so the table re-reads what it shows. */
+  export let refreshKey: string = '';
+  /** The timeline's window, for the "Current time range" scope. */
+  export let viewTimeRange: TimeRange | null = null;
 
   const dispatch = createEventDispatcher<{
     select: { endMs: number; ref: AnalysisActivityRef; startMs: number };
@@ -39,6 +45,8 @@
   let text: string = '';
   let sourceId: string = '';
   let typeInput: string = '';
+  let scope: 'all' | 'range' = 'all';
+  let scopedRange: TimeRange | null = null;
   let direction: 'asc' | 'desc' = 'asc';
   let total: number | null = null;
   let version = 0;
@@ -47,15 +55,19 @@
 
   const setText = debounce((value: string) => (text = value), 300);
   $: setText(textInput);
+  // Panning re-queries once it settles, not on every frame.
+  const setScopedRange = debounce((range: TimeRange | null) => (scopedRange = range), 300);
+  $: setScopedRange(scope === 'range' ? viewTimeRange : null);
   // A type filter applies once it names a type; anything else typed matches every type.
   $: type = typeOptions.includes(typeInput) ? typeInput : '';
   $: where = getAnalysisActivityWhere(bindings, {
     sourceIds: sourceId ? [sourceId] : null,
     text,
+    timeRange: scope === 'range' ? scopedRange : null,
     types: type ? [type] : null,
   });
   $: if (gridApi) {
-    gridApi.setGridOption('datasource', createDatasource(where));
+    gridApi.setGridOption('datasource', createDatasource(where, refreshKey));
   }
   $: selectedKey = selected ? `${selected.sourceId}::${selected.activityId}` : null;
   $: redrawSelection(gridApi, selectedKey);
@@ -82,7 +94,7 @@
     return getAnalysisActivityRowRef(bindings, row);
   }
 
-  function createDatasource(currentWhere: Record<string, unknown>): IDatasource {
+  function createDatasource(currentWhere: Record<string, unknown>, _refreshKey: string): IDatasource {
     const id = ++version;
     total = null;
     return {
@@ -121,10 +133,8 @@
     if (!binding) {
       return;
     }
-    const identity =
-      binding.kind === 'imported'
-        ? { source_kind: { _eq: 'revision' }, source_ref: { _eq: binding.revisionId } }
-        : { source_kind: { _eq: 'simulation' }, source_ref: { _eq: binding.simulationDatasetId } };
+    const { source_kind, source_ref } = getAnalysisActivitySource(binding);
+    const identity = { source_kind: { _eq: source_kind }, source_ref: { _eq: source_ref } };
     const [row] = await effects.getAnalysisActivities(
       { _and: [currentWhere, identity, { activity_id: { _eq: ref.activityId } }] },
       getAnalysisActivityOrderBy(direction),
@@ -157,8 +167,11 @@
       colId: 'duration',
       headerName: 'Duration',
       sortable: false,
+      // A plan directive has no end, so no duration.
       valueGetter: ({ data }) =>
-        data ? convertUsToDurationString((Date.parse(data.end_time) - Date.parse(data.start_time)) * 1000) || '0s' : '',
+        data && data.end_time
+          ? convertUsToDurationString((Date.parse(data.end_time) - Date.parse(data.start_time)) * 1000) || '0s'
+          : '',
       width: 110,
     },
     {
@@ -187,7 +200,8 @@
         const ref = data ? getRef(data) : null;
         if (data && ref) {
           clicked = ref;
-          dispatch('select', { endMs: Date.parse(data.end_time), ref, startMs: Date.parse(data.start_time) });
+          const startMs = Date.parse(data.start_time);
+          dispatch('select', { endMs: data.end_time ? Date.parse(data.end_time) : startMs, ref, startMs });
         }
       },
       rowClassRules: {
@@ -203,6 +217,7 @@
 
   onDestroy(() => {
     setText.cancel();
+    setScopedRange.cancel();
     gridApi?.destroy();
   });
 </script>
@@ -215,6 +230,10 @@
       aria-label="Filter activities by name or type"
       placeholder="Filter by name or type"
     />
+    <select bind:value={scope} class="st-select" aria-label="Scope">
+      <option value="all">All activities</option>
+      <option value="range">Current time range</option>
+    </select>
     <select bind:value={sourceId} class="st-select" aria-label="Source">
       <option value="">All sources</option>
       {#each bindings as binding (binding.id)}

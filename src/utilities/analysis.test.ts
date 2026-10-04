@@ -7,6 +7,10 @@ import type { TimelineActivitySubscription, TimelineResourceSubscription } from 
 import {
   createAnalysisSources,
   createStaticActivitySubscription,
+  getAnalysisSourceNames,
+  getNewerRevision,
+  getRevisionVersionLabel,
+  planDirectiveToSpan,
   getActivityDrawingId,
   getActivityRefFromDrawingId,
   getActivityRefFromSpan,
@@ -46,9 +50,17 @@ const revision: AnalysisSourceRevision = {
       type: 'Turn',
     },
   ],
+  adapter: 'xml_tol',
+  adapter_version: '1',
+  content_hash: null,
   coverage_end: '2034-09-03T00:00:00Z',
   coverage_start: '2030-04-27T00:00:00Z',
+  error: null,
+  finished_at: null,
   id: 18,
+  metadata: {},
+  original_file: null,
+  requested_at: '2026-10-03T12:00:00Z',
   resources: [
     {
       category: 'Power',
@@ -62,7 +74,7 @@ const revision: AnalysisSourceRevision = {
       units: '%',
     },
   ],
-  source: { id: 1, name: 'mission tour TOL', source_type: 'xml_tol' },
+  source: { id: 1, latest: [], name: 'mission tour TOL', source_type: 'xml_tol' },
   status: 'success',
 };
 
@@ -97,6 +109,9 @@ function input(overrides: Partial<AnalysisSourcesInput> = {}): AnalysisSourcesIn
   return {
     bindings: [imported, planA, planB],
     loading: false,
+    planTypeCounts: {},
+    plans: [],
+    plansLoading: false,
     revisions: [revision],
     simulationDatasets: [dataset(1, 'Tour Plan A'), dataset(2, 'Tour Plan B')],
     simulationTypeCounts: { 1: [{ count: 14, name: 'BiteBanana' }], 2: [{ count: 9, name: 'BiteBanana' }] },
@@ -104,6 +119,7 @@ function input(overrides: Partial<AnalysisSourcesInput> = {}): AnalysisSourcesIn
     subscribeImportedResource: vi.fn(() =>
       createStaticResourceSubscription({ error: '', loading: false, resource: null }),
     ) as unknown as AnalysisSourcesInput['subscribeImportedResource'],
+    subscribePlanActivities: vi.fn(() => createStaticActivitySubscription('')),
     subscribeSimulationActivities: vi.fn(() => createStaticActivitySubscription('')),
     subscribeSimulationProfile: vi.fn(() =>
       createStaticResourceSubscription({ error: '', loading: false, resource: null }),
@@ -168,7 +184,8 @@ describe('createAnalysisSources', () => {
       group: 'Imported Sources',
       id: 'source-1',
       kind: 'imported',
-      label: 'mission tour TOL r18',
+      // Named for people: the source and when its revision was imported, never the database id.
+      label: 'mission tour TOL · Oct 3, 2026',
     });
     expect(source.resources?.catalog.map(type => type.name)).toEqual(['BatteryStateOfCharge']);
     expect(source.intervals?.present).toEqual([
@@ -207,9 +224,9 @@ describe('createAnalysisSources', () => {
     );
     const sources = createAnalysisSources(input({ subscribeSimulationActivities, subscribeSimulationProfile }));
     expect(sources.map(source => source.label)).toEqual([
-      'mission tour TOL r18',
-      'Tour Plan A · Sim 1',
-      'Tour Plan B · Sim 2',
+      'mission tour TOL · Oct 3, 2026',
+      'Tour Plan A · Simulation 1',
+      'Tour Plan B · Simulation 2',
     ]);
     const planBSource = sources[2];
     expect(planBSource).toMatchObject({ group: 'Simulations', kind: 'simulation' });
@@ -231,6 +248,95 @@ describe('createAnalysisSources', () => {
     // A layer bound to it resolves to the source (which explains itself), not to a same-named resource elsewhere.
     const registry = { loading: false, sources: createAnalysisSources(input({ revisions: [] })) };
     expect(resolveResourceLayerSource({ sourceId: 'source-1' }, registry)).toMatchObject({ kind: 'source' });
+  });
+});
+
+describe('a plan as an analysis source', () => {
+  const plan = {
+    duration: '168:00:00',
+    id: 3,
+    mission_model: null,
+    model_id: 1,
+    name: 'Tour Plan A',
+    revision: 7,
+    start_time: '2031-01-01T00:00:00+00:00',
+  };
+  const current: AnalysisSourceBinding = { id: 'source-4', kind: 'plan', planId: 3 };
+
+  it('reads the plan’s current directives, live, with no invented duration', () => {
+    const span = planDirectiveToSpan('source-4', {
+      anchor_id: null,
+      anchored_to_start: true,
+      approximate_start_time: '2031-01-01T05:00:00+00:00',
+      arguments: { peelDirection: 'fromStem' },
+      id: 12,
+      metadata: {},
+      name: '',
+      start_offset: '05:00:00',
+      type: 'PeelBanana',
+    });
+    expect(span).toMatchObject({ durationMs: 0, endUnknown: true, name: 'PeelBanana', sourceActivityId: 12 });
+    expect(span.endMs).toBe(span.startMs);
+
+    const subscribePlanActivities = vi.fn((): TimelineActivitySubscription => createStaticActivitySubscription(''));
+    const [source] = createAnalysisSources(
+      input({
+        bindings: [current],
+        planTypeCounts: { 3: [{ count: 2, name: 'PeelBanana' }] },
+        plans: [plan],
+        subscribePlanActivities,
+      }),
+    );
+    expect(source).toMatchObject({ group: 'Plans', kind: 'plan', label: 'Tour Plan A · Current' });
+    expect(source.resources).toBeUndefined();
+    source.intervals?.subscribe?.({ types: null }, context);
+    expect(subscribePlanActivities).toHaveBeenCalledWith(current, plan, context);
+  });
+
+  it('is told apart from the same plan’s simulations, in the table query too', () => {
+    expect(getAnalysisSourceNames(current, { plan }).version).toBe('Current activities');
+    expect(getAnalysisSourceNames(planA, { dataset: dataset(1, 'Tour Plan A') }).label).toBe(
+      'Tour Plan A · Simulation 1',
+    );
+    expect(getAnalysisActivityWhere([current], { sourceIds: null, text: '', types: null })._and).toEqual([
+      { _or: [{ source_kind: { _eq: 'plan' }, source_ref: { _eq: 3 } }] },
+    ]);
+    expect(getAnalysisActivityRowRef([current], { activity_id: 12, source_kind: 'plan', source_ref: 3 })).toEqual({
+      activityId: 12,
+      sourceId: 'source-4',
+    });
+  });
+
+  it('opens on the plan’s bounds when there is no simulation', () => {
+    expect(getAnalysisTimeRanges([], [], [plan])?.initial).toEqual({
+      end: Date.parse('2031-01-08T00:00:00Z'),
+      start: Date.parse('2031-01-01T00:00:00Z'),
+    });
+  });
+});
+
+describe('source identity', () => {
+  it('names a revision by its product date, else by when it was imported', () => {
+    expect(
+      getRevisionVersionLabel({ ...revision, metadata: { product: { generatedAt: '2026-10-01T08:00:00Z' } } }),
+    ).toBe('Oct 1, 2026 product');
+    expect(getRevisionVersionLabel(revision)).toBe('Imported Oct 3, 2026, 12:00 UTC');
+  });
+
+  it('prefers the analysis’s alias, and keeps the source’s own name beside it', () => {
+    expect(getAnalysisSourceNames({ ...imported, label: 'Actual Tour' }, { revision })).toEqual({
+      label: 'Actual Tour',
+      name: 'mission tour TOL',
+      version: 'Imported Oct 3, 2026, 12:00 UTC',
+    });
+  });
+
+  it('offers a newer successful revision of the same source, and nothing when the bound one is newest', () => {
+    const newer = { id: 22, metadata: {}, requested_at: '2026-10-04T09:00:00Z', status: 'success' as const };
+    expect(getNewerRevision({ ...revision, source: { ...revision.source, latest: [newer] } })).toBe(newer);
+    expect(
+      getNewerRevision({ ...revision, source: { ...revision.source, latest: [{ ...newer, id: 18 }] } }),
+    ).toBeNull();
   });
 });
 
@@ -256,6 +362,24 @@ describe('analysis activity table query', () => {
         { _or: [{ source_kind: { _eq: 'simulation' }, source_ref: { _eq: 2 } }] },
         { type: { _in: ['BiteBanana'] } },
         { _or: [{ name: { _ilike: '%50\\%\\_bite%' } }, { type: { _ilike: '%50\\%\\_bite%' } }] },
+      ],
+    });
+  });
+
+  it('scopes to a time range: overlapping activities, and directives (no end) starting in it', () => {
+    const where = getAnalysisActivityWhere([imported], {
+      sourceIds: null,
+      text: '',
+      timeRange: { end: Date.parse('2030-01-02T00:00:00Z'), start: Date.parse('2030-01-01T00:00:00Z') },
+      types: null,
+    });
+    expect((where._and as unknown[])[1]).toEqual({
+      _or: [
+        { end_time: { _gte: '2030-01-01T00:00:00.000Z' }, start_time: { _lte: '2030-01-02T00:00:00.000Z' } },
+        {
+          end_time: { _is_null: true },
+          start_time: { _gte: '2030-01-01T00:00:00.000Z', _lte: '2030-01-02T00:00:00.000Z' },
+        },
       ],
     });
   });

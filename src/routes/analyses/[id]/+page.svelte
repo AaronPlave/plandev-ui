@@ -5,6 +5,7 @@
   import { Resizable } from '@nasa-jpl/stellar-svelte';
   import { onDestroy } from 'svelte';
   import AnalysisActivityDetails from '../../../components/analysis/AnalysisActivityDetails.svelte';
+  import AnalysisAddSourceDialog from '../../../components/analysis/AnalysisAddSourceDialog.svelte';
   import AnalysisActivityTable from '../../../components/analysis/AnalysisActivityTable.svelte';
   import AnalysisSourcesPanel from '../../../components/analysis/AnalysisSourcesPanel.svelte';
   import AnalysisTimelinePanel from '../../../components/analysis/AnalysisTimelinePanel.svelte';
@@ -12,8 +13,10 @@
   import PageTitle from '../../../components/app/PageTitle.svelte';
   import TimelineEditorPanel from '../../../components/timeline/form/TimelineEditorPanel.svelte';
   import {
+    addAnalysisSource,
     analysis,
     analysisMaxTimeRange,
+    analysisPlans,
     analysisSaveStatus,
     analysisSimulationDatasets,
     analysisSourceBindings,
@@ -25,6 +28,7 @@
     renameAnalysis,
     selectedAnalysisActivity,
   } from '../../../stores/analysis';
+  import { viewTimeRange } from '../../../stores/plan';
   import { setTimelineSourcesContext } from '../../../stores/timelineSources';
   import { getUserStore } from '../../../stores/user';
   import { selectedRow } from '../../../stores/views';
@@ -40,6 +44,13 @@
   let rightTab: 'details' | 'editor' = 'details';
   let timelinePanel: AnalysisTimelinePanel;
   let stopAutosave: (() => void) | null = null;
+  let addSourceOpen: boolean = false;
+  let addSourceTab: 'imported' | 'plans' | 'import' = 'imported';
+
+  function openAddSource(tab: typeof addSourceTab = 'imported') {
+    addSourceTab = tab;
+    addSourceOpen = true;
+  }
 
   $: if (data.initialAnalysis && data.initialAnalysis.id !== $analysis?.id) {
     stopAutosave?.();
@@ -107,6 +118,7 @@
           registry={$analysisTimelineSources}
           {readOnly}
           user={$user}
+          on:addSource={() => openAddSource()}
         />
       </Resizable.Pane>
       <Resizable.Handle />
@@ -117,6 +129,7 @@
               bind:this={timelinePanel}
               {readOnly}
               user={$user}
+              on:addSource={({ detail }) => openAddSource(detail)}
               on:editRow={() => (rightTab = 'editor')}
               on:inspect={() => (rightTab = 'details')}
             />
@@ -129,6 +142,8 @@
               {sourceLabels}
               {typeOptions}
               user={$user}
+              viewTimeRange={$viewTimeRange}
+              refreshKey={($analysisPlans ?? []).map(plan => `${plan.id}:${plan.revision}`).join()}
               on:select={({ detail: { endMs, ref, startMs } }) => {
                 $selectedAnalysisActivity = ref;
                 rightTab = 'details';
@@ -176,6 +191,14 @@
     </Resizable.PaneGroup>
   </div>
 </div>
+
+<AnalysisAddSourceDialog
+  bind:open={addSourceOpen}
+  bind:tab={addSourceTab}
+  bindings={$analysisSourceBindings}
+  user={$user}
+  on:add={({ detail }) => addAnalysisSource(detail, $user)}
+/>
 
 <style>
   .analysis-page {

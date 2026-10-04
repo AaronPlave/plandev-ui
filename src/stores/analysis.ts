@@ -1,8 +1,10 @@
-import { debounce } from 'lodash-es';
+import { debounce, isEqual } from 'lodash-es';
 import { derived, get, writable, type Readable, type Writable } from 'svelte/store';
 import type {
   Analysis,
   AnalysisActivityRef,
+  AnalysisPlan,
+  AnalysisPlanDirective,
   AnalysisSlim,
   AnalysisSimulationDataset,
   AnalysisSourceBinding,
@@ -13,7 +15,9 @@ import type { User } from '../types/app';
 import type { TimeRange } from '../types/timeline';
 import type { TimelineSourceRegistry } from '../types/timelineSource';
 import {
+  createAnalysisDefinition,
   createAnalysisSources,
+  createSourceActivityRow,
   getAnalysisTimeRanges,
   getNextAnalysisSourceId,
   importedActivityToSpan,
@@ -27,6 +31,8 @@ import { featurePermissions } from '../utilities/permissions';
 import { applyViewDefinitionMigrations } from '../utilities/view';
 import {
   createLoadedActivitySubscription,
+  createPlanActivitySubscription,
+  getPlanDirectives,
   getRevisionActivities,
   getSimulationDatasetSpans,
 } from './analysisActivities';
@@ -34,7 +40,7 @@ import { createImportedResourceSubscription, getSourceQuery } from './importedRe
 import { viewTimeRange } from './plan';
 import { createProfileSubscription } from './profile';
 import { gqlSubscribable } from './subscribable';
-import { initializeView, view } from './views';
+import { initializeView, view, viewUpdateTimeline } from './views';
 
 /*
  * State of the one Analysis page that is open. The timeline, its editor and the Sources browser read the analysis's
@@ -57,6 +63,42 @@ export const selectedAnalysisActivity: Writable<AnalysisActivityRef | null> = wr
 /** 'conflict': someone else saved the analysis since it was opened; saving stops until it is reloaded. */
 export const analysisSaveStatus: Writable<'conflict' | 'error' | 'saved' | 'saving' | 'unsaved'> = writable('saved');
 
+/** The plans whose current activities the analysis reads. Changes only when that set does. */
+export const analysisPlanIds: Readable<number[]> = (() => {
+  let current: number[] = [];
+  return derived(
+    analysisSourceBindings,
+    ($bindings, set) => {
+      const ids = [...new Set($bindings.flatMap(binding => (binding.kind === 'plan' ? [binding.planId] : [])))];
+      if (!isEqual(ids, current)) {
+        current = ids;
+        set(ids);
+      }
+    },
+    current,
+  );
+})();
+
+/** The bound plans, live: their names and revisions follow the plans. */
+export const analysisPlans = gqlSubscribable<AnalysisPlan[]>(gql.SUB_ANALYSIS_PLANS, { planIds: analysisPlanIds }, []);
+
+/** Each bound plan's current directives, live, by plan id. */
+export const analysisPlanDirectives: Readable<Record<number, AnalysisPlanDirective[]>> = derived(
+  analysisPlanIds,
+  ($planIds, set) => {
+    const byPlan: Record<number, AnalysisPlanDirective[]> = {};
+    set(byPlan);
+    const unsubscribers = $planIds.map(planId =>
+      getPlanDirectives(planId).subscribe(directives => {
+        byPlan[planId] = directives ?? [];
+        set({ ...byPlan });
+      }),
+    );
+    return () => unsubscribers.forEach(unsubscribe => unsubscribe());
+  },
+  {},
+);
+
 export const analysisTimelineSources: Readable<TimelineSourceRegistry> = derived(
   [
     analysisSourceBindings,
@@ -64,12 +106,20 @@ export const analysisTimelineSources: Readable<TimelineSourceRegistry> = derived
     analysisSimulationDatasets,
     analysisSimulationTypeCounts,
     analysisSourcesLoading,
+    analysisPlans,
+    analysisPlans.loading,
+    analysisPlanDirectives,
   ],
-  ([$bindings, $revisions, $datasets, $typeCounts, $loading]) => ({
+  ([$bindings, $revisions, $datasets, $typeCounts, $loading, $plans, $plansLoading, $planDirectives]) => ({
     loading: $loading,
     sources: createAnalysisSources({
       bindings: $bindings,
       loading: $loading,
+      planTypeCounts: Object.fromEntries(
+        Object.entries($planDirectives).map(([planId, directives]) => [planId, countTypes(directives)]),
+      ),
+      plans: $plans ?? [],
+      plansLoading: $plansLoading,
       revisions: $revisions,
       simulationDatasets: $datasets,
       simulationTypeCounts: $typeCounts,
@@ -95,6 +145,7 @@ export const analysisTimelineSources: Readable<TimelineSourceRegistry> = derived
           resourceType: { name: resource.key, schema: resource.schema },
           target: { revisionId: revision.id },
         }),
+      subscribePlanActivities: (binding, plan) => createPlanActivitySubscription(binding.id, plan.id),
       subscribeSimulationActivities: (binding, dataset, { user }) =>
         createLoadedActivitySubscription(async () =>
           (await getSimulationDatasetSpans(dataset, user)).map(span => simulationSpanToActivity(binding.id, span)),
@@ -104,6 +155,13 @@ export const analysisTimelineSources: Readable<TimelineSourceRegistry> = derived
     }),
   }),
 );
+
+/** Each type present among `activities`, with how many there are, by name. */
+function countTypes(activities: { type: string }[]): { count: number; name: string }[] {
+  const counts = new Map<string, number>();
+  activities.forEach(activity => counts.set(activity.type, (counts.get(activity.type) ?? 0) + 1));
+  return [...counts.entries()].map(([name, count]) => ({ count, name })).sort((a, b) => a.name.localeCompare(b.name));
+}
 
 let sourceDetailsRequest = 0;
 
@@ -117,9 +175,12 @@ async function loadSourceDetails(bindings: AnalysisSourceBinding[], user: User |
   analysisSourcesLoading.set(true);
   const revisionIds = bindings.flatMap(binding => (binding.kind === 'imported' ? [binding.revisionId] : []));
   const datasetIds = bindings.flatMap(binding => (binding.kind === 'simulation' ? [binding.simulationDatasetId] : []));
-  const [revisions, datasets] = await Promise.all([
+  const planIds = bindings.flatMap(binding => (binding.kind === 'plan' ? [binding.planId] : []));
+  // Plans are subscribed to (analysisPlans); this read is only for the time they cover.
+  const [revisions, datasets, plans] = await Promise.all([
     effects.getAnalysisSourceRevisions(revisionIds, user),
     effects.getAnalysisSimulationDatasets(datasetIds, user),
+    effects.getAnalysisPlans(planIds, user),
   ]);
   if (request !== sourceDetailsRequest) {
     return undefined;
@@ -127,7 +188,12 @@ async function loadSourceDetails(bindings: AnalysisSourceBinding[], user: User |
   analysisSourceRevisions.set(revisions);
   analysisSimulationDatasets.set(datasets);
   analysisSourcesLoading.set(false);
-  const ranges = getAnalysisTimeRanges(revisions, datasets);
+  // A revision still importing (one just imported from here) becomes usable without a reload.
+  // ponytail: polls every 5 s while any bound revision is importing; a revision status subscription if this grows.
+  if (revisions.some(revision => revision.status === 'pending' || revision.status === 'incomplete')) {
+    setTimeout(() => request === sourceDetailsRequest && loadSourceDetails(get(analysisSourceBindings), user), 5000);
+  }
+  const ranges = getAnalysisTimeRanges(revisions, datasets, plans);
   if (ranges) {
     analysisMaxTimeRange.set(ranges.max);
   }
@@ -137,14 +203,7 @@ async function loadSourceDetails(bindings: AnalysisSourceBinding[], user: User |
     if (request !== sourceDetailsRequest) {
       return;
     }
-    const counts = new Map<string, number>();
-    spans.forEach(span => counts.set(span.type, (counts.get(span.type) ?? 0) + 1));
-    analysisSimulationTypeCounts.update(current => ({
-      ...current,
-      [dataset.id]: [...counts.entries()]
-        .map(([name, count]) => ({ count, name }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    }));
+    analysisSimulationTypeCounts.update(current => ({ ...current, [dataset.id]: countTypes(spans) }));
   });
   return ranges;
 }
@@ -197,6 +256,37 @@ export async function addAnalysisSource(target: AnalysisSourceTarget, user: User
   }
 }
 
+/**
+ * Points a source at other data (a newer revision of the same source), keeping its id: every row and layer bound to
+ * it now shows the new data.
+ */
+export async function rebindAnalysisSource(sourceId: string, target: AnalysisSourceTarget, user: User | null) {
+  analysisSourceBindings.update(bindings =>
+    bindings.map(binding => (binding.id === sourceId ? { ...target, id: binding.id, label: binding.label } : binding)),
+  );
+  if (get(selectedAnalysisActivity)?.sourceId === sourceId) {
+    selectedAnalysisActivity.set(null);
+  }
+  await loadSourceDetails(get(analysisSourceBindings), user);
+}
+
+/** The analysis's own name for a source (an alias); empty to go back to the source's name. */
+export function setAnalysisSourceLabel(sourceId: string, label: string) {
+  analysisSourceBindings.update(bindings =>
+    // An undefined label is dropped when the definition is saved as JSON.
+    bindings.map(binding => (binding.id === sourceId ? { ...binding, label: label.trim() || undefined } : binding)),
+  );
+}
+
+/** Adds a row of every activity of one source (see createSourceActivityRow). */
+export function addSourceActivityRow(sourceId: string, name: string) {
+  const timeline = get(view)?.definition.plan.timelines[0];
+  if (timeline) {
+    const timelines = get(view)?.definition.plan.timelines ?? [];
+    viewUpdateTimeline('rows', [...timeline.rows, createSourceActivityRow(timelines, sourceId, name)], timeline.id);
+  }
+}
+
 /** Removes a source and every layer bound to it; rows that only showed it go too. */
 export async function removeAnalysisSource(sourceId: string, user: User | null) {
   const next = get(analysisSourceBindings).filter(binding => binding.id !== sourceId);
@@ -232,8 +322,14 @@ async function save() {
     return;
   }
   analysisSaveStatus.set('saving');
+  // A plan source remembers the plan's revision as of this save, so the page can say when the plan has changed since.
+  const plans = get(analysisPlans) ?? [];
   const definition = {
-    sources: get(analysisSourceBindings),
+    sources: get(analysisSourceBindings).map(binding =>
+      binding.kind === 'plan'
+        ? { ...binding, planRevision: plans.find(plan => plan.id === binding.planId)?.revision ?? binding.planRevision }
+        : binding,
+    ),
     version: 1 as const,
     view: currentView.definition,
   };
@@ -275,6 +371,30 @@ export function autosaveAnalysis(user: User | null): () => void {
     unsubscribe();
     saveSoon.flush();
   };
+}
+
+/**
+ * "Analyze this plan": a new analysis of the plan's current activities and, when given, one of its simulations, with
+ * a row for each. Returns the new analysis's id.
+ */
+export async function createPlanAnalysis(
+  plan: { id: number; name: string; revision: number },
+  simulationDatasetId: number | null,
+  user: User | null,
+): Promise<number | null> {
+  const definition = createAnalysisDefinition();
+  const sources: AnalysisSourceBinding[] = [
+    { id: 'source-1', kind: 'plan', planId: plan.id, planRevision: plan.revision },
+  ];
+  if (simulationDatasetId !== null) {
+    sources.push({ id: 'source-2', kind: 'simulation', simulationDatasetId });
+  }
+  const [timeline] = definition.view.plan.timelines;
+  sources.forEach(source => {
+    const name = source.kind === 'plan' ? 'Current activities' : `Simulation ${simulationDatasetId}`;
+    timeline.rows = [...timeline.rows, createSourceActivityRow(definition.view.plan.timelines, source.id, name)];
+  });
+  return effects.createAnalysis(`${plan.name} analysis`, { ...definition, sources }, user);
 }
 
 export async function renameAnalysis(name: string, user: User | null) {

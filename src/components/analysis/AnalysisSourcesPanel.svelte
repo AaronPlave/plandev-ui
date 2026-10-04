@@ -1,18 +1,38 @@
 <svelte:options immutable={true} />
 
 <!--
-  The analysis's sources: what it composes (with provenance and removal), an Add Source picker over every imported
-  revision and every plan's simulations, and the Sources browser to add their resources and activities as rows.
+  The analysis's sources: what each one is (its name, which version of its data, the analysis's alias for it), its
+  details on demand, an update when a newer revision of an imported source exists, and the Sources browser to add
+  their resources and activities as rows.
 -->
 <script lang="ts">
-  import { addAnalysisSource, removeAnalysisSource } from '../../stores/analysis';
-  import type { AnalysisSourceBinding, AnalysisSourceOptions, AnalysisSourceTarget } from '../../types/analysis';
+  import { Badge, Button } from '@nasa-jpl/stellar-svelte';
+  import { createEventDispatcher } from 'svelte';
+  import {
+    analysis,
+    analysisPlans,
+    analysisSimulationDatasets,
+    analysisSourceRevisions,
+    rebindAnalysisSource,
+    removeAnalysisSource,
+    setAnalysisSourceLabel,
+  } from '../../stores/analysis';
+  import type {
+    AnalysisPlan,
+    AnalysisSimulationDataset,
+    AnalysisSourceBinding,
+    AnalysisSourceRevision,
+  } from '../../types/analysis';
   import type { User } from '../../types/app';
   import type { TimelineSourceRegistry } from '../../types/timelineSource';
-  import { isSameAnalysisSource } from '../../utilities/analysis';
-  import effects from '../../utilities/effects';
+  import {
+    formatRange,
+    getAnalysisSourceNames,
+    getNewerRevision,
+    getRevisionVersionLabel,
+  } from '../../utilities/analysis';
+  import { getIntervalInMs } from '../../utilities/time';
   import { getSource } from '../../utilities/timelineSources';
-  import { tooltip } from '../../utilities/tooltip';
   import SourceBrowser from '../sources/SourceBrowser.svelte';
 
   export let bindings: AnalysisSourceBinding[] = [];
@@ -20,140 +40,205 @@
   export let readOnly: boolean = false;
   export let user: User | null;
 
-  let adding: boolean = false;
-  let options: AnalysisSourceOptions | null = null;
-  let optionsFilter: string = '';
+  const dispatch = createEventDispatcher<{ addSource: void }>();
 
-  $: needle = optionsFilter.trim().toLowerCase();
-  $: revisionOptions = (options?.revisions ?? []).filter(
-    revision => !needle || `${revision.source.name} r${revision.id}`.toLowerCase().includes(needle),
+  let detailsShown: Record<string, boolean> = {};
+  let renaming: string | null = null;
+
+  $: savedSources = $analysis?.definition.sources ?? [];
+  // What each source is, recomputed whenever the details it is built from arrive or change.
+  $: described = Object.fromEntries(
+    bindings.map(binding => [
+      binding.id,
+      describe(binding, $analysisSourceRevisions, $analysisSimulationDatasets, $analysisPlans ?? [], savedSources),
+    ]),
   );
-  $: planOptions = (options?.plans ?? [])
-    .map(plan => ({
-      ...plan,
-      datasets: plan.simulations.flatMap(simulation => simulation.simulation_datasets),
-    }))
-    .filter(plan => plan.datasets.length && (!needle || plan.name.toLowerCase().includes(needle)));
+  // Only the kinds of source the analysis has: an analysis of one plan shows no empty "Imported Sources".
+  $: browserGroups = ['Imported Sources', 'Plans', 'Simulations'].filter(group =>
+    registry.sources.some(source => source.group === group),
+  );
 
-  async function toggleAdding() {
-    adding = !adding;
-    if (adding) {
-      options = await effects.getAnalysisSourceOptions(user);
-    }
+  function describe(
+    binding: AnalysisSourceBinding,
+    revisions: AnalysisSourceRevision[],
+    datasets: AnalysisSimulationDataset[],
+    plans: AnalysisPlan[],
+    saved: AnalysisSourceBinding[],
+  ) {
+    const revision = binding.kind === 'imported' ? revisions.find(({ id }) => id === binding.revisionId) : undefined;
+    const dataset =
+      binding.kind === 'simulation' ? datasets.find(({ id }) => id === binding.simulationDatasetId) : undefined;
+    const plan = binding.kind === 'plan' ? plans.find(({ id }) => id === binding.planId) : undefined;
+    const savedBinding = saved.find(({ id }) => id === binding.id);
+    return {
+      ...getAnalysisSourceNames(binding, { dataset, plan, revision }),
+      dataset,
+      newer: getNewerRevision(revision),
+      plan,
+      // The plan has been edited since this analysis last saved what it saw of it.
+      planChanged:
+        !!plan &&
+        savedBinding?.kind === 'plan' &&
+        savedBinding.planRevision !== undefined &&
+        savedBinding.planRevision !== plan.revision,
+      revision,
+    };
   }
 
-  function importedTarget(revisionId: number): AnalysisSourceTarget {
-    return { kind: 'imported', revisionId };
+  function onRename(binding: AnalysisSourceBinding, event: Event) {
+    setAnalysisSourceLabel(binding.id, (event.currentTarget as HTMLInputElement).value);
+    renaming = null;
   }
 
-  function simulationTarget(simulationDatasetId: number): AnalysisSourceTarget {
-    return { kind: 'simulation', simulationDatasetId };
-  }
-
-  function isAdded(current: AnalysisSourceBinding[], target: AnalysisSourceTarget) {
-    return current.some(binding => isSameAnalysisSource(binding, target));
-  }
-
-  function formatRange(start: string | null, end: string | null) {
-    return `${start?.slice(0, 10) ?? '?'} – ${end?.slice(0, 10) ?? '?'}`;
+  function planEnd(plan: { duration: string; start_time: string }) {
+    return new Date(Date.parse(plan.start_time) + getIntervalInMs(plan.duration)).toISOString();
   }
 </script>
 
 <div class="analysis-sources">
   <div class="header">
     <span class="st-typography-medium">Sources</span>
-    <button class="st-button secondary" disabled={readOnly} on:click={toggleAdding}>
-      {adding ? 'Done' : 'Add Source'}
-    </button>
+    <Button size="xs" variant="outline" disabled={readOnly} on:click={() => dispatch('addSource')}>Add Source</Button>
   </div>
-
-  {#if adding}
-    <div class="picker" role="region" aria-label="Add Source">
-      <input
-        bind:value={optionsFilter}
-        class="st-input w-full"
-        placeholder="Filter"
-        aria-label="Filter sources to add"
-      />
-      {#if !options}
-        <div class="muted">Loading…</div>
-      {:else}
-        <div class="picker-group st-typography-label">Imported Sources</div>
-        {#each revisionOptions as revision (revision.id)}
-          {@const target = importedTarget(revision.id)}
-          <div class="option">
-            <div class="option-text">
-              <div>{revision.source.name} <span class="muted">r{revision.id}</span></div>
-              <div class="muted">
-                {revision.status} · {revision.resources_aggregate.aggregate?.count ?? 0} resources ·
-                {(revision.activity_types_aggregate.aggregate?.sum?.count ?? 0).toLocaleString()} activities ·
-                {formatRange(revision.coverage_start, revision.coverage_end)}
-              </div>
-            </div>
-            <button
-              class="st-button tertiary"
-              disabled={isAdded(bindings, target) || revision.status !== 'success'}
-              on:click={() => addAnalysisSource(target, user)}>{isAdded(bindings, target) ? 'Added' : 'Add'}</button
-            >
-          </div>
-        {:else}
-          <div class="muted">No imported sources</div>
-        {/each}
-        <div class="picker-group st-typography-label">Plans</div>
-        {#each planOptions as plan (plan.id)}
-          <div class="plan-name">{plan.name} <span class="muted">plan {plan.id}</span></div>
-          {#each plan.datasets as dataset (dataset.id)}
-            {@const target = simulationTarget(dataset.id)}
-            <div class="option nested">
-              <div class="option-text">
-                <div>Simulation {dataset.id}</div>
-                <div class="muted">
-                  {dataset.status} · {formatRange(dataset.simulation_start_time, dataset.simulation_end_time)}
-                </div>
-              </div>
-              <button
-                class="st-button tertiary"
-                disabled={isAdded(bindings, target)}
-                on:click={() => addAnalysisSource(target, user)}>{isAdded(bindings, target) ? 'Added' : 'Add'}</button
-              >
-            </div>
-          {/each}
-        {:else}
-          <div class="muted">No simulated plans</div>
-        {/each}
-      {/if}
-    </div>
-  {/if}
 
   <ul class="bound" aria-label="Analysis sources">
     {#each bindings as binding (binding.id)}
       {@const source = getSource(registry, binding.id)}
+      {@const info = described[binding.id]}
       <li class="bound-source">
-        <div class="option-text" use:tooltip={{ content: source?.description ?? '', placement: 'right' }}>
-          <div>{source?.label ?? binding.id}</div>
-          <div class="muted">{source?.group ?? ''} · {binding.id}</div>
+        <div class="flex items-start justify-between gap-1">
+          <div class="min-w-0">
+            {#if renaming === binding.id}
+              <input
+                class="st-input w-full"
+                aria-label="Name in this analysis"
+                placeholder={info.name}
+                value={binding.label ?? ''}
+                on:change={event => onRename(binding, event)}
+                on:blur={() => (renaming = null)}
+              />
+            {:else}
+              <div class="truncate font-medium">
+                {binding.label || info.name}
+                {#if binding.kind === 'plan'}
+                  <Badge variant="secondary" class="ml-1 px-1 py-0 text-[10px]">Live</Badge>
+                {/if}
+              </div>
+            {/if}
+            <div class="truncate text-muted-foreground">
+              {binding.label ? `${info.name} · ` : ''}{info.version}
+            </div>
+            {#if source?.resources?.unavailableReason}
+              <div class="text-[11px] text-red-700">{source.resources.unavailableReason}</div>
+            {/if}
+            {#if info.planChanged}
+              <div class="text-[11px] text-muted-foreground">The plan has changed since this analysis was saved</div>
+            {/if}
+          </div>
+          <div class="flex shrink-0">
+            <button
+              class="st-button icon"
+              aria-label="Details of {info.label}"
+              aria-expanded={!!detailsShown[binding.id]}
+              on:click={() => (detailsShown = { ...detailsShown, [binding.id]: !detailsShown[binding.id] })}>ⓘ</button
+            >
+            <button
+              class="st-button icon"
+              aria-label="Rename {info.label} in this analysis"
+              disabled={readOnly}
+              on:click={() => (renaming = binding.id)}>✎</button
+            >
+            <button
+              class="st-button icon"
+              aria-label="Remove {info.label}"
+              disabled={readOnly}
+              on:click={() => removeAnalysisSource(binding.id, user)}>×</button
+            >
+          </div>
         </div>
-        <button
-          class="st-button icon"
-          aria-label="Remove {source?.label ?? binding.id}"
-          disabled={readOnly}
-          use:tooltip={{ content: 'Remove from analysis (and its rows)', placement: 'top' }}
-          on:click={() => removeAnalysisSource(binding.id, user)}>×</button
-        >
+
+        {#if info.newer && !readOnly}
+          <div class="newer">
+            <span>Newer: {getRevisionVersionLabel(info.newer)}</span>
+            <Button
+              size="xs"
+              variant="outline"
+              on:click={() =>
+                info.newer && rebindAnalysisSource(binding.id, { kind: 'imported', revisionId: info.newer.id }, user)}
+              >Use it</Button
+            >
+          </div>
+        {/if}
+
+        {#if detailsShown[binding.id]}
+          <dl class="details" aria-label="Details of {info.label}">
+            {#if info.revision}
+              {@const revision = info.revision}
+              <dt>Source</dt>
+              <dd>{revision.source.name}</dd>
+              <dt>Revision</dt>
+              <dd>{getRevisionVersionLabel(revision)}</dd>
+              {#if revision.metadata?.product?.suggestedName}
+                <dt>Product</dt>
+                <dd>{revision.metadata.product.suggestedName}</dd>
+              {/if}
+              <dt>File</dt>
+              <dd>{revision.metadata?.originalFileName ?? revision.original_file?.name ?? 'Read from the server'}</dd>
+              <dt>Covers</dt>
+              <dd>{formatRange(revision.coverage_start, revision.coverage_end)}</dd>
+              <dt>Contents</dt>
+              <dd>
+                {revision.resources.length.toLocaleString()} resources ·
+                {revision.activity_types.reduce((total, type) => total + type.count, 0).toLocaleString()} activities
+              </dd>
+              <dt>Import</dt>
+              <dd>
+                {revision.status}{revision.finished_at
+                  ? ` · ${revision.finished_at.slice(0, 16).replace('T', ' ')}`
+                  : ''}
+              </dd>
+              <dt>Format</dt>
+              <dd>{revision.adapter}{revision.adapter_version ? ` ${revision.adapter_version}` : ''}</dd>
+              {#if revision.content_hash}
+                <dt>Content hash</dt>
+                <dd class="truncate" title={revision.content_hash}>{revision.content_hash}</dd>
+              {/if}
+            {:else if info.dataset}
+              {@const dataset = info.dataset}
+              <dt>Plan</dt>
+              <dd>{dataset.simulation?.plan?.name ?? '—'}</dd>
+              <dt>Simulation</dt>
+              <dd>{dataset.id} · {dataset.status}</dd>
+              <dt>Covers</dt>
+              <dd>{formatRange(dataset.simulation_start_time, dataset.simulation_end_time)}</dd>
+            {:else if info.plan}
+              {@const plan = info.plan}
+              <dt>Plan</dt>
+              <dd>{plan.name}</dd>
+              <dt>Data</dt>
+              <dd>Its current activity directives, live: edits to the plan show here as they happen.</dd>
+              <dt>Plan bounds</dt>
+              <dd>{formatRange(plan.start_time, planEnd(plan))}</dd>
+              <dt>Plan revision</dt>
+              <dd>{plan.revision}</dd>
+            {/if}
+            <dt>Rows refer to it as</dt>
+            <dd>{binding.id}</dd>
+          </dl>
+        {/if}
       </li>
     {:else}
-      <li class="muted">No sources yet. Add an imported source or a plan's simulation.</li>
+      <li class="text-muted-foreground">
+        No sources yet.
+        <button class="link" disabled={readOnly} on:click={() => dispatch('addSource')}>Add one</button>
+      </li>
     {/each}
   </ul>
 
   <div class="browser">
-    <SourceBrowser
-      groups={['Imported Sources', 'Simulations']}
-      emptyGroupMessages={{ 'Imported Sources': 'No imported sources added', Simulations: 'No simulations added' }}
-      {readOnly}
-      showUpload={false}
-      {user}
-    />
+    {#if browserGroups.length}
+      <SourceBrowser groups={browserGroups} {readOnly} showUpload={false} {user} />
+    {/if}
   </div>
 </div>
 
@@ -174,55 +259,53 @@
     padding: 6px 8px;
   }
 
-  .picker {
-    border-bottom: 1px solid var(--st-gray-20);
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    max-height: 45%;
-    overflow: auto;
-    padding: 8px;
-  }
-
-  .picker-group {
-    color: var(--st-gray-60);
-    margin-top: 4px;
-  }
-
-  .plan-name {
-    margin-top: 2px;
-  }
-
-  .option,
-  .bound-source {
-    align-items: center;
-    display: flex;
-    gap: 4px;
-    justify-content: space-between;
-  }
-
-  .option.nested {
-    padding-left: 12px;
-  }
-
-  .option-text {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .muted {
-    color: var(--st-gray-50);
-  }
-
   .bound {
     border-bottom: 1px solid var(--st-gray-20);
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     list-style: none;
     margin: 0;
+    max-height: 50%;
+    overflow: auto;
     padding: 8px;
+  }
+
+  .bound-source {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .newer {
+    align-items: center;
+    display: flex;
+    gap: 6px;
+    justify-content: space-between;
+  }
+
+  .details {
+    display: grid;
+    gap: 2px 8px;
+    grid-template-columns: max-content 1fr;
+    margin: 0;
+  }
+
+  .details dt {
+    color: var(--st-gray-50);
+  }
+
+  .details dd {
+    margin: 0;
+    min-width: 0;
+  }
+
+  .link {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
   }
 
   .browser {

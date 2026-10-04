@@ -573,6 +573,22 @@ const gql = {
     }
   `,
 
+  CREATE_SOURCE: `#graphql
+    mutation CreateSource($source: source_insert_input!) {
+      source: ${Queries.INSERT_SOURCE}(object: $source) {
+        id
+      }
+    }
+  `,
+
+  CREATE_SOURCE_REVISION: `#graphql
+    mutation CreateSourceRevision($revision: source_revision_insert_input!) {
+      revision: ${Queries.INSERT_SOURCE_REVISION}(object: $revision) {
+        id
+      }
+    }
+  `,
+
   CREATE_TAG: `#graphql
     mutation CreateTag($tag: tags_insert_input!) {
       ${Queries.INSERT_TAG}(object: $tag) {
@@ -1228,6 +1244,7 @@ const gql = {
       plans: ${Queries.PLANS}(order_by: { id: asc }) {
         id
         name
+        revision
         simulations {
           simulation_datasets(order_by: { id: desc }) {
             id
@@ -1237,28 +1254,31 @@ const gql = {
           }
         }
       }
-      revisions: ${Queries.SOURCE_REVISIONS}(order_by: { id: desc }) {
-        activity_types_aggregate {
-          aggregate {
-            sum {
+      sources: ${Queries.SOURCES}(order_by: { name: asc }) {
+        id
+        name
+        owner
+        revisions(order_by: { id: desc }) {
+          activity_types_aggregate {
+            aggregate {
+              sum {
+                count
+              }
+            }
+          }
+          coverage_end
+          coverage_start
+          id
+          metadata
+          requested_at
+          resources_aggregate {
+            aggregate {
               count
             }
           }
+          status
         }
-        coverage_end
-        coverage_start
-        id
-        resources_aggregate {
-          aggregate {
-            count
-          }
-        }
-        source {
-          id
-          name
-          source_type
-        }
-        status
+        source_type
       }
     }
   `,
@@ -1274,9 +1294,19 @@ const gql = {
           parameters
           type
         }
+        adapter
+        adapter_version
+        content_hash
         coverage_end
         coverage_start
+        error
+        finished_at
         id
+        metadata
+        original_file {
+          name
+        }
+        requested_at
         resources(order_by: { key: asc }) {
           category
           coverage_end
@@ -1290,6 +1320,12 @@ const gql = {
         }
         source {
           id
+          latest: revisions(where: { status: { _eq: "success" } }, order_by: { id: desc }, limit: 1) {
+            id
+            metadata
+            requested_at
+            status
+          }
           name
           source_type
         }
@@ -1866,6 +1902,18 @@ const gql = {
     }
   `,
 
+  GET_SOURCE_ADAPTERS: `#graphql
+    query GetSourceAdapters {
+      adapters: ${Queries.SOURCE_ADAPTERS}(order_by: { display_name: asc }) {
+        capabilities
+        display_name
+        extensions
+        id
+        version
+      }
+    }
+  `,
+
   GET_SPAN: `#graphql
     query GetSpan($datasetId: Int!, $spanId: Int!) {
       span: ${Queries.SPAN}(dataset_id: $datasetId, span_id: $spanId) {
@@ -2395,6 +2443,46 @@ const gql = {
         name
         owner
         updated_at
+      }
+    }
+  `,
+
+  SUB_ANALYSIS_PLANS: `#graphql
+    subscription SubAnalysisPlans($planIds: [Int!]!) {
+      plans: ${Queries.PLANS}(where: { id: { _in: $planIds } }) {
+        duration
+        id
+        mission_model {
+          activity_types {
+            computed_attributes_value_schema
+            name
+            parameters
+            required_parameters
+          }
+        }
+        model_id
+        name
+        revision
+        start_time
+      }
+    }
+  `,
+
+  SUB_ANALYSIS_PLAN_DIRECTIVES: `#graphql
+    subscription SubAnalysisPlanDirectives($planId: Int!) {
+      directives: ${Queries.ACTIVITY_DIRECTIVES_EXTENDED}(
+        where: { plan_id: { _eq: $planId } }
+        order_by: { approximate_start_time: asc }
+      ) {
+        anchor_id
+        anchored_to_start
+        approximate_start_time
+        arguments
+        id
+        metadata
+        name
+        start_offset
+        type
       }
     }
   `,

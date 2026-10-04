@@ -7,8 +7,10 @@
   import { ChevronDown } from 'lucide-svelte';
   import { PlanStatusMessages } from '../../enums/planStatusMessages';
   import { activityDirectivesMap } from '../../stores/activities';
+  import { createPlanAnalysis } from '../../stores/analysis';
   import { planReadOnly } from '../../stores/plan';
   import { initialPlanSnapshotsLoading } from '../../stores/planSnapshots';
+  import { simulationDataset } from '../../stores/simulation';
   import { viewTogglePanel } from '../../stores/views';
   import type { User } from '../../types/app';
   import type { Plan } from '../../types/plan';
@@ -65,6 +67,16 @@
       planExporting = true;
       await exportPlan(plan, user, Object.values($activityDirectivesMap));
       planExporting = false;
+    }
+  }
+
+  /** Opens a new analysis of this plan's current activities, with its shown simulation if that one succeeded. */
+  async function analyzePlan() {
+    planMenu.hide();
+    const datasetId = $simulationDataset?.status === 'success' ? $simulationDataset.id : null;
+    const id = await createPlanAnalysis(plan, datasetId, user);
+    if (id !== null) {
+      goto(`${base}/analyses/${id}`);
     }
   }
 
@@ -158,6 +170,9 @@
         <div class="column-name">View Snapshot History</div>
       </MenuItem>
       <MenuDivider />
+      <MenuItem on:click={analyzePlan} disabled={!featurePermissions.analysis.canCreate(user)}>
+        <div class="column-name">Analyze</div>
+      </MenuItem>
       <MenuItem on:click={onExportPlan} disabled={planExporting}>
         {#if !planExporting}
           Export plan as .json

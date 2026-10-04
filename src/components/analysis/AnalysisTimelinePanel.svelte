@@ -6,11 +6,15 @@
   (source, activity id), drawn through the timeline's numeric span selection.
 -->
 <script lang="ts">
+  import { Button } from '@nasa-jpl/stellar-svelte';
   import { createEventDispatcher } from 'svelte';
   import {
+    addSourceActivityRow,
     analysisMaxTimeRange,
+    analysisPlanDirectives,
     analysisSimulationDatasets,
     analysisSourceBindings,
+    analysisTimelineSources,
     selectedAnalysisActivity,
   } from '../../stores/analysis';
   import { getAnalysisActivityTimes } from '../../stores/analysisActivities';
@@ -37,7 +41,11 @@
   export let readOnly: boolean = false;
   export let user: User | null;
 
-  const dispatch = createEventDispatcher<{ editRow: Row; inspect: void }>();
+  const dispatch = createEventDispatcher<{
+    addSource: 'imported' | 'plans' | 'import';
+    editRow: Row;
+    inspect: void;
+  }>();
   const noSpanMaps: SpanUtilityMaps = {
     directiveIdToSpanIdMap: {},
     spanIdToChildIdsMap: {},
@@ -55,6 +63,16 @@
   $: timelines = $view?.definition.plan.timelines ?? [];
   $: timeline = timelines[0] ?? null;
   $: loadActivityTimes($analysisSourceBindings, $analysisSimulationDatasets, user);
+  // A plan's directives are live, so their times come from its subscription, not the one-off load.
+  $: histogramTimes = activityTimes.concat(
+    Object.values($analysisPlanDirectives).flatMap(directives =>
+      directives.map(directive => ({ durationMs: 0, startMs: Date.parse(directive.approximate_start_time) })),
+    ),
+  );
+  // The first look at a plan or a simulation is all of its activities; an imported product can be far too big.
+  $: suggestedRows = $analysisTimelineSources.sources.filter(
+    source => source.kind === 'plan' || source.kind === 'simulation',
+  );
   $: selectedSpanId = $selectedAnalysisActivity ? getActivityDrawingId($selectedAnalysisActivity) : null;
 
   let activityTimesRequest = 0;
@@ -138,7 +156,7 @@
           spanUtilityMaps={noSpanMaps}
           spansMap={{}}
           initialSpansLoading={activityTimesLoading}
-          spans={activityTimes}
+          spans={histogramTimes}
           timelineLockStatus={$timelineLockStatus}
           {user}
           viewTimeRange={$viewTimeRange}
@@ -167,6 +185,39 @@
           }}
         />
       {/if}
+      {#if !$analysisSourceBindings.length}
+        <div class="empty" role="note">
+          <div class="text-sm font-medium">Start with the data you want to look at</div>
+          <div class="text-muted-foreground">
+            An analysis shows mission data from any source on one timeline: an imported product, a plan's current
+            activities, its simulations. One source is plenty to begin with.
+          </div>
+          {#if !readOnly}
+            <div class="flex flex-wrap gap-2">
+              <Button size="sm" on:click={() => dispatch('addSource', 'imported')}>Add an imported source</Button>
+              <Button size="sm" variant="outline" on:click={() => dispatch('addSource', 'plans')}>Add a plan</Button>
+              <Button size="sm" variant="outline" on:click={() => dispatch('addSource', 'import')}>Import a file</Button
+              >
+            </div>
+          {/if}
+        </div>
+      {:else if timeline && !timeline.rows.length}
+        <div class="empty" role="note">
+          <div class="text-sm font-medium">Add rows</div>
+          <div class="text-muted-foreground">
+            Drag resources or activity types from Sources onto the timeline, or use the filter button beside an item.
+          </div>
+          {#if !readOnly && suggestedRows.length}
+            <div class="flex flex-wrap gap-2">
+              {#each suggestedRows as source (source.id)}
+                <Button size="sm" variant="outline" on:click={() => addSourceActivityRow(source.id, source.label)}>
+                  Show all activities of {source.label}
+                </Button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
     </svelte:fragment>
   </Panel>
 </div>
@@ -175,6 +226,25 @@
   .panel-cell {
     display: grid;
     height: 100%;
+    position: relative;
+  }
+
+  .empty {
+    background: var(--st-gray-10);
+    border: 1px solid var(--st-gray-20);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    font-size: 12px;
+    gap: 8px;
+    left: 50%;
+    max-width: 440px;
+    padding: 16px;
+    position: absolute;
+    top: 45%;
+    transform: translate(-50%, -50%);
+    width: calc(100% - 32px);
+    z-index: 5;
   }
 
   .timeline-title {

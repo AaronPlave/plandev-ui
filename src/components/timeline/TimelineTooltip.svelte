@@ -543,7 +543,12 @@
     const spanEndTime = formatDate(new Date(endMs), $plugins.time.primary.format);
     // Activities from a source other than the Plan name their source; their id is only unique within it.
     const sourceLabel = span.sourceId ? (getSource($timelineSources, span.sourceId)?.label ?? span.sourceId) : null;
-    const duration = sourceLabel ? convertUsToDurationString(span.durationMs * 1000) || '0s' : span.duration;
+    // An activity with no end (a plan directive in an analysis) shows none rather than a zero duration.
+    const duration = span.endUnknown
+      ? 'None (no end)'
+      : sourceLabel
+        ? convertUsToDurationString(span.durationMs * 1000) || '0s'
+        : span.duration;
     const id = span.sourceActivityId ?? span_id;
     return `
       <div class='tooltip-row-container'>
@@ -587,12 +592,16 @@
                 .join('')
             : ''
         }
-        <div class='tooltip-row'>
+        ${
+          span.endUnknown
+            ? ''
+            : `<div class='tooltip-row'>
           <span>End Time (${primaryTimeLabel}):</span>
           <span class='tooltip-value-highlight st-typography-medium'>${spanEndTime}</span>
-        </div>
+        </div>`
+        }
         ${
-          showAdditionalTimes
+          showAdditionalTimes && !span.endUnknown
             ? $plugins.time.additional
                 .map(
                   f =>

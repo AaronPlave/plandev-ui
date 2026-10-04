@@ -1,9 +1,13 @@
-import { writable } from 'svelte/store';
-import type { AnalysisSimulationDataset, AnalysisSourceBinding } from '../types/analysis';
+import { derived, writable } from 'svelte/store';
+import type { AnalysisPlanDirective, AnalysisSimulationDataset, AnalysisSourceBinding } from '../types/analysis';
 import type { User } from '../types/app';
 import type { Span } from '../types/simulation';
-import type { TimelineActivityState, TimelineActivitySubscription } from '../types/timelineSource';
+import type { GqlSubscribable } from '../types/subscribable';
+import type { TimelineActivityState, TimelineActivitySubscription, TimelineSourceId } from '../types/timelineSource';
+import { planDirectiveToSpan } from '../utilities/analysis';
 import effects from '../utilities/effects';
+import gql from '../utilities/gql';
+import { gqlSubscribable } from './subscribable';
 
 /** The activities a row shows, loaded whole once. */
 export function createLoadedActivitySubscription(load: () => Promise<Span[]>): TimelineActivitySubscription {
@@ -17,6 +21,37 @@ export function createLoadedActivitySubscription(load: () => Promise<Span[]>): T
     unsubscribe: () => {
       disposed = true;
     },
+  };
+}
+
+const planDirectives = new Map<number, GqlSubscribable<AnalysisPlanDirective[]>>();
+
+/**
+ * A plan's current directives, live: one subscription per plan, shared by its rows, the Sources browser, the
+ * histogram and the inspector. It is only open while something reads it.
+ */
+export function getPlanDirectives(planId: number): GqlSubscribable<AnalysisPlanDirective[]> {
+  let directives = planDirectives.get(planId);
+  if (!directives) {
+    directives = gqlSubscribable<AnalysisPlanDirective[]>(gql.SUB_ANALYSIS_PLAN_DIRECTIVES, { planId }, []);
+    planDirectives.set(planId, directives);
+  }
+  return directives;
+}
+
+/** A row's view of a plan's current directives, as activities of the analysis source that reads the plan. */
+export function createPlanActivitySubscription(
+  sourceId: TimelineSourceId,
+  planId: number,
+): TimelineActivitySubscription {
+  const directives = getPlanDirectives(planId);
+  return {
+    store: derived([directives, directives.loading, directives.error], ([$directives, $loading, $error]) => ({
+      error: $error,
+      loading: $loading,
+      spans: ($directives ?? []).map(directive => planDirectiveToSpan(sourceId, directive)),
+    })),
+    unsubscribe: () => {},
   };
 }
 
@@ -75,7 +110,8 @@ export function getSimulationDatasetSpans(
 const revisionActivityTimes = new WeakMap<User, Map<number, Promise<Pick<Span, 'durationMs' | 'startMs'>[]>>>();
 
 /**
- * When every activity of the bound sources is, for the timeline's histogram. Fetched once per revision per session.
+ * When every activity of the bound imported revisions and simulations is, for the timeline's histogram. Fetched once
+ * per revision per session. Plans are live and are added from their subscriptions.
  *
  * ponytail: ships each imported activity's times to the browser (~60 MB for 670k). Bin in the database if
  * revisions grow much past that.
@@ -96,6 +132,10 @@ export async function getAnalysisActivityTimes(
       if (binding.kind === 'simulation') {
         const dataset = datasets.find(({ id }) => id === binding.simulationDatasetId);
         return dataset ? getSimulationDatasetSpans(dataset, user) : [];
+      }
+      if (binding.kind === 'plan') {
+        // Live: the histogram reads a plan's directives from its subscription instead (analysisPlanDirectives).
+        return [];
       }
       let times = byRevision.get(binding.revisionId);
       if (!times) {

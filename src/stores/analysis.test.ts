@@ -7,6 +7,7 @@ import { createAnalysisDefinition } from '../utilities/analysis';
 import { resolveResourceLayerSource } from '../utilities/timelineSources';
 
 const effects = vi.hoisted(() => ({
+  getAnalysisPlans: vi.fn(async () => []),
   getAnalysisSimulationDatasets: vi.fn(),
   getAnalysisSourceRevisions: vi.fn(),
   getSpans: vi.fn(),
@@ -15,7 +16,10 @@ const effects = vi.hoisted(() => ({
 vi.mock('$env/dynamic/public', () => ({ env: {} }));
 vi.mock('$app/environment', () => ({ browser: true }));
 vi.mock('../utilities/effects', () => ({ default: effects }));
-vi.mock('./subscribable', () => ({ gqlSubscribable: () => ({ loading: { subscribe: () => () => {} } }) }));
+vi.mock('./subscribable', () => {
+  const store = <T>(value: T) => ({ subscribe: (run: (value: T) => void) => (run(value), () => {}) });
+  return { gqlSubscribable: () => ({ ...store([]), error: store(''), loading: store(false) }) };
+});
 
 const {
   addAnalysisSource,
@@ -42,6 +46,8 @@ const revision = {
   coverage_end: '2034-09-03T00:00:00Z',
   coverage_start: '2030-04-27T00:00:00Z',
   id: 18,
+  metadata: {},
+  requested_at: '2026-10-03T12:00:00Z',
   resources: [
     {
       category: 'Power',
@@ -55,7 +61,7 @@ const revision = {
       units: '%',
     },
   ],
-  source: { id: 1, name: 'TOL', source_type: 'xml_tol' },
+  source: { id: 1, latest: [], name: 'TOL', source_type: 'xml_tol' },
   status: 'success',
 };
 const simulation = {

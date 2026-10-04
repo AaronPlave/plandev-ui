@@ -539,6 +539,12 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
   CREATE_SIMULATION_TEMPLATE: (user: User | null): boolean => {
     return isUserAdmin(user) || getPermission([Queries.INSERT_SIMULATION_TEMPLATE], user);
   },
+  CREATE_SOURCE: (user: User | null): boolean => {
+    return isUserAdmin(user) || getPermission([Queries.INSERT_SOURCE], user);
+  },
+  CREATE_SOURCE_REVISION: (user: User | null): boolean => {
+    return isUserAdmin(user) || getPermission([Queries.INSERT_SOURCE, Queries.INSERT_SOURCE_REVISION], user);
+  },
   CREATE_TAG: (user: User | null): boolean => {
     return isUserAdmin(user) || getPermission([Queries.INSERT_TAG], user);
   },
@@ -821,6 +827,7 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
   GET_SOURCE_ACTIVITIES: () => true,
   GET_SOURCE_ACTIVITY: () => true,
   GET_SOURCE_ACTIVITY_TIMES: () => true,
+  GET_SOURCE_ADAPTERS: () => true,
   GET_SPAN: () => true,
   GET_SPANS: () => true,
   GET_TYPESCRIPT_CONSTRAINTS: () => true,
@@ -964,6 +971,8 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
   SUB_ACTIVITY_PRESETS_ALL: () => true,
   SUB_ACTIVITY_TYPES: () => true,
   SUB_ANALYSES: () => true,
+  SUB_ANALYSIS_PLANS: () => true,
+  SUB_ANALYSIS_PLAN_DIRECTIVES: () => true,
   SUB_ANCHOR_VALIDATION_STATUS: () => true,
   SUB_CHANNEL_DICTIONARIES: () => true,
   SUB_COMMAND_DICTIONARIES: () => true,

@@ -2,18 +2,21 @@
 
 <!--
   Read-only details of the selected analysis activity, read from its source in that source's own terms: an imported
-  activity with its attributes, parameters and provenance, or a simulation span with its arguments.
+  activity with its attributes, parameters and provenance, a simulation span with its arguments, or a plan's current
+  directive with its arguments, metadata and anchor (live: it follows edits to the plan).
 -->
 <script lang="ts">
+  import { analysisPlanDirectives } from '../../stores/analysis';
   import { plugins } from '../../stores/plugins';
   import type {
     AnalysisActivityRef,
+    AnalysisPlanDirective,
     AnalysisSimulationDataset,
     AnalysisSourceBinding,
     AnalysisSourceRevision,
   } from '../../types/analysis';
   import type { User } from '../../types/app';
-  import { analysisActivityRefsEqual } from '../../utilities/analysis';
+  import { analysisActivityRefsEqual, getRevisionVersionLabel } from '../../utilities/analysis';
   import effects from '../../utilities/effects';
   import {
     convertUsToDurationString,
@@ -30,7 +33,8 @@
   export let user: User | null;
 
   type Details = {
-    endMs: number;
+    /** Null when the source records no end (a plan directive). */
+    endMs: number | null;
     fields: [string, string][];
     name: string;
     ref: AnalysisActivityRef;
@@ -42,12 +46,48 @@
   let details: Details | null = null;
   let loading: boolean = false;
 
-  $: load(selected);
+  $: selectedBinding = selected ? bindings.find(b => b.id === selected?.sourceId) : undefined;
+  // A plan's directives are live: its details follow the plan rather than being read once.
+  $: if (selected && selectedBinding?.kind === 'plan') {
+    details = getPlanDirectiveDetails(selected, $analysisPlanDirectives[selectedBinding.planId] ?? []);
+    loading = false;
+  } else {
+    load(selected);
+  }
+
+  function getPlanDirectiveDetails(ref: AnalysisActivityRef, directives: AnalysisPlanDirective[]): Details | null {
+    const directive = directives.find(({ id }) => id === ref.activityId);
+    if (!directive) {
+      return null;
+    }
+    const anchor = directives.find(({ id }) => id === directive.anchor_id);
+    return {
+      endMs: null,
+      fields: [
+        ['Directive id', `${directive.id}`],
+        [
+          'Anchored to',
+          directive.anchor_id === null
+            ? `Plan ${directive.anchored_to_start ? 'start' : 'end'}`
+            : `${anchor?.name || anchor?.type || 'Directive'} (${directive.anchor_id}) ${directive.anchored_to_start ? 'start' : 'end'}`,
+        ],
+        ['Offset', directive.start_offset],
+      ],
+      name: directive.name || directive.type,
+      ref,
+      sections: [
+        ['Arguments', directive.arguments],
+        ['Metadata', directive.metadata],
+      ],
+      startMs: Date.parse(directive.approximate_start_time),
+      type: directive.type,
+    };
+  }
 
   async function load(ref: AnalysisActivityRef | null) {
     details = null;
     const binding = ref ? bindings.find(b => b.id === ref.sourceId) : undefined;
-    if (!ref || !binding) {
+    if (!ref || !binding || binding.kind === 'plan') {
       return;
     }
     loading = true;
@@ -71,10 +111,7 @@
         ['Subsystem', activity.category ?? '—'],
         ['Id in source', `${activity.id}`],
         ['Source key', activity.source_key],
-        [
-          'Product',
-          revision ? `${revision.source.name} (${revision.source.source_type}), revision ${revision.id}` : '',
-        ],
+        ['Product', revision ? `${revision.source.name}, ${getRevisionVersionLabel(revision)}` : ''],
       ],
       name: activity.name,
       ref,
@@ -138,12 +175,17 @@
       <dd>{details.type}</dd>
       <dt>Source</dt>
       <dd>{sourceLabels[details.ref.sourceId] ?? details.ref.sourceId}</dd>
-      <dt>Start</dt>
+      <dt>{details.endMs === null ? 'Start (approximate)' : 'Start'}</dt>
       <dd>{formatDate(new Date(details.startMs), $plugins.time.primary.format)}</dd>
-      <dt>End</dt>
-      <dd>{formatDate(new Date(details.endMs), $plugins.time.primary.format)}</dd>
-      <dt>Duration</dt>
-      <dd>{convertUsToDurationString((details.endMs - details.startMs) * 1000) || '0s'}</dd>
+      {#if details.endMs === null}
+        <dt>End</dt>
+        <dd class="text-muted-foreground">None: a directive has no end until it is simulated</dd>
+      {:else}
+        <dt>End</dt>
+        <dd>{formatDate(new Date(details.endMs), $plugins.time.primary.format)}</dd>
+        <dt>Duration</dt>
+        <dd>{convertUsToDurationString((details.endMs - details.startMs) * 1000) || '0s'}</dd>
+      {/if}
       {#each details.fields as [label, value]}
         <dt>{label}</dt>
         <dd>{value}</dd>

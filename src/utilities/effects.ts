@@ -96,11 +96,13 @@ import type {
   Analysis,
   AnalysisActivityRow,
   AnalysisDefinition,
+  AnalysisPlan,
   AnalysisSimulationDataset,
   AnalysisSlim,
   AnalysisSourceOptions,
   AnalysisSourceRevision,
   SourceActivity,
+  SourceAdapterDescriptor,
 } from '../types/analysis';
 import type { BaseUser, User, UserId, Version } from '../types/app';
 import type { ReqAuthResponse, ReqSessionResponse } from '../types/auth';
@@ -4297,6 +4299,19 @@ const effects = {
     return data.activities?.aggregate.count ?? 0;
   },
 
+  async getAnalysisPlans(ids: number[], user: User | null): Promise<AnalysisPlan[]> {
+    if (!ids.length) {
+      return [];
+    }
+    try {
+      const data = await reqHasura<AnalysisPlan[]>(convertToQuery(gql.SUB_ANALYSIS_PLANS), { planIds: ids }, user);
+      return data.plans ?? [];
+    } catch (e) {
+      catchError('log', 'Unable to retrieve plans', e as Error);
+      return [];
+    }
+  },
+
   async getAnalysisSimulationDatasets(ids: number[], user: User | null): Promise<AnalysisSimulationDataset[]> {
     if (!ids.length) {
       return [];
@@ -4313,10 +4328,10 @@ const effects = {
   async getAnalysisSourceOptions(user: User | null): Promise<AnalysisSourceOptions> {
     try {
       const data = await reqHasura<any>(gql.GET_ANALYSIS_SOURCE_OPTIONS, {}, user);
-      return { plans: data.plans ?? [], revisions: data.revisions ?? [] };
+      return { plans: data.plans ?? [], sources: data.sources ?? [] };
     } catch (e) {
       catchError('log', 'Unable to retrieve sources', e as Error);
-      return { plans: [], revisions: [] };
+      return { plans: [], sources: [] };
     }
   },
 
@@ -5329,6 +5344,17 @@ const effects = {
     });
   },
 
+  /** The installed source adapters: the formats a file can be imported as. Empty if the catalog isn't available. */
+  async getSourceAdapters(user: User | null): Promise<SourceAdapterDescriptor[]> {
+    try {
+      const data = await reqHasura<SourceAdapterDescriptor[]>(gql.GET_SOURCE_ADAPTERS, {}, user);
+      return data.adapters ?? [];
+    } catch (e) {
+      catchError('log', 'Unable to retrieve source formats', e as Error);
+      return [];
+    }
+  },
+
   async getSpan(datasetId: number, spanId: number, user: User | null): Promise<SpanDB | null> {
     try {
       const data = await reqHasura<SpanDB>(gql.GET_SPAN, { datasetId, spanId }, user);
@@ -5873,6 +5899,64 @@ const effects = {
     } catch (e) {
       catchError('log', 'Unable to import sequence template', e as Error);
       showFailureToast('Failed To Import Sequence Template');
+      return null;
+    }
+  },
+
+  /**
+   * Imports a file as a new revision of a source: an existing one (`sourceId`) or a new one (`sourceName`). The file
+   * is uploaded, the revision requested, and the ingest worker does the rest; the revision is pending until it does.
+   * Returns the revision id.
+   */
+  async importSourceRevision(
+    file: File,
+    target: { sourceId: number } | { sourceName: string },
+    adapter: string,
+    user: User | null,
+  ): Promise<number | null> {
+    try {
+      if (!queryPermissions.CREATE_SOURCE_REVISION(user)) {
+        throwPermissionError('import a source');
+      }
+      const fileId = await effects.uploadFile(file, user);
+      if (fileId === null) {
+        throw Error(`Unable to upload ${file.name}`);
+      }
+      let sourceId: number;
+      if ('sourceId' in target) {
+        sourceId = target.sourceId;
+      } else {
+        const data = await reqHasura<{ id: number }>(
+          gql.CREATE_SOURCE,
+          { source: { name: target.sourceName, source_type: adapter === 'auto' ? 'imported' : adapter } },
+          user,
+        );
+        if (!data.source) {
+          throw Error(`Unable to create source "${target.sourceName}"`);
+        }
+        sourceId = data.source.id;
+      }
+      const data = await reqHasura<{ id: number }>(
+        gql.CREATE_SOURCE_REVISION,
+        {
+          revision: {
+            adapter,
+            metadata: { originalFileName: file.name },
+            original_file_id: fileId,
+            source_id: sourceId,
+            storage_kind: 'pg_chunks_v1',
+          },
+        },
+        user,
+      );
+      if (!data.revision) {
+        throw Error(`Unable to import ${file.name}`);
+      }
+      showSuccessToast(`Importing ${file.name}`);
+      return data.revision.id;
+    } catch (e) {
+      catchError('log', 'Source Import Failed', e as Error);
+      showFailureToast('Source Import Failed');
       return null;
     }
   },

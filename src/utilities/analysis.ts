@@ -2,10 +2,13 @@ import type {
   AnalysisActivityRef,
   AnalysisActivityRow,
   AnalysisDefinition,
+  AnalysisPlan,
+  AnalysisPlanDirective,
   AnalysisSimulationDataset,
   AnalysisSourceBinding,
   AnalysisSourceRevision,
   AnalysisSourceTarget,
+  SourceRevisionSummary,
 } from '../types/analysis';
 import type { SourceResource } from '../types/importedSource';
 import type { ResourceType, Span } from '../types/simulation';
@@ -19,7 +22,9 @@ import type {
   TimelineSource,
   TimelineSourceId,
 } from '../types/timelineSource';
-import { createTimeline } from './timeline';
+import { ViewDefaultDiscreteOptions } from '../constants/view';
+import { getIntervalInMs } from './time';
+import { createRow, createTimeline, createTimelineActivityLayer } from './timeline';
 import { createStaticResourceSubscription, toIntervalType } from './timelineSources';
 import { generateDefaultView } from './view';
 
@@ -117,6 +122,34 @@ export function simulationSpanToActivity(sourceId: TimelineSourceId, span: Span)
   };
 }
 
+/**
+ * A plan's current directive as an activity of the analysis source that reads the plan. It starts at its
+ * anchor-resolved approximate start (the plan's own anchoring, from activity_directive_extended) and has no end:
+ * it is drawn as a point, never with an invented duration.
+ */
+export function planDirectiveToSpan(sourceId: TimelineSourceId, directive: AnalysisPlanDirective): Span {
+  const startMs = Date.parse(directive.approximate_start_time);
+  return {
+    attributes: {
+      arguments: directive.arguments as Span['attributes']['arguments'],
+      computedAttributes: {},
+    },
+    dataset_id: -1,
+    duration: '',
+    durationMs: 0,
+    endMs: startMs,
+    endUnknown: true,
+    name: directive.name || directive.type,
+    parent_id: null,
+    sourceActivityId: directive.id,
+    sourceId,
+    span_id: getActivityDrawingId({ activityId: directive.id, sourceId }),
+    startMs,
+    start_offset: '',
+    type: directive.type,
+  };
+}
+
 /* The analysis definition. */
 
 export function createAnalysisDefinition(): AnalysisDefinition {
@@ -138,9 +171,28 @@ export function getNextAnalysisSourceId(bindings: AnalysisSourceBinding[]): Time
 }
 
 export function isSameAnalysisSource(a: AnalysisSourceTarget, b: AnalysisSourceTarget): boolean {
-  return a.kind === 'imported' && b.kind === 'imported'
-    ? a.revisionId === b.revisionId
-    : a.kind === 'simulation' && b.kind === 'simulation' && a.simulationDatasetId === b.simulationDatasetId;
+  if (a.kind === 'imported' && b.kind === 'imported') {
+    return a.revisionId === b.revisionId;
+  }
+  if (a.kind === 'simulation' && b.kind === 'simulation') {
+    return a.simulationDatasetId === b.simulationDatasetId;
+  }
+  return a.kind === 'plan' && b.kind === 'plan' && a.planId === b.planId;
+}
+
+/** How merlin.analysis_activity names a binding's activities: its source_kind and source_ref. */
+export function getAnalysisActivitySource(binding: AnalysisSourceTarget): {
+  source_kind: AnalysisActivityRow['source_kind'];
+  source_ref: number;
+} {
+  switch (binding.kind) {
+    case 'imported':
+      return { source_kind: 'revision', source_ref: binding.revisionId };
+    case 'simulation':
+      return { source_kind: 'simulation', source_ref: binding.simulationDatasetId };
+    case 'plan':
+      return { source_kind: 'plan', source_ref: binding.planId };
+  }
 }
 
 /** The binding a row of merlin.analysis_activity comes from. */
@@ -148,11 +200,10 @@ export function getAnalysisActivityRowRef(
   bindings: AnalysisSourceBinding[],
   row: Pick<AnalysisActivityRow, 'activity_id' | 'source_kind' | 'source_ref'>,
 ): AnalysisActivityRef | null {
-  const binding = bindings.find(binding =>
-    row.source_kind === 'revision'
-      ? binding.kind === 'imported' && binding.revisionId === row.source_ref
-      : binding.kind === 'simulation' && binding.simulationDatasetId === row.source_ref,
-  );
+  const binding = bindings.find(binding => {
+    const source = getAnalysisActivitySource(binding);
+    return source.source_kind === row.source_kind && source.source_ref === row.source_ref;
+  });
   return binding ? { activityId: row.activity_id, sourceId: binding.id } : null;
 }
 
@@ -162,6 +213,8 @@ export type AnalysisActivityFilter = {
   /** Only these sources; null for every source of the analysis. */
   sourceIds: TimelineSourceId[] | null;
   text: string;
+  /** Only activities that overlap this window (a plan directive, which has no end, by its start); null for all. */
+  timeRange?: TimeRange | null;
   /** Only these types; null for every type. */
   types: string[] | null;
 };
@@ -173,17 +226,26 @@ export function getAnalysisActivityWhere(
 ): Record<string, unknown> {
   const sources = bindings
     .filter(binding => !filter.sourceIds || filter.sourceIds.includes(binding.id))
-    .map(binding =>
-      binding.kind === 'imported'
-        ? { source_kind: { _eq: 'revision' }, source_ref: { _eq: binding.revisionId } }
-        : { source_kind: { _eq: 'simulation' }, source_ref: { _eq: binding.simulationDatasetId } },
-    );
+    .map(binding => {
+      const { source_kind, source_ref } = getAnalysisActivitySource(binding);
+      return { source_kind: { _eq: source_kind }, source_ref: { _eq: source_ref } };
+    });
   const conditions: Record<string, unknown>[] = [
     // No sources selected matches nothing, not everything.
     sources.length ? { _or: sources } : { activity_id: { _is_null: true } },
   ];
   if (filter.types) {
     conditions.push({ type: { _in: filter.types } });
+  }
+  if (filter.timeRange) {
+    const start = new Date(filter.timeRange.start).toISOString();
+    const end = new Date(filter.timeRange.end).toISOString();
+    conditions.push({
+      _or: [
+        { end_time: { _gte: start }, start_time: { _lte: end } },
+        { end_time: { _is_null: true }, start_time: { _gte: start, _lte: end } },
+      ],
+    });
   }
   const text = filter.text.trim();
   if (text) {
@@ -240,6 +302,11 @@ export type AnalysisSourcesInput = {
   bindings: AnalysisSourceBinding[];
   /** True while the revisions and datasets the bindings name are loading. */
   loading: boolean;
+  /** Directive types present in each bound plan now, by plan id; absent while they load. */
+  planTypeCounts: Record<number, { count: number; name: string }[]>;
+  plans: AnalysisPlan[];
+  /** True while the bound plans are loading (they are subscribed to, separately from revisions and datasets). */
+  plansLoading: boolean;
   revisions: AnalysisSourceRevision[];
   simulationDatasets: AnalysisSimulationDataset[];
   /** Span types present in each simulation dataset, by simulation dataset id; absent while they load. */
@@ -256,6 +323,11 @@ export type AnalysisSourcesInput = {
     resource: SourceResource,
     context: TimelineResourceSubscriptionContext,
   ) => TimelineResourceSubscription;
+  subscribePlanActivities: (
+    binding: AnalysisSourceBinding,
+    plan: AnalysisPlan,
+    context: TimelineResourceSubscriptionContext,
+  ) => TimelineActivitySubscription;
   subscribeSimulationActivities: (
     binding: AnalysisSourceBinding,
     dataset: AnalysisSimulationDataset,
@@ -269,19 +341,67 @@ export type AnalysisSourcesInput = {
   ) => TimelineResourceSubscription;
 };
 
-export function getAnalysisSourceLabel(
+/** A date as people say it: "Oct 3, 2026". */
+function formatDate(time: string): string {
+  return new Date(time).toLocaleDateString('en-US', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+    year: 'numeric',
+  });
+}
+
+/**
+ * Which version of its source a revision is, in people's terms: the product's own generation date when the format
+ * records one, else when it was imported. Never the database id.
+ */
+export function getRevisionVersionLabel(revision: SourceRevisionSummary): string {
+  const product = revision.metadata?.product;
+  if (product?.generatedAt) {
+    return `${formatDate(product.generatedAt)} product${product.productVersion ? ` (${product.productVersion})` : ''}`;
+  }
+  // Imports of one source on one day are common (a re-run, a fix): the time tells them apart.
+  return `Imported ${formatDate(revision.requested_at)}, ${revision.requested_at.slice(11, 16)} UTC`;
+}
+
+/** The newer successful revision of the same source, if the bound one isn't the newest. */
+export function getNewerRevision(revision: AnalysisSourceRevision | undefined): SourceRevisionSummary | null {
+  const latest = revision?.source.latest[0];
+  return latest && latest.id > revision.id ? latest : null;
+}
+
+/**
+ * What a binding is, in people's terms: `name` is the thing (a source, a plan), `version` which of its data
+ * (a revision, a simulation, its current activities), and `label` the short form rows, the table and tooltips use:
+ * the analysis's alias when it has one.
+ */
+export function getAnalysisSourceNames(
   binding: AnalysisSourceBinding,
-  revision?: AnalysisSourceRevision,
-  dataset?: AnalysisSimulationDataset,
-): string {
-  if (binding.label) {
-    return binding.label;
-  }
+  details: { dataset?: AnalysisSimulationDataset; plan?: AnalysisPlan; revision?: AnalysisSourceRevision },
+): { label: string; name: string; version: string } {
+  let name: string;
+  let version: string;
+  let short: string;
   if (binding.kind === 'imported') {
-    return revision ? `${revision.source.name} r${revision.id}` : `Revision ${binding.revisionId}`;
+    name = details.revision?.source.name ?? 'Imported source';
+    version = details.revision ? getRevisionVersionLabel(details.revision) : 'Unavailable revision';
+    // Captions keep the date only; the details and the Sources panel show the full version.
+    short = details.revision
+      ? version
+          .replace(/ product.*$/, '')
+          .replace(/^Imported /, '')
+          .replace(/, \d\d:\d\d UTC$/, '')
+      : version;
+  } else if (binding.kind === 'simulation') {
+    name = details.dataset?.simulation?.plan?.name ?? 'Simulation';
+    version = `Simulation ${binding.simulationDatasetId}`;
+    short = version;
+  } else {
+    name = details.plan?.name ?? 'Plan';
+    version = 'Current activities';
+    short = 'Current';
   }
-  const plan = dataset?.simulation?.plan;
-  return plan ? `${plan.name} · Sim ${binding.simulationDatasetId}` : `Simulation ${binding.simulationDatasetId}`;
+  return { label: binding.label || `${name} · ${short}`, name, version };
 }
 
 function groupBrowserNodes<T>(
@@ -335,19 +455,84 @@ function summarizeActivityTypes(types: { count: number }[]): Pick<SourceBrowserN
 }
 
 export function createAnalysisSources(input: AnalysisSourcesInput): TimelineSource[] {
-  return input.bindings.map(binding =>
-    binding.kind === 'imported'
-      ? createImportedRevisionSource(
+  return input.bindings.map(binding => {
+    switch (binding.kind) {
+      case 'imported':
+        return createImportedRevisionSource(
           input,
           binding,
           input.revisions.find(revision => revision.id === binding.revisionId),
-        )
-      : createSimulationDatasetSource(
+        );
+      case 'simulation':
+        return createSimulationDatasetSource(
           input,
           binding,
           input.simulationDatasets.find(dataset => dataset.id === binding.simulationDatasetId),
+        );
+      case 'plan':
+        return createPlanSource(
+          input,
+          binding,
+          input.plans.find(plan => plan.id === binding.planId),
+        );
+    }
+  });
+}
+
+/**
+ * A plan's current activity directives. Live: the rows follow the plan as it changes. Read-only, with no
+ * resources (a plan's resources are its simulations' results, which are their own sources).
+ */
+function createPlanSource(
+  input: AnalysisSourcesInput,
+  binding: AnalysisSourceBinding,
+  plan: AnalysisPlan | undefined,
+): TimelineSource {
+  const sourceId = binding.id;
+  const { label, name } = getAnalysisSourceNames(binding, { plan });
+  const unavailableReason = !plan && !input.plansLoading ? 'The plan no longer exists' : undefined;
+  const present = plan ? input.planTypeCounts[plan.id] : undefined;
+  const modelTypes = plan?.mission_model?.activity_types ?? [];
+  return {
+    browserNodes: [
+      {
+        children: groupBrowserNodes(
+          sourceId,
+          'activity',
+          present ?? [],
+          () => 'Activity directives',
+          type => activityItemNode(sourceId, type.name, type.count),
+          summarizeActivityTypes,
         ),
-  );
+        emptyMessage: unavailableReason ?? (present ? 'No activities' : 'Loading…'),
+        id: `${sourceId}/activities`,
+        kind: 'group',
+        label: `Current Activities (${(present ?? []).reduce((total, type) => total + type.count, 0)})`,
+        tooltip: present ? summarizeActivityTypes(present).tooltip : undefined,
+      },
+    ],
+    description: plan
+      ? `Plan "${name}": its current activity directives, live`
+      : `Plan ${binding.kind === 'plan' ? binding.planId : ''}`,
+    group: 'Plans',
+    id: sourceId,
+    intervals: {
+      catalog: (present ?? []).map(
+        type => modelTypes.find(({ name }) => name === type.name) ?? toIntervalType(type.name),
+      ),
+      hasDirectives: false,
+      loading: input.plansLoading || !present,
+      present: present ?? [],
+      // The plan changes under the key: its subscription follows it, so rows never need to resubscribe.
+      revisionKey: plan ? `plan:${plan.id}` : getUnavailableKey(unavailableReason),
+      subscribe: (_request, context) =>
+        plan
+          ? input.subscribePlanActivities(binding, plan, context)
+          : createStaticActivitySubscription(unavailableReason ?? '', input.plansLoading),
+    },
+    kind: 'plan',
+    label,
+  };
 }
 
 function createImportedRevisionSource(
@@ -356,7 +541,7 @@ function createImportedRevisionSource(
   revision: AnalysisSourceRevision | undefined,
 ): TimelineSource {
   const sourceId = binding.id;
-  const label = getAnalysisSourceLabel(binding, revision);
+  const { label } = getAnalysisSourceNames(binding, { revision });
   const ready = revision?.status === 'success';
   const unavailableReason = !revision
     ? input.loading
@@ -413,8 +598,8 @@ function createImportedRevisionSource(
       },
     ],
     description: revision
-      ? `Imported · ${revision.source.name}, revision ${revision.id} · ${revision.coverage_start ?? '?'} – ${revision.coverage_end ?? '?'}`
-      : `Imported revision ${binding.kind === 'imported' ? binding.revisionId : ''}`,
+      ? `${revision.source.name} · ${getRevisionVersionLabel(revision)} · ${formatRange(revision.coverage_start, revision.coverage_end)}`
+      : 'Imported source',
     group: 'Imported Sources',
     id: sourceId,
     intervals: {
@@ -456,7 +641,7 @@ function createSimulationDatasetSource(
   dataset: AnalysisSimulationDataset | undefined,
 ): TimelineSource {
   const sourceId = binding.id;
-  const label = getAnalysisSourceLabel(binding, undefined, dataset);
+  const { label } = getAnalysisSourceNames(binding, { dataset });
   const unavailableReason = !dataset
     ? input.loading
       ? undefined
@@ -497,8 +682,8 @@ function createSimulationDatasetSource(
       },
     ],
     description: dataset
-      ? `Simulation dataset ${dataset.id}${plan ? ` of plan "${plan.name}" (${plan.id})` : ''} · ${dataset.simulation_start_time ?? '?'} – ${dataset.simulation_end_time ?? '?'}`
-      : `Simulation dataset ${binding.kind === 'simulation' ? binding.simulationDatasetId : ''}`,
+      ? `Simulation ${dataset.id}${plan ? ` of plan "${plan.name}"` : ''} · ${formatRange(dataset.simulation_start_time, dataset.simulation_end_time)}`
+      : 'Simulation',
     group: 'Simulations',
     id: sourceId,
     intervals: {
@@ -547,6 +732,10 @@ export function createStaticActivitySubscription(
 
 /* Time. */
 
+export function formatRange(start: string | null | undefined, end: string | null | undefined): string {
+  return `${start ? formatDate(start) : '?'} – ${end ? formatDate(end) : '?'}`;
+}
+
 function parseRange(start: string | null | undefined, end: string | null | undefined): TimeRange | null {
   const range = { end: Date.parse(end ?? ''), start: Date.parse(start ?? '') };
   return Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start ? range : null;
@@ -561,19 +750,38 @@ function union(ranges: (TimeRange | null)[]): TimeRange | null {
 
 /**
  * The extent the timeline can show: every source's data. The default view is the simulations' extent when there
- * are simulations (a plan's span is the usual unit of comparison), else everything.
+ * are simulations (a plan's span is the usual unit of comparison), else the bound plans', else everything.
  */
 export function getAnalysisTimeRanges(
   revisions: AnalysisSourceRevision[],
   datasets: AnalysisSimulationDataset[],
+  plans: AnalysisPlan[] = [],
 ): { initial: TimeRange; max: TimeRange } | null {
   const simulations = union(datasets.map(d => parseRange(d.simulation_start_time, d.simulation_end_time)));
+  const planRanges = union(
+    plans.map(p =>
+      parseRange(p.start_time, new Date(Date.parse(p.start_time) + getIntervalInMs(p.duration)).toISOString()),
+    ),
+  );
   const max = union([
     simulations,
+    planRanges,
     ...revisions.map(r => parseRange(r.coverage_start, r.coverage_end)),
     ...revisions.flatMap(r => r.activity_types.map(t => parseRange(t.first_start, t.last_end))),
   ]);
-  return max ? { initial: simulations ?? max, max } : null;
+  return max ? { initial: simulations ?? planRanges ?? max, max } : null;
+}
+
+/**
+ * A row of every activity of one source, grouped by type: the natural first look at a plan or a simulation. Imported
+ * products can hold far more than one row draws, so the page only suggests it for plans and simulations.
+ */
+export function createSourceActivityRow(timelines: Timeline[], sourceId: TimelineSourceId, name: string) {
+  return createRow(timelines, {
+    discreteOptions: { ...ViewDefaultDiscreteOptions, displayMode: 'grouped' },
+    layers: [createTimelineActivityLayer(timelines, { name, sourceId })],
+    name,
+  });
 }
 
 /* Removing a source. */

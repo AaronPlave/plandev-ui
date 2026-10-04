@@ -94,7 +94,7 @@ describe('AnalysisActivityTable', () => {
     await fireEvent.click(simulated);
     await waitFor(() =>
       expect(select).toHaveBeenCalledWith({
-        endMs: Date.parse(rows[1].end_time),
+        endMs: Date.parse(rows[1].end_time ?? ''),
         ref: { activityId: 4, sourceId: 'source-2' },
         startMs: Date.parse(rows[1].start_time),
       }),
@@ -105,7 +105,12 @@ describe('AnalysisActivityTable', () => {
       parent_id: null,
       span_id: 4,
     } as unknown as Span);
-    const otherSource = importedActivityToSpan('source-1', { ...rows[0], id: 4, parameters: {} });
+    const otherSource = importedActivityToSpan('source-1', {
+      ...rows[0],
+      end_time: rows[0].end_time ?? '',
+      id: 4,
+      parameters: {},
+    });
     expect(getActivityDrawingId(select.mock.calls[0][0].ref)).toBe(drawn.span_id);
     expect(getActivityDrawingId(select.mock.calls[0][0].ref)).not.toBe(otherSource.span_id);
   });
