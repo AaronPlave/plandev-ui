@@ -151,8 +151,35 @@ export type SourceAdapterDescriptor = {
   display_name: string;
   extensions: string[];
   id: string;
+  /** When a running ingest worker last reported having it. */
+  last_seen_at: string;
   version: string;
 };
+
+/** A source as the Sources page lists it: every revision, failed and pending ones included. */
+export type SourceLibraryEntry = {
+  created_at: string;
+  id: number;
+  name: string;
+  owner: UserId | null;
+  revisions: (SourceRevisionSummary & {
+    activity_types_aggregate: { aggregate: { sum: { count: number | null } | null } | null };
+    adapter: string;
+    adapter_version: string | null;
+    content_hash: string | null;
+    coverage_end: string | null;
+    coverage_start: string | null;
+    error: { message?: string } | null;
+    finished_at: string | null;
+    original_file: { name: string } | null;
+    requested_by: UserId | null;
+    resources_aggregate: { aggregate: { count: number } | null };
+  })[];
+  source_type: string;
+};
+
+/** Which analyses reference which sources (their bindings, read from each definition). */
+export type AnalysisSourceUsage = Pick<Analysis, 'id' | 'name' | 'owner'> & { sources: AnalysisSourceBinding[] | null };
 
 /** What can be added to an analysis: every source with its revisions, and every plan with its simulations. */
 export type AnalysisSourceOptions = {
@@ -177,6 +204,7 @@ export type AnalysisSourceOptions = {
       activity_types_aggregate: { aggregate: { sum: { count: number | null } | null } | null };
       coverage_end: string | null;
       coverage_start: string | null;
+      error: { message?: string } | null;
       resources_aggregate: { aggregate: { count: number } | null };
     })[];
     source_type: string;

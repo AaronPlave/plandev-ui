@@ -210,7 +210,7 @@
           {#if !readOnly && suggestedRows.length}
             <div class="flex flex-wrap gap-2">
               {#each suggestedRows as source (source.id)}
-                <Button size="sm" variant="outline" on:click={() => addSourceActivityRow(source.id, source.label)}>
+                <Button size="sm" variant="outline" on:click={() => addSourceActivityRow(source.id, 'Activities')}>
                   Show all activities of {source.label}
                 </Button>
               {/each}

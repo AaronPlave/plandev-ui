@@ -21,6 +21,7 @@ import {
   getAnalysisTimeRanges,
   getNextAnalysisSourceId,
   importedActivityToSpan,
+  isActivityTypeShown,
   isSameAnalysisSource,
   removeSourceFromTimelines,
   simulationSpanToActivity,
@@ -28,6 +29,7 @@ import {
 import effects from '../utilities/effects';
 import gql from '../utilities/gql';
 import { featurePermissions } from '../utilities/permissions';
+import { getSource, toIntervalType } from '../utilities/timelineSources';
 import { applyViewDefinitionMigrations } from '../utilities/view';
 import {
   createLoadedActivitySubscription,
@@ -40,7 +42,7 @@ import { createImportedResourceSubscription, getSourceQuery } from './importedRe
 import { viewTimeRange } from './plan';
 import { createProfileSubscription } from './profile';
 import { gqlSubscribable } from './subscribable';
-import { initializeView, view, viewUpdateTimeline } from './views';
+import { initializeView, view, viewAddFilterToRow, viewUpdateTimeline } from './views';
 
 /*
  * State of the one Analysis page that is open. The timeline, its editor and the Sources browser read the analysis's
@@ -226,8 +228,12 @@ export async function openAnalysis(initial: Analysis, user: User | null) {
   if (ranges === undefined) {
     return;
   }
-  // The time window is not saved: an analysis opens on its sources' range.
-  viewTimeRange.set(ranges?.initial ?? { end: Date.now(), start: Date.now() - 864e5 });
+  // The time window is not saved: an analysis opens on its sources' range, or, with none yet, the last day.
+  const lastDay = { end: Date.now(), start: Date.now() - 864e5 };
+  if (!ranges) {
+    analysisMaxTimeRange.set(lastDay);
+  }
+  viewTimeRange.set(ranges?.initial ?? lastDay);
 }
 
 export function closeAnalysis() {
@@ -276,6 +282,15 @@ export function setAnalysisSourceLabel(sourceId: string, label: string) {
     // An undefined label is dropped when the definition is saved as JSON.
     bindings.map(binding => (binding.id === sourceId ? { ...binding, label: label.trim() || undefined } : binding)),
   );
+}
+
+/** Adds a row of one source's activities of `type`, unless a row already draws them. */
+export function showAnalysisActivityType(sourceId: string, type: string) {
+  const timelines = get(view)?.definition.plan.timelines ?? [];
+  if (!isActivityTypeShown(timelines, sourceId, type)) {
+    const sourceLabel = getSource(get(analysisTimelineSources), sourceId)?.label;
+    viewAddFilterToRow([toIntervalType(type)], 'activity', { sourceId, sourceLabel });
+  }
 }
 
 /** Adds a row of every activity of one source (see createSourceActivityRow). */
@@ -390,9 +405,12 @@ export async function createPlanAnalysis(
     sources.push({ id: 'source-2', kind: 'simulation', simulationDatasetId });
   }
   const [timeline] = definition.view.plan.timelines;
+  // Each row's header names its source, live.
   sources.forEach(source => {
-    const name = source.kind === 'plan' ? 'Current activities' : `Simulation ${simulationDatasetId}`;
-    timeline.rows = [...timeline.rows, createSourceActivityRow(definition.view.plan.timelines, source.id, name)];
+    timeline.rows = [
+      ...timeline.rows,
+      createSourceActivityRow(definition.view.plan.timelines, source.id, 'Activities'),
+    ];
   });
   return effects.createAnalysis(`${plan.name} analysis`, { ...definition, sources }, user);
 }

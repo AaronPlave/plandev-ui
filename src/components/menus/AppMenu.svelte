@@ -16,6 +16,7 @@
     ChevronDown,
     ChevronsLeftRight,
     Clipboard,
+    DatabaseZap,
     FileBox,
     FileCode2,
     FlipHorizontal2,
@@ -78,6 +79,10 @@
           <MenuLink on:click={closeMenu} className="text-sm py-1.5" href="{base}/analyses">
             <ChartGantt size={16} />
             Analyses
+          </MenuLink>
+          <MenuLink on:click={closeMenu} className="text-sm py-1.5" href="{base}/sources">
+            <DatabaseZap size={16} />
+            Imported Sources
           </MenuLink>
           <MenuLink on:click={closeMenu} className="text-sm py-1.5" href="{base}/models">
             <FileBox size={16} />

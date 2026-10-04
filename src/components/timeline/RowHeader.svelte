@@ -109,15 +109,13 @@
   }
 
   // Activities of sources other than the Plan name their sources, read live so a rebound or removed source never
-  // leaves a stale label behind (row names stay the user's). Grouped rows name the source on each group instead.
-  $: activitySourceCaption = [
-    ...new Set(
-      layers
-        .filter(layer => layer.chartType === 'activity')
-        .map(resolveActivityLayerSourceId)
-        .filter(sourceId => sourceId !== PLAN_SOURCE_ID),
-    ),
-  ]
+  // leaves a stale label behind (row names stay the user's). A grouped row names it beside its title, so its tree
+  // stays level with the groups drawn beside it.
+  $: activitySourceIds = [
+    ...new Set(layers.filter(layer => layer.chartType === 'activity').map(resolveActivityLayerSourceId)),
+  ];
+  $: activitySourceCaption = activitySourceIds
+    .filter(sourceId => sourceId !== PLAN_SOURCE_ID)
     .map(sourceId => getSourceLabel($timelineSources, sourceId))
     .join(', ');
 </script>
@@ -169,7 +167,9 @@
                 role="none"
                 style={rowDragMoveDisabled ? 'cursor: grab' : 'cursor: grabbing'}
               >
-                {title}
+                {title}{#if activitySourceCaption && discreteTree.length && activitySourceIds.length === 1}<span
+                    class="text-muted-foreground">{` · ${activitySourceCaption}`}</span
+                  >{/if}
               </div>
               {#if activitySourceCaption && height > 36 && !discreteTree.length}
                 <div class="truncate text-[10px] text-muted-foreground">{activitySourceCaption}</div>

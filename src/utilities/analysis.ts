@@ -8,6 +8,7 @@ import type {
   AnalysisSourceBinding,
   AnalysisSourceRevision,
   AnalysisSourceTarget,
+  AnalysisSourceUsage,
   SourceRevisionSummary,
 } from '../types/analysis';
 import type { SourceResource } from '../types/importedSource';
@@ -24,7 +25,7 @@ import type {
 } from '../types/timelineSource';
 import { ViewDefaultDiscreteOptions } from '../constants/view';
 import { getIntervalInMs } from './time';
-import { createRow, createTimeline, createTimelineActivityLayer } from './timeline';
+import { createRow, createTimeline, createTimelineActivityLayer, isActivityLayer } from './timeline';
 import { createStaticResourceSubscription, toIntervalType } from './timelineSources';
 import { generateDefaultView } from './view';
 
@@ -361,13 +362,66 @@ export function getRevisionVersionLabel(revision: SourceRevisionSummary): string
     return `${formatDate(product.generatedAt)} product${product.productVersion ? ` (${product.productVersion})` : ''}`;
   }
   // Imports of one source on one day are common (a re-run, a fix): the time tells them apart.
-  return `Imported ${formatDate(revision.requested_at)}, ${revision.requested_at.slice(11, 16)} UTC`;
+  return `Imported ${formatRequestTime(revision)}`;
+}
+
+export function formatRequestTime(revision: { requested_at: string }): string {
+  return `${formatDate(revision.requested_at)}, ${revision.requested_at.slice(11, 16)} UTC`;
 }
 
 /** The newer successful revision of the same source, if the bound one isn't the newest. */
 export function getNewerRevision(revision: AnalysisSourceRevision | undefined): SourceRevisionSummary | null {
   const latest = revision?.source.latest[0];
   return latest && latest.id > revision.id ? latest : null;
+}
+
+/** A revision's contents in a line, or its import status while it has none. */
+export function getRevisionSummary(revision: {
+  activity_types_aggregate: { aggregate: { sum: { count: number | null } | null } | null };
+  coverage_end: string | null;
+  coverage_start: string | null;
+  resources_aggregate: { aggregate: { count: number } | null };
+  status: string;
+}): string {
+  if (revision.status !== 'success') {
+    return revision.status === 'failed' ? 'Import failed' : 'Importing…';
+  }
+  const resources = revision.resources_aggregate.aggregate?.count ?? 0;
+  const activities = revision.activity_types_aggregate.aggregate?.sum?.count ?? 0;
+  return `${resources.toLocaleString()} resources · ${activities.toLocaleString()} activities · ${formatRange(revision.coverage_start, revision.coverage_end)}`;
+}
+
+/** The analyses using each imported revision, by revision id. */
+export function getRevisionUsage(analyses: AnalysisSourceUsage[]): Record<number, AnalysisSourceUsage[]> {
+  const usage: Record<number, AnalysisSourceUsage[]> = {};
+  analyses.forEach(analysis =>
+    new Set((analysis.sources ?? []).flatMap(b => (b.kind === 'imported' ? [b.revisionId] : []))).forEach(id => {
+      usage[id] = [...(usage[id] ?? []), analysis];
+    }),
+  );
+  return usage;
+}
+
+/**
+ * The adapters a running ingest worker can use: those it reported in the last two minutes (workers report every few
+ * seconds while ingesting and every 30 s while idle). An uninstalled adapter keeps its catalog row but stops being seen.
+ */
+export function getAvailableAdapters<T extends { last_seen_at: string }>(adapters: T[], now: number = Date.now()): T[] {
+  return adapters.filter(({ last_seen_at }) => now - Date.parse(last_seen_at) < 2 * 60_000);
+}
+
+/**
+ * A source's revisions (newest first) as people use them: `usable` is the latest successful one, `pending` the newer
+ * attempts still importing or failed, shown but not in the way, and `older` everything before `usable`.
+ */
+export function splitSourceRevisions<T extends { status: string }>(
+  revisions: T[],
+): { older: T[]; pending: T[]; usable: T | null } {
+  const index = revisions.findIndex(({ status }) => status === 'success');
+  if (index < 0) {
+    return { older: [], pending: revisions, usable: null };
+  }
+  return { older: revisions.slice(index + 1), pending: revisions.slice(0, index), usable: revisions[index] };
 }
 
 /**
@@ -455,7 +509,7 @@ function summarizeActivityTypes(types: { count: number }[]): Pick<SourceBrowserN
 }
 
 export function createAnalysisSources(input: AnalysisSourcesInput): TimelineSource[] {
-  return input.bindings.map(binding => {
+  const sources = input.bindings.map(binding => {
     switch (binding.kind) {
       case 'imported':
         return createImportedRevisionSource(
@@ -476,6 +530,20 @@ export function createAnalysisSources(input: AnalysisSourcesInput): TimelineSour
           input.plans.find(plan => plan.id === binding.planId),
         );
     }
+  });
+  // Two revisions of one source imported the same day share a short label: tell them apart by import time.
+  return sources.map((source, index) => {
+    const binding = input.bindings[index];
+    if (
+      binding.kind !== 'imported' ||
+      binding.label ||
+      sources.filter(({ label }) => label === source.label).length < 2
+    ) {
+      return source;
+    }
+    const revision = input.revisions.find(({ id }) => id === binding.revisionId);
+    const { name, version } = getAnalysisSourceNames(binding, { revision });
+    return { ...source, label: `${name} · ${version.replace(/^Imported /, '')}` };
   });
 }
 
@@ -733,7 +801,8 @@ export function createStaticActivitySubscription(
 /* Time. */
 
 export function formatRange(start: string | null | undefined, end: string | null | undefined): string {
-  return `${start ? formatDate(start) : '?'} – ${end ? formatDate(end) : '?'}`;
+  const [from, to] = [start ? formatDate(start) : '?', end ? formatDate(end) : '?'];
+  return from === to ? from : `${from} – ${to}`;
 }
 
 function parseRange(start: string | null | undefined, end: string | null | undefined): TimeRange | null {
@@ -782,6 +851,27 @@ export function createSourceActivityRow(timelines: Timeline[], sourceId: Timelin
     layers: [createTimelineActivityLayer(timelines, { name, sourceId })],
     name,
   });
+}
+
+/**
+ * Whether some row already draws activities of `type` from `sourceId`: a layer of that source with no filter (all
+ * its activities) or one naming the type. Layers with dynamic filters are taken as not showing it.
+ */
+export function isActivityTypeShown(timelines: Timeline[], sourceId: TimelineSourceId, type: string): boolean {
+  return timelines.some(timeline =>
+    timeline.rows.some(row =>
+      row.layers.some(layer => {
+        if (!isActivityLayer(layer) || layer.sourceId !== sourceId) {
+          return false;
+        }
+        const filter = layer.filter.activity;
+        if (filter?.static_types?.length) {
+          return filter.static_types.includes(type);
+        }
+        return !filter?.dynamic_type_filters?.length && !filter?.other_filters?.length;
+      }),
+    ),
+  );
 }
 
 /* Removing a source. */

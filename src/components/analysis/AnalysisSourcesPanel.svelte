@@ -70,10 +70,12 @@
       binding.kind === 'simulation' ? datasets.find(({ id }) => id === binding.simulationDatasetId) : undefined;
     const plan = binding.kind === 'plan' ? plans.find(({ id }) => id === binding.planId) : undefined;
     const savedBinding = saved.find(({ id }) => id === binding.id);
+    const newer = getNewerRevision(revision);
     return {
       ...getAnalysisSourceNames(binding, { dataset, plan, revision }),
       dataset,
-      newer: getNewerRevision(revision),
+      // Not offered when the newer revision is already here too (comparing revisions).
+      newer: bindings.some(b => b.kind === 'imported' && b.revisionId === newer?.id) ? null : newer,
       plan,
       // The plan has been edited since this analysis last saved what it saw of it.
       planChanged:

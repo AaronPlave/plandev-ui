@@ -22,6 +22,9 @@ import {
   importedActivityToSpan,
   removeSourceFromTimelines,
   simulationSpanToActivity,
+  getAvailableAdapters,
+  getRevisionUsage,
+  splitSourceRevisions,
   type AnalysisSourcesInput,
 } from './analysis';
 import { generateDiscreteTreeUtil } from './timeline';
@@ -177,6 +180,20 @@ describe('analysis activity identity', () => {
 });
 
 describe('createAnalysisSources', () => {
+  it('tells two revisions of one source imported the same day apart by time', () => {
+    const later = { ...revision, id: 19, requested_at: '2026-10-03T15:30:00Z' };
+    const sources = createAnalysisSources(
+      input({
+        bindings: [imported, { id: 'source-2', kind: 'imported', revisionId: 19 }],
+        revisions: [revision, later],
+      }),
+    );
+    expect(sources.map(({ label }) => label)).toEqual([
+      'mission tour TOL · Oct 3, 2026, 12:00 UTC',
+      'mission tour TOL · Oct 3, 2026, 15:30 UTC',
+    ]);
+  });
+
   it('makes an imported revision a source of resources and activities', () => {
     const sources = createAnalysisSources(input());
     const source = sources[0];
@@ -337,6 +354,29 @@ describe('source identity', () => {
     expect(
       getNewerRevision({ ...revision, source: { ...revision.source, latest: [{ ...newer, id: 18 }] } }),
     ).toBeNull();
+  });
+  it('lists the analyses using each revision, once each', () => {
+    const tour = { id: 1, name: 'Tour', owner: 'a', sources: [imported, { ...imported, id: 'source-2' }, planA] };
+    const empty = { id: 2, name: 'Empty', owner: 'a', sources: null };
+    expect(getRevisionUsage([tour, empty])).toEqual({ 18: [tour] });
+  });
+
+  it('offers only adapters a running worker reported recently', () => {
+    const now = Date.parse('2026-10-04T12:00:00Z');
+    const live = { id: 'xml_tol', last_seen_at: '2026-10-04T11:59:30Z' };
+    const gone = { id: 'old_format', last_seen_at: '2026-10-01T09:00:00Z' };
+    expect(getAvailableAdapters([live, gone], now)).toEqual([live]);
+  });
+
+  it('picks the latest successful revision as usable, keeping newer attempts and older revisions apart', () => {
+    const [r31, r30, r29, r28] = [
+      { id: 31, status: 'failed' },
+      { id: 30, status: 'importing' },
+      { id: 29, status: 'success' },
+      { id: 28, status: 'success' },
+    ];
+    expect(splitSourceRevisions([r31, r30, r29, r28])).toEqual({ older: [r28], pending: [r31, r30], usable: r29 });
+    expect(splitSourceRevisions([r31])).toEqual({ older: [], pending: [r31], usable: null });
   });
 });
 

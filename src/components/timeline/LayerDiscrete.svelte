@@ -423,7 +423,9 @@
     // Display an arrow to the left of a span label if the span is sticky
     // The label should be sticky if the start of the span is clipped and the span is still in view
     const sticky = span.startMs < viewTimeRange.start && span.startMs + span.durationMs >= viewTimeRange.start;
-    return `${sticky ? '← ' : ''}${span.type}${span.duration === null ? ' (Unfinished)' : ''}`;
+    // A plan's directive read as a source is labelled by its name, as the plan's own directives are.
+    const label = span.endUnknown ? span.name : span.type;
+    return `${sticky ? '← ' : ''}${label}${span.duration === null ? ' (Unfinished)' : ''}`;
   }
 
   function getLabelForExternalEvent(externalEvent: ExternalEvent): string {

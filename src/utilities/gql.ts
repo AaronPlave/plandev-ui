@@ -1079,6 +1079,22 @@ const gql = {
     }
   `,
 
+  DELETE_SOURCE: `#graphql
+    mutation DeleteSource($id: Int!) {
+      deleted: ${Queries.DELETE_SOURCE}(id: $id) {
+        id
+      }
+    }
+  `,
+
+  DELETE_SOURCE_REVISION: `#graphql
+    mutation DeleteSourceRevision($id: Int!) {
+      deleted: ${Queries.DELETE_SOURCE_REVISION}(id: $id) {
+        id
+      }
+    }
+  `,
+
   DELETE_TAG: `#graphql
     mutation DeleteTags($id: Int!) {
       ${Queries.DELETE_TAG}(id: $id) {
@@ -1268,6 +1284,7 @@ const gql = {
           }
           coverage_end
           coverage_start
+          error
           id
           metadata
           requested_at
@@ -1909,6 +1926,7 @@ const gql = {
         display_name
         extensions
         id
+        last_seen_at
         version
       }
     }
@@ -2483,6 +2501,17 @@ const gql = {
         name
         start_offset
         type
+      }
+    }
+  `,
+
+  SUB_ANALYSIS_SOURCE_USAGE: `#graphql
+    subscription SubAnalysisSourceUsage {
+      analyses: ${Queries.ANALYSES}(order_by: { name: asc }) {
+        id
+        name
+        owner
+        sources: definition(path: "sources")
       }
     }
   `,
@@ -3793,6 +3822,47 @@ const gql = {
     }
   `,
 
+  SUB_SOURCES: `#graphql
+    subscription SubSources {
+      sources: ${Queries.SOURCES}(order_by: { name: asc }) {
+        created_at
+        id
+        name
+        owner
+        revisions(order_by: { id: desc }) {
+          activity_types_aggregate {
+            aggregate {
+              sum {
+                count
+              }
+            }
+          }
+          adapter
+          adapter_version
+          content_hash
+          coverage_end
+          coverage_start
+          error
+          finished_at
+          id
+          metadata
+          original_file {
+            name
+          }
+          requested_at
+          requested_by
+          resources_aggregate {
+            aggregate {
+              count
+            }
+          }
+          status
+        }
+        source_type
+      }
+    }
+  `,
+
   SUB_TAGS: `#graphql
     subscription SubTags {
       ${Queries.TAGS}(order_by: { name: desc })  {
@@ -4409,6 +4479,15 @@ const gql = {
         arguments
         id
         description
+      }
+    }
+  `,
+
+  UPDATE_SOURCE: `#graphql
+    mutation UpdateSource($id: Int!, $name: String!) {
+      source: ${Queries.UPDATE_SOURCE}(pk_columns: { id: $id }, _set: { name: $name }) {
+        id
+        name
       }
     }
   `,

@@ -101,8 +101,10 @@ import type {
   AnalysisSlim,
   AnalysisSourceOptions,
   AnalysisSourceRevision,
+  AnalysisSourceUsage,
   SourceActivity,
   SourceAdapterDescriptor,
+  SourceLibraryEntry,
 } from '../types/analysis';
 import type { BaseUser, User, UserId, Version } from '../types/app';
 import type { ReqAuthResponse, ReqSessionResponse } from '../types/auth';
@@ -3783,6 +3785,69 @@ const effects = {
     return false;
   },
 
+  async deleteSource(source: SourceLibraryEntry, usedBy: AnalysisSourceUsage[], user: User | null): Promise<boolean> {
+    try {
+      if (!queryPermissions.DELETE_SOURCE(user, source)) {
+        throwPermissionError('delete this source');
+      }
+      const { confirm } = await showConfirmModal(
+        'Delete',
+        `Delete "${source.name}" and all ${source.revisions.length} of its revisions? ${
+          usedBy.length
+            ? `${usedBy.length === 1 ? 'The analysis' : 'These analyses'} ${usedBy.map(({ name }) => `"${name}"`).join(', ')} will show it as unavailable. `
+            : 'No analysis uses it. '
+        }`,
+        'Delete Source',
+      );
+      if (confirm) {
+        const data = await reqHasura<{ id: number }>(gql.DELETE_SOURCE, { id: source.id }, user);
+        if (data.deleted) {
+          showSuccessToast('Source Deleted Successfully');
+          return true;
+        }
+        throw Error(`Unable to delete source "${source.name}"`);
+      }
+    } catch (e) {
+      catchError('log', 'Source Delete Failed', e as Error);
+      showFailureToast('Source Delete Failed');
+    }
+    return false;
+  },
+
+  async deleteSourceRevision(
+    source: SourceLibraryEntry,
+    revisionId: number,
+    usedBy: AnalysisSourceUsage[],
+    user: User | null,
+  ): Promise<boolean> {
+    try {
+      if (!queryPermissions.DELETE_SOURCE_REVISION(user, source)) {
+        throwPermissionError('delete this revision');
+      }
+      const { confirm } = await showConfirmModal(
+        'Delete',
+        `Delete this revision of "${source.name}" and its data? ${
+          usedBy.length
+            ? `${usedBy.length === 1 ? 'The analysis' : 'These analyses'} ${usedBy.map(({ name }) => `"${name}"`).join(', ')} will show it as unavailable. `
+            : ''
+        }`,
+        'Delete Revision',
+      );
+      if (confirm) {
+        const data = await reqHasura<{ id: number }>(gql.DELETE_SOURCE_REVISION, { id: revisionId }, user);
+        if (data.deleted) {
+          showSuccessToast('Revision Deleted Successfully');
+          return true;
+        }
+        throw Error(`Unable to delete revision ${revisionId}`);
+      }
+    } catch (e) {
+      catchError('log', 'Revision Delete Failed', e as Error);
+      showFailureToast('Revision Delete Failed');
+    }
+    return false;
+  },
+
   async deleteTag(tag: Tag, user: User | null): Promise<boolean> {
     try {
       if (!queryPermissions.DELETE_TAG(user, tag)) {
@@ -6919,6 +6984,23 @@ const effects = {
     } catch (e) {
       catchError('log', 'Activity Preset Removal Failed', e as Error);
       showFailureToast('Activity Preset Removal Failed');
+      return false;
+    }
+  },
+
+  async renameSource(source: SourceLibraryEntry, name: string, user: User | null): Promise<boolean> {
+    try {
+      if (!queryPermissions.UPDATE_SOURCE(user, source)) {
+        throwPermissionError('rename this source');
+      }
+      const data = await reqHasura<{ id: number }>(gql.UPDATE_SOURCE, { id: source.id, name }, user);
+      if (!data.source) {
+        throw Error(`Unable to rename source "${source.name}"`);
+      }
+      return true;
+    } catch (e) {
+      catchError('log', 'Source Rename Failed', e as Error);
+      showFailureToast('Source Rename Failed');
       return false;
     }
   },

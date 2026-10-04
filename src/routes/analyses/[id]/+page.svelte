@@ -3,7 +3,7 @@
 <script lang="ts">
   import { base } from '$app/paths';
   import { Resizable } from '@nasa-jpl/stellar-svelte';
-  import { onDestroy } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import AnalysisActivityDetails from '../../../components/analysis/AnalysisActivityDetails.svelte';
   import AnalysisAddSourceDialog from '../../../components/analysis/AnalysisAddSourceDialog.svelte';
   import AnalysisActivityTable from '../../../components/analysis/AnalysisActivityTable.svelte';
@@ -177,10 +177,16 @@
               <AnalysisActivityDetails
                 bindings={$analysisSourceBindings}
                 datasets={$analysisSimulationDatasets}
+                {readOnly}
                 revisions={$analysisSourceRevisions}
                 selected={$selectedAnalysisActivity}
                 {sourceLabels}
                 user={$user}
+                on:shown={async () => {
+                  // The new row is selected, which opens the editor: stay on the activity instead.
+                  await tick();
+                  rightTab = 'details';
+                }}
               />
             {:else}
               <TimelineEditorPanel gridSection="RightTop" timeBounds={$analysisMaxTimeRange} />

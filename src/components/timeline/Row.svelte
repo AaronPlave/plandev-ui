@@ -469,11 +469,10 @@
       activityRequests.flatMap(request => (request.error ? [`Failed to load activities: ${request.error}`] : [])),
     ),
   ];
-  // Rows showing activities of more than one source label each source's groups with the source.
-  // Grouped rows label each group with its source when the row mixes sources or reads one other than the Plan
-  // (the header's source caption is not shown above a group tree).
+  // Rows showing activities of more than one source label each source's groups with the source. A row of one
+  // source names it once, in its header.
   $: activityGroupSourceLabels =
-    new Set(activityLayers.map(layer => resolveActivityLayerSourceId(layer))).size > 1 || activityRequests.length > 0
+    new Set(activityLayers.map(layer => resolveActivityLayerSourceId(layer))).size > 1
       ? Object.fromEntries(
           activityRequests.map(request => [
             request.sourceId,

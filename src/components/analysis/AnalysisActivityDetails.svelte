@@ -6,7 +6,9 @@
   directive with its arguments, metadata and anchor (live: it follows edits to the plan).
 -->
 <script lang="ts">
-  import { analysisPlanDirectives } from '../../stores/analysis';
+  import { analysisPlanDirectives, showAnalysisActivityType } from '../../stores/analysis';
+  import { createEventDispatcher } from 'svelte';
+  import { view } from '../../stores/views';
   import { plugins } from '../../stores/plugins';
   import type {
     AnalysisActivityRef,
@@ -16,7 +18,7 @@
     AnalysisSourceRevision,
   } from '../../types/analysis';
   import type { User } from '../../types/app';
-  import { analysisActivityRefsEqual, getRevisionVersionLabel } from '../../utilities/analysis';
+  import { analysisActivityRefsEqual, getRevisionVersionLabel, isActivityTypeShown } from '../../utilities/analysis';
   import effects from '../../utilities/effects';
   import {
     convertUsToDurationString,
@@ -27,6 +29,7 @@
 
   export let bindings: AnalysisSourceBinding[] = [];
   export let datasets: AnalysisSimulationDataset[] = [];
+  export let readOnly: boolean = false;
   export let revisions: AnalysisSourceRevision[] = [];
   export let selected: AnalysisActivityRef | null = null;
   export let sourceLabels: Record<string, string> = {};
@@ -43,10 +46,15 @@
     type: string;
   };
 
+  const dispatch = createEventDispatcher<{ shown: void }>();
+
   let details: Details | null = null;
   let loading: boolean = false;
 
   $: selectedBinding = selected ? bindings.find(b => b.id === selected?.sourceId) : undefined;
+  // Found in the table, an activity may be of a type no row draws yet.
+  $: shownOnTimeline =
+    !details || isActivityTypeShown($view?.definition.plan.timelines ?? [], details.ref.sourceId, details.type);
   // A plan's directives are live: its details follow the plan rather than being read once.
   $: if (selected && selectedBinding?.kind === 'plan') {
     details = getPlanDirectiveDetails(selected, $analysisPlanDirectives[selectedBinding.planId] ?? []);
@@ -170,6 +178,18 @@
     <div class="empty st-typography-label">The activity is no longer available</div>
   {:else}
     <div class="title st-typography-medium">{details.name}</div>
+    {#if !shownOnTimeline && !readOnly}
+      {@const { ref, type } = details}
+      <button
+        class="st-button secondary show"
+        on:click={() => {
+          showAnalysisActivityType(ref.sourceId, type);
+          dispatch('shown');
+        }}
+      >
+        Show {type} on the timeline
+      </button>
+    {/if}
     <dl>
       <dt>Type</dt>
       <dd>{details.type}</dd>
@@ -224,6 +244,10 @@
     font-size: 14px;
     margin-bottom: 8px;
     word-break: break-all;
+  }
+
+  .show {
+    margin-bottom: 8px;
   }
 
   dl {

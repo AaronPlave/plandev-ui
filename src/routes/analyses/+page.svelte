@@ -50,7 +50,8 @@
           <label class="st-typography-label" for="analysis-name">Name</label>
           <Input id="analysis-name" bind:value={name} placeholder="Tour Comparison" sizeVariant="xs" />
           <p class="st-typography-body text-muted-foreground">
-            An analysis composes imported sources and simulations of any plan. It has no plan of its own.
+            An analysis brings together imported sources, plans and their simulations. To analyze one plan, use Analyze
+            in its plan menu.
           </p>
           <Button type="submit" size="sm" disabled={!canCreate || !name.trim() || creating}>
             {creating ? 'Creating…' : 'Create'}

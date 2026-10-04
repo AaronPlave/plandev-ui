@@ -4,7 +4,7 @@ import { Queries } from '../enums/gql';
 import type { ActionDefinition, ActionRun } from '../types/actions';
 import type { ActivityDirective, ActivityPreset } from '../types/activity';
 import type { AnalysisSlim } from '../types/analysis';
-import type { User, UserRole } from '../types/app';
+import type { User, UserId, UserRole } from '../types/app';
 import type { ReqChangeRoleResponse } from '../types/auth';
 import type { ConstraintDefinition, ConstraintMetadata, ConstraintRun } from '../types/constraint';
 import type { ExpansionSequence } from '../types/expansion';
@@ -753,6 +753,22 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
       isUserAdmin(user) || (getPermission([Queries.DELETE_SIMULATION_TEMPLATE], user) && isUserOwner(user, template))
     );
   },
+  DELETE_SOURCE: (user: User | null, source: { owner: UserId | null }): boolean => {
+    return (
+      isUserAdmin(user) ||
+      (getPermission([Queries.DELETE_SOURCE], user) &&
+        source.owner !== null &&
+        isUserOwner(user, { owner: source.owner }))
+    );
+  },
+  DELETE_SOURCE_REVISION: (user: User | null, source: { owner: UserId | null }): boolean => {
+    return (
+      isUserAdmin(user) ||
+      (getPermission([Queries.DELETE_SOURCE_REVISION], user) &&
+        source.owner !== null &&
+        isUserOwner(user, { owner: source.owner }))
+    );
+  },
   DELETE_TAG: (user: User | null, tag: Tag): boolean => {
     return isUserAdmin(user) || (getPermission([Queries.DELETE_TAG], user) && isUserOwner(user, tag));
   },
@@ -973,6 +989,7 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
   SUB_ANALYSES: () => true,
   SUB_ANALYSIS_PLANS: () => true,
   SUB_ANALYSIS_PLAN_DIRECTIVES: () => true,
+  SUB_ANALYSIS_SOURCE_USAGE: () => true,
   SUB_ANCHOR_VALIDATION_STATUS: () => true,
   SUB_CHANNEL_DICTIONARIES: () => true,
   SUB_COMMAND_DICTIONARIES: () => true,
@@ -1047,6 +1064,7 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
   SUB_SIMULATION_TEMPLATES: (user: User | null): boolean => {
     return isUserAdmin(user) || getPermission([Queries.SIMULATION_TEMPLATES], user);
   },
+  SUB_SOURCES: () => true,
   SUB_TAGS: (user: User | null): boolean => {
     return isUserAdmin(user) || getPermission([Queries.TAGS], user);
   },
@@ -1297,6 +1315,14 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
   },
   UPDATE_SIMULATION_TEMPLATE: (user: User | null, plan: PlanWithOwners): boolean => {
     return isUserAdmin(user) || (getPermission([Queries.UPDATE_SIMULATION_TEMPLATE], user) && isUserOwner(user, plan));
+  },
+  UPDATE_SOURCE: (user: User | null, source: { owner: UserId | null }): boolean => {
+    return (
+      isUserAdmin(user) ||
+      (getPermission([Queries.UPDATE_SOURCE], user) &&
+        source.owner !== null &&
+        isUserOwner(user, { owner: source.owner }))
+    );
   },
   UPDATE_TAG: (user: User | null, tag: AssetWithOwner<Tag>): boolean => {
     return isUserAdmin(user) || (getPermission([Queries.UPDATE_TAGS], user) && isUserOwner(user, tag));
