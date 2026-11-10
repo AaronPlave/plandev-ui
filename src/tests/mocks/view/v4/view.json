@@ -26,6 +26,46 @@
     "timelines": [
       {
         "id": 0,
+        "items": [
+          {
+            "id": 0,
+            "type": "row"
+          },
+          {
+            "id": 1,
+            "type": "row"
+          },
+          {
+            "id": 2,
+            "type": "row"
+          },
+          {
+            "id": 3,
+            "type": "row"
+          },
+          {
+            "id": 4,
+            "type": "row"
+          },
+          {
+            "id": 5,
+            "type": "row"
+          },
+          {
+            "id": 6,
+            "type": "row"
+          },
+          {
+            "id": 7,
+            "type": "row"
+          },
+          {
+            "id": 8,
+            "type": "row"
+          }
+        ],
+        "marginLeft": 250,
+        "marginRight": 30,
         "rows": [
           {
             "id": 0,
@@ -441,8 +481,7 @@
             "horizontalGuides": []
           }
         ],
-        "marginLeft": 250,
-        "marginRight": 30,
+        "sections": [],
         "verticalGuides": []
       }
     ],

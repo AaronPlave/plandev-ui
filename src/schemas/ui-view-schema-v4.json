@@ -249,6 +249,58 @@
       "required": ["columnDefs", "columnStates"],
       "type": "object"
     },
+    "timelineItemRef": {
+      "additionalProperties": false,
+      "description": "Reference to a root-level timeline item, either a section or a row",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id"
+        },
+        "type": {
+          "description": "Whether the referenced item is a section or a row",
+          "enum": ["section", "row"]
+        }
+      },
+      "required": ["id", "type"],
+      "type": "object"
+    },
+    "timelineSection": {
+      "additionalProperties": false,
+      "description": "A collapsible group of timeline rows",
+      "properties": {
+        "collapsed": {
+          "description": "If true the section is collapsed and its rows are hidden",
+          "type": "boolean"
+        },
+        "color": {
+          "description": "Accent color of the section, or null for the default styling",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/id"
+        },
+        "name": {
+          "description": "Name of the section",
+          "type": "string"
+        },
+        "rowIds": {
+          "description": "Ids of the rows contained by this section, in display order",
+          "items": {
+            "$ref": "#/definitions/id"
+          },
+          "type": "array"
+        }
+      },
+      "required": ["collapsed", "color", "id", "name", "rowIds"],
+      "type": "object"
+    },
     "viewGridComponent": {
       "description": "Set of components available to view in a grid section",
       "enum": [
@@ -395,6 +447,13 @@
             "properties": {
               "id": {
                 "$ref": "#/definitions/id"
+              },
+              "items": {
+                "description": "Ordered list of root-level timeline items (sections and ungrouped rows)",
+                "items": {
+                  "$ref": "#/definitions/timelineItemRef"
+                },
+                "type": "array"
               },
               "marginLeft": {
                 "description": "Left margin of the timeline in pixels",
@@ -718,6 +777,13 @@
                 },
                 "type": "array"
               },
+              "sections": {
+                "description": "Section definitions for this timeline",
+                "items": {
+                  "$ref": "#/definitions/timelineSection"
+                },
+                "type": "array"
+              },
               "verticalGuides": {
                 "description": "Timeline vertical guide definitions",
                 "items": {
@@ -741,6 +807,7 @@
               }
             },
             "required": ["id", "marginLeft", "marginRight", "rows", "verticalGuides"],
+            "required": ["id", "items", "marginLeft", "marginRight", "rows", "sections", "verticalGuides"],
             "type": "object"
           },
           "type": "array"

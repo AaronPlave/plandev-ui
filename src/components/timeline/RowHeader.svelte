@@ -129,7 +129,7 @@
   role="banner"
   on:contextmenu={e => dispatch('contextMenu', { e, origin: 'row-header' })}
 >
-  <DropTarget on:drop hint="Add Filter">
+  <DropTarget on:drop hint="Add Filter" disablePointerBlock={true}>
     <div class="row-header-left-column">
       {#if expanded && !readOnly}
         {#if height > 60}
@@ -153,7 +153,12 @@
 
       <div class="row-header-left-column-row">
         <div class="row-header-title-button-container">
-          <button class="st-button icon row-header-title-button" on:click={toggleExpansion}>
+          <button
+            aria-expanded={expanded}
+            aria-label={expanded ? 'Collapse Row' : 'Expand Row'}
+            class="st-button icon row-header-title-button"
+            on:click={toggleExpansion}
+          >
             {#if expanded}
               <CaretDownIcon class="row-header-collapse" />
             {:else}

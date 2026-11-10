@@ -28,7 +28,7 @@ describe('external event source scope', () => {
   const keys = (filter: ExternalEventLayer['filter']['externalEvent']) =>
     applyExternalEventLayerFilter(filter, events).externalEvents.map(event => event.pkey.key);
   const scope = [{ derivation_group_name: 'DG A', source_key: 'source-1' }];
-  const timelines = [{ id: 0, marginLeft: 0, marginRight: 0, rows: [], verticalGuides: [] }] as Timeline[];
+  const timelines = [{ id: 0, items: [], marginLeft: 0, marginRight: 0, rows: [], sections: [], verticalGuides: [] }] as Timeline[];
   const pass = { attribute_schema: {}, name: 'Pass' };
 
   test('a browser leaf becomes a layer that shows only its group, source and type', () => {
@@ -109,7 +109,7 @@ describe('external event source scope', () => {
 });
 
 describe('new resource layers are source-bound', () => {
-  const timelines = [{ id: 0, marginLeft: 0, marginRight: 0, rows: [], verticalGuides: [] }] as Timeline[];
+  const timelines = [{ id: 0, items: [], marginLeft: 0, marginRight: 0, rows: [], sections: [], verticalGuides: [] }] as Timeline[];
   const soc = { name: '/battery/soc', schema: { type: 'real' as const } };
 
   test('a Plan catalog (Model Resources) item binds to the Plan simulation', () => {

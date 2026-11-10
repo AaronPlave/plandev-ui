@@ -43,6 +43,7 @@ export function generateDefaultView(
     name: 'Activities by Type',
   });
   timeline.rows.push(activityRow);
+  timeline.items.push({ id: activityRow.id, type: 'row' });
 
   // IF derivation groups with event_types are associated, make an external event row
   // If there are empty derivation groups associated without any event types, this row is not added
@@ -65,6 +66,7 @@ export function generateDefaultView(
       name: 'External Events',
     });
     timeline.rows.push(externalEventRow);
+    timeline.items.push({ id: externalEventRow.id, type: 'row' });
   }
 
   // Generate a Resource row for up to the limit specified by ViewTimelineResourceRowsLimit
@@ -81,6 +83,7 @@ export function generateDefaultView(
     });
 
     timeline.rows.push(resourceRow);
+    timeline.items.push({ id: resourceRow.id, type: 'row' });
   });
 
   return {
@@ -710,6 +713,35 @@ export function migrateViewDefinitionV3toV4(viewDefinition: ViewDefinition) {
       without one on purpose: an activity layer without a source means the Plan, and a resource layer without
       a source keeps the legacy merged lookup (simulation profiles, then attached external datasets). Writing
       a source here would silently narrow what existing views show.
+    - Add 'items' array to timelines (ordered list of sections and root-level rows)
+    - Add 'sections' array to timelines (section definitions)
+    - Existing rows become root-level items
   */
-  return { ...viewDefinition, version: 4 };
+  return {
+    ...viewDefinition,
+    plan: {
+      ...viewDefinition.plan,
+      timelines: viewDefinition.plan.timelines.map(timeline => {
+        // Already migrated, or written by a build that had items.
+        if (timeline.items && timeline.items.length > 0) {
+          return {
+            ...timeline,
+            sections: timeline.sections || [],
+          };
+        }
+
+        const items = timeline.rows.map(row => ({
+          id: row.id,
+          type: 'row' as const,
+        }));
+
+        return {
+          ...timeline,
+          items,
+          sections: [],
+        };
+      }),
+    },
+    version: 4,
+  };
 }
