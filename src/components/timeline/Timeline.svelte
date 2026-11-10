@@ -767,6 +767,7 @@
                         on:mouseUpRowMove={onMouseUpRowMove}
                         on:toggleRowExpansion={onToggleRowExpansion}
                         on:updateRowHeight={onUpdateRowHeight}
+                        on:updateValueDomain
                         on:updateYAxes
                         on:zoom={throttledZoom}
                       />
@@ -801,6 +802,7 @@
                 on:mouseUpRowMove={onMouseUpRowMove}
                 on:toggleRowExpansion={onToggleRowExpansion}
                 on:updateRowHeight={onUpdateRowHeight}
+                on:updateValueDomain
                 on:updateYAxes
                 on:zoom={throttledZoom}
               />

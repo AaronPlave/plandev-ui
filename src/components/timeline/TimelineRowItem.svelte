@@ -65,6 +65,7 @@
   on:mouseUpRowMove
   on:toggleRowExpansion
   on:updateRowHeight
+  on:updateValueDomain
   on:updateYAxes
   on:zoom
   on:contextMenu={e => dispatch('contextMenu', { ...e.detail, row })}
