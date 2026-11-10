@@ -23,27 +23,12 @@
   import { Ellipsis, FolderPlus, FolderX, GripVertical, ListPlus } from 'lucide-svelte';
   import { onDestroy, onMount } from 'svelte';
   import {
-    default as ExternalEventIcon,
-    default as ExternalSourceIcon,
-  } from '../../../assets/external-source-box.svg?component';
-  import ActivityModeTextNoneIcon from '../../../assets/text-none.svg?component';
-  import ActivityModeTextIcon from '../../../assets/text.svg?component';
-  import ActivityModeCompactIcon from '../../../assets/timeline-activity-mode-compact.svg?component';
-  import ActivityModeGroupedIcon from '../../../assets/timeline-activity-mode-grouped.svg?component';
-  import DirectiveAndSpanIcon from '../../../assets/timeline-directive-and-span.svg?component';
-  import DirectiveIcon from '../../../assets/timeline-directive.svg?component';
-  import HierarchyModeDirectiveIcon from '../../../assets/timeline-hierarchy-mode-directive.svg?component';
-  import HierarchyModeFlatIcon from '../../../assets/timeline-hierarchy-mode-flat.svg?component';
-  import SpanIcon from '../../../assets/timeline-span.svg?component';
-  import ActivityModeWidthIcon from '../../../assets/width.svg?component';
-  import {
     ViewDefaultDiscreteOptions,
     ViewDefaultSectionColor,
     ViewSectionColorPresets,
   } from '../../../constants/view';
   import { ViewConstants } from '../../../enums/view';
-  import { maxTimeRange, planDatasets, viewTimeRange } from '../../../stores/plan';
-  import { plugins } from '../../../stores/plugins';
+  import { planDatasets, viewTimeRange } from '../../../stores/plan';
   import { resourceTypes, simulationDataset, yAxesWithScaleDomainsCache } from '../../../stores/simulation';
   import { getTimelineSourcesContext } from '../../../stores/timelineSources';
   import {
@@ -114,7 +99,6 @@
   } from '../../../utilities/timelineSources';
   import { createTimelineDragActions, type TimelineDragData } from '../../../utilities/timelineDragDrop';
   import { tooltip } from '../../../utilities/tooltip';
-  import ColorPicker from '../../form/ColorPicker.svelte';
   import ColorPresetsPicker from '../../form/ColorPresetsPicker.svelte';
   import Input from '../../form/Input.svelte';
   import GridMenu from '../../menus/GridMenu.svelte';
