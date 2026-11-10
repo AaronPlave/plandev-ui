@@ -165,6 +165,48 @@ export function createAnalysisDefinition(): AnalysisDefinition {
   };
 }
 
+/**
+ * Carries a plan's view into a new analysis: its timelines, with layers rebound to the analysis's sources. A layer on
+ * `imported:<plan_source id>` gets a binding to that plan source's revision; an unbound activity layer reads the
+ * plan (`planSourceId`), an unbound resource layer the simulation (`simulationSourceId`), when there is one.
+ * Returns the bindings it added and the rebound timelines.
+ */
+export function bindViewToAnalysisSources(
+  timelines: Timeline[],
+  planSources: { id: number; source_revision: { id: number } }[],
+  bindings: AnalysisSourceBinding[],
+  planSourceId: TimelineSourceId,
+  simulationSourceId: TimelineSourceId | null,
+): { bindings: AnalysisSourceBinding[]; timelines: Timeline[] } {
+  const result = [...bindings];
+  const importedIds = new Map<TimelineSourceId, TimelineSourceId>();
+  const rebind = (layer: Timeline['rows'][number]['layers'][number]) => {
+    const sourceId = layer.sourceId;
+    if (sourceId?.startsWith('imported:')) {
+      if (!importedIds.has(sourceId)) {
+        const planSource = planSources.find(({ id }) => `imported:${id}` === sourceId);
+        if (!planSource) {
+          return layer; // ponytail: a plan source since removed keeps its id and draws nothing
+        }
+        const id = getNextAnalysisSourceId(result);
+        result.push({ id, kind: 'imported', revisionId: planSource.source_revision.id });
+        importedIds.set(sourceId, id);
+      }
+      return { ...layer, sourceId: importedIds.get(sourceId) };
+    }
+    if (!sourceId) {
+      const id = isActivityLayer(layer) ? planSourceId : simulationSourceId;
+      return id ? { ...layer, sourceId: id } : layer;
+    }
+    return layer;
+  };
+  const rebound = timelines.map(timeline => ({
+    ...timeline,
+    rows: timeline.rows.map(row => ({ ...row, layers: row.layers.map(rebind) })),
+  })) as Timeline[];
+  return { bindings: result, timelines: rebound };
+}
+
 /** A source id not yet used in the analysis. Layers store it, so it is never reused for another source. */
 export function getNextAnalysisSourceId(bindings: AnalysisSourceBinding[]): TimelineSourceId {
   const used = bindings.map(binding => Number(/^source-(\d+)$/.exec(binding.id)?.[1] ?? 0));

@@ -15,6 +15,7 @@ import type { User } from '../types/app';
 import type { TimeRange } from '../types/timeline';
 import type { TimelineSourceRegistry } from '../types/timelineSource';
 import {
+  bindViewToAnalysisSources,
   createAnalysisDefinition,
   createAnalysisSources,
   createSourceActivityRow,
@@ -42,6 +43,7 @@ import { createImportedResourceSubscription, getSourceQuery } from './importedRe
 import { viewTimeRange } from './plan';
 import { createProfileSubscription } from './profile';
 import { gqlSubscribable } from './subscribable';
+import { planSources } from './timelineSources';
 import { initializeView, view, viewAddFilterToRow, viewUpdateTimeline } from './views';
 
 /*
@@ -404,14 +406,28 @@ export async function createPlanAnalysis(
   if (simulationDatasetId !== null) {
     sources.push({ id: 'source-2', kind: 'simulation', simulationDatasetId });
   }
-  const [timeline] = definition.view.plan.timelines;
-  // Each row's header names its source, live.
-  sources.forEach(source => {
-    timeline.rows = [
-      ...timeline.rows,
-      createSourceActivityRow(definition.view.plan.timelines, source.id, 'Activities'),
-    ];
-  });
+  const planTimelines = get(view)?.definition.plan.timelines ?? [];
+  if (planTimelines.some(timeline => timeline.rows.length)) {
+    // The plan's own view, rebound to the analysis's sources.
+    const bound = bindViewToAnalysisSources(
+      planTimelines,
+      get(planSources),
+      sources,
+      'source-1',
+      simulationDatasetId !== null ? 'source-2' : null,
+    );
+    definition.view.plan.timelines = bound.timelines;
+    sources.splice(0, sources.length, ...bound.bindings);
+  } else {
+    const [timeline] = definition.view.plan.timelines;
+    // Each row's header names its source, live.
+    sources.forEach(source => {
+      timeline.rows = [
+        ...timeline.rows,
+        createSourceActivityRow(definition.view.plan.timelines, source.id, 'Activities'),
+      ];
+    });
+  }
   return effects.createAnalysis(`${plan.name} analysis`, { ...definition, sources }, user);
 }
 

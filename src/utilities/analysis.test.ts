@@ -5,6 +5,7 @@ import type { Span } from '../types/simulation';
 import type { Row, Timeline } from '../types/timeline';
 import type { TimelineActivitySubscription, TimelineResourceSubscription } from '../types/timelineSource';
 import {
+  bindViewToAnalysisSources,
   createAnalysisSources,
   createStaticActivitySubscription,
   getAnalysisSourceNames,
@@ -536,5 +537,43 @@ describe('activities of several sources in one row', () => {
       ['BiteBanana · Plan B', 1],
       ['GrowBanana · Plan B', 1],
     ]);
+  });
+});
+
+describe('bindViewToAnalysisSources', () => {
+  it('rebinds imported plan-source layers to new revision bindings and unbound layers to plan and simulation', () => {
+    const layer = (sourceId: string | undefined, chartType: string) => ({
+      chartType,
+      filter: {},
+      id: 1,
+      name: '',
+      sourceId,
+    });
+    const timelines = [
+      {
+        rows: [
+          {
+            layers: [
+              layer('imported:7', 'line'),
+              layer('imported:7', 'x-range'),
+              layer(undefined, 'activity'),
+              layer(undefined, 'line'),
+            ],
+          },
+        ],
+      },
+    ] as unknown as Parameters<typeof bindViewToAnalysisSources>[0];
+    const { bindings, timelines: out } = bindViewToAnalysisSources(
+      timelines,
+      [{ id: 7, source_revision: { id: 26 } }],
+      [
+        { id: 'source-1', kind: 'plan', planId: 1 },
+        { id: 'source-2', kind: 'simulation', simulationDatasetId: 3 },
+      ],
+      'source-1',
+      'source-2',
+    );
+    expect(bindings.at(-1)).toEqual({ id: 'source-3', kind: 'imported', revisionId: 26 });
+    expect(out[0].rows[0].layers.map(l => l.sourceId)).toEqual(['source-3', 'source-3', 'source-1', 'source-2']);
   });
 });
