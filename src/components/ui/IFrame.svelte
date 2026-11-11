@@ -1,9 +1,11 @@
 <svelte:options immutable={true} />
 
 <script lang="ts">
+  import { goto } from '$app/navigation';
+  import { base } from '$app/paths';
   import { onDestroy } from 'svelte';
   import { activityDirectivesMap, selectActivity, selectedActivityDirectiveId } from '../../stores/activities';
-  import { plan, timeCursorMs, viewTimeRange } from '../../stores/plan';
+  import { plan, planRevision, timeCursorMs, viewTimeRange } from '../../stores/plan';
   import { selectedSpanId, simulationDatasetId, spansMap } from '../../stores/simulation';
   import { view } from '../../stores/views';
   import type { ViewIFrame } from '../../types/view';
@@ -23,7 +25,8 @@
   $: origin = originOf(iFrame?.src);
   $: context = {
     planId: $plan?.id ?? null,
-    planRevision: $plan?.revision ?? null,
+    // The live revision (a subscription), not the revision the page loaded with.
+    planRevision: $planRevision >= 0 ? $planRevision : ($plan?.revision ?? null),
     selectedActivityDirectiveId: $selectedActivityDirectiveId,
     selectedSpanId: $selectedSpanId,
     simulationDatasetId: $simulationDatasetId >= 0 ? $simulationDatasetId : null,
@@ -83,6 +86,9 @@
         selectActivity(directive.id, null, false);
         reveal(directive.start_time_ms);
       }
+    } else if (request?.type === 'openPlan' && request.planId !== $plan?.id) {
+      // Stay in the current view; the plan page enforces the user's own permissions on the target plan.
+      goto(`${base}/plans/${request.planId}${$view ? `?viewId=${$view.id}` : ''}`);
     }
   }
 

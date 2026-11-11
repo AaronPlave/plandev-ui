@@ -2,7 +2,8 @@
  * Narrow postMessage protocol between a plan's IFrame panel and the application embedded in it.
  *
  * PlanDev → embedded app: the plan context (plan, revision, simulation dataset, time cursor, selection).
- * Embedded app → PlanDev: requests to move the time cursor or select an activity, and a "ready" ping.
+ * Embedded app → PlanDev: requests to move the time cursor, select an activity, or open another plan
+ * (in the current view), and a "ready" ping.
  *
  * Only identifiers and times cross the bridge: no credentials, tokens, or simulation results. The
  * embedded app fetches its own data with its own credentials.
@@ -25,7 +26,8 @@ export type EmbedContext = {
 export type EmbedRequest =
   | { type: 'ready' }
   | { timeMs: number; type: 'setTime' }
-  | { directiveId: number | null; spanId: number | null; type: 'select' };
+  | { directiveId: number | null; spanId: number | null; type: 'select' }
+  | { planId: number; type: 'openPlan' };
 
 export function contextMessage(context: EmbedContext) {
   return { protocol: EMBED_PROTOCOL, type: 'context', ...context };
@@ -56,6 +58,10 @@ export function parseEmbedRequest(data: unknown): EmbedRequest | null {
       return typeof m.timeMs === 'number' && Number.isFinite(m.timeMs) ? { timeMs: m.timeMs, type: 'setTime' } : null;
     case 'select':
       return { directiveId: idOrNull(m.directiveId), spanId: idOrNull(m.spanId), type: 'select' };
+    case 'openPlan':
+      return Number.isInteger(m.planId) && (m.planId as number) >= 0
+        ? { planId: m.planId as number, type: 'openPlan' }
+        : null;
     default:
       return null;
   }

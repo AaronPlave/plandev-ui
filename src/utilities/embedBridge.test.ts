@@ -28,6 +28,11 @@ describe('embedBridge', () => {
       spanId: null,
       type: 'select',
     });
+    expect(parseEmbedRequest({ planId: 24, protocol: EMBED_PROTOCOL, type: 'openPlan' })).toEqual({
+      planId: 24,
+      type: 'openPlan',
+    });
+    expect(parseEmbedRequest({ planId: '24', protocol: EMBED_PROTOCOL, type: 'openPlan' })).toBeNull();
     expect(parseEmbedRequest({ protocol: 'other', type: 'ready' })).toBeNull();
     expect(parseEmbedRequest({ protocol: EMBED_PROTOCOL, type: 'getToken' })).toBeNull();
     expect(parseEmbedRequest('ready')).toBeNull();
