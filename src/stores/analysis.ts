@@ -10,6 +10,7 @@ import type {
   AnalysisSourceBinding,
   AnalysisSourceRevision,
   AnalysisSourceTarget,
+  SourceRecovery,
 } from '../types/analysis';
 import type { User } from '../types/app';
 import type { TimeRange } from '../types/timeline';
@@ -20,16 +21,19 @@ import {
   createAnalysisSources,
   createSourceActivityRow,
   getAnalysisTimeRanges,
+  getImportOutcome,
   getNextAnalysisSourceId,
   importedActivityToSpan,
   isActivityTypeShown,
   isSameAnalysisSource,
   removeSourceFromTimelines,
   simulationSpanToActivity,
+  withSourceIdentity,
 } from '../utilities/analysis';
 import effects from '../utilities/effects';
 import gql from '../utilities/gql';
 import { featurePermissions } from '../utilities/permissions';
+import { showFailureToast, showSuccessToast } from '../utilities/toast';
 import { getSource, toIntervalType } from '../utilities/timelineSources';
 import { applyViewDefinitionMigrations } from '../utilities/view';
 import {
@@ -43,6 +47,7 @@ import { createImportedResourceSubscription, getSourceQuery } from './importedRe
 import { viewTimeRange } from './plan';
 import { createProfileSubscription } from './profile';
 import { gqlSubscribable } from './subscribable';
+import { sources } from './sources';
 import { planSources } from './timelineSources';
 import { initializeView, view, viewAddFilterToRow, viewUpdateTimeline } from './views';
 
@@ -57,6 +62,8 @@ export const analyses = gqlSubscribable<AnalysisSlim[]>(gql.SUB_ANALYSES, {}, []
 export const analysis: Writable<Analysis | null> = writable(null);
 export const analysisSourceBindings: Writable<AnalysisSourceBinding[]> = writable([]);
 export const analysisSourceRevisions: Writable<AnalysisSourceRevision[]> = writable([]);
+/** What is left of each source (by id) whose bound revision was deleted; null when the source is gone too. */
+export const analysisSourceRecovery: Writable<Record<number, SourceRecovery | null>> = writable({});
 export const analysisSimulationDatasets: Writable<AnalysisSimulationDataset[]> = writable([]);
 export const analysisSourcesLoading: Writable<boolean> = writable(false);
 /** Span types and counts per simulation dataset id, from its spans. */
@@ -109,12 +116,13 @@ export const analysisTimelineSources: Readable<TimelineSourceRegistry> = derived
     analysisSourceRevisions,
     analysisSimulationDatasets,
     analysisSimulationTypeCounts,
+    analysisSourceRecovery,
     analysisSourcesLoading,
     analysisPlans,
     analysisPlans.loading,
     analysisPlanDirectives,
   ],
-  ([$bindings, $revisions, $datasets, $typeCounts, $loading, $plans, $plansLoading, $planDirectives]) => ({
+  ([$bindings, $revisions, $datasets, $typeCounts, $recovery, $loading, $plans, $plansLoading, $planDirectives]) => ({
     loading: $loading,
     sources: createAnalysisSources({
       bindings: $bindings,
@@ -127,6 +135,7 @@ export const analysisTimelineSources: Readable<TimelineSourceRegistry> = derived
       revisions: $revisions,
       simulationDatasets: $datasets,
       simulationTypeCounts: $typeCounts,
+      sourceRecovery: $recovery,
       subscribeImportedActivities: (binding, revision, request, { user }) =>
         createLoadedActivitySubscription(() =>
           getRevisionActivities(
@@ -189,6 +198,28 @@ async function loadSourceDetails(bindings: AnalysisSourceBinding[], user: User |
   if (request !== sourceDetailsRequest) {
     return undefined;
   }
+  // A revision that is gone leaves the binding's source: what is left of it decides what can be offered instead.
+  const lostSourceIds = [
+    ...new Set(
+      bindings.flatMap(binding =>
+        binding.kind === 'imported' &&
+        binding.sourceId !== undefined &&
+        !revisions.some(revision => revision.id === binding.revisionId)
+          ? [binding.sourceId]
+          : [],
+      ),
+    ),
+  ];
+  const recovery = await effects.getAnalysisSourceRecovery(lostSourceIds, user);
+  if (request !== sourceDetailsRequest) {
+    return undefined;
+  }
+  analysisSourceRecovery.set(recovery);
+  // Bindings saved before they recorded their source gain it here (saved with the analysis's next save).
+  const identified = withSourceIdentity(get(analysisSourceBindings), revisions);
+  if (identified !== get(analysisSourceBindings)) {
+    analysisSourceBindings.set(identified);
+  }
   analysisSourceRevisions.set(revisions);
   analysisSimulationDatasets.set(datasets);
   analysisSourcesLoading.set(false);
@@ -213,6 +244,7 @@ async function loadSourceDetails(bindings: AnalysisSourceBinding[], user: User |
 }
 
 export async function openAnalysis(initial: Analysis, user: User | null) {
+  clearAnalysisImports();
   const { migratedViewDefinition } = applyViewDefinitionMigrations(initial.definition.view);
   analysis.set(initial);
   analysisSourceBindings.set(initial.definition.sources);
@@ -244,16 +276,19 @@ export function closeAnalysis() {
   analysis.set(null);
   analysisSourceBindings.set([]);
   analysisSourceRevisions.set([]);
+  analysisSourceRecovery.set({});
   analysisSimulationDatasets.set([]);
   analysisSimulationTypeCounts.set({});
   selectedAnalysisActivity.set(null);
+  clearAnalysisImports();
   view.set(null);
 }
 
-export async function addAnalysisSource(target: AnalysisSourceTarget, user: User | null) {
+/** Adds a source unless the analysis already has it. Returns whether it was added. */
+export async function addAnalysisSource(target: AnalysisSourceTarget, user: User | null): Promise<boolean> {
   const bindings = get(analysisSourceBindings);
   if (bindings.some(binding => isSameAnalysisSource(binding, target))) {
-    return;
+    return false;
   }
   const next = [...bindings, { ...target, id: getNextAnalysisSourceId(bindings) }];
   analysisSourceBindings.set(next);
@@ -262,6 +297,132 @@ export async function addAnalysisSource(target: AnalysisSourceTarget, user: User
   if (!bindings.length && ranges) {
     viewTimeRange.set(ranges.initial);
   }
+  return true;
+}
+
+/*
+ * Imports started from Add Source with "Add it to this analysis". The analysis adds the revision once it has
+ * succeeded (a revision still importing can't be read, as the ordinary source list also doesn't allow), and says
+ * so if it fails. The intent belongs to the analysis that was open: it is dropped when another opens or this closes.
+ */
+
+export type PendingAnalysisImport = {
+  adapter: string;
+  error?: string;
+  /** Kept so a failed import can be tried again. */
+  file: File;
+  revisionId: number;
+  /** The Sources library has listed the revision; one listed and then gone was deleted. */
+  seen?: boolean;
+  sourceId: number;
+  status: 'failed' | 'importing';
+};
+
+export const pendingAnalysisImports: Writable<PendingAnalysisImport[]> = writable([]);
+
+let stopWatchingImports: (() => void) | null = null;
+let importUser: User | null = null;
+
+/** Follows the Sources library (which updates as imports finish) while any import is waiting to be added. */
+function watchImports() {
+  if (stopWatchingImports) {
+    return;
+  }
+  stopWatchingImports = derived([sources, sources.loading], values => values).subscribe(([library, loading]) => {
+    if (!loading) {
+      settleImports(library ?? []);
+    }
+  });
+  // The first report can settle everything before `subscribe` returns, when there was nothing yet to stop.
+  if (!get(pendingAnalysisImports).some(({ status }) => status === 'importing')) {
+    stopWatching();
+  }
+}
+
+function stopWatching() {
+  stopWatchingImports?.();
+  stopWatchingImports = null;
+}
+
+function settleImports(library: Parameters<typeof getImportOutcome>[0]) {
+  get(pendingAnalysisImports)
+    .filter(({ status }) => status === 'importing')
+    .forEach(async imported => {
+      const outcome = getImportOutcome(library, imported);
+      if (outcome.state === 'importing') {
+        if (outcome.present && !imported.seen) {
+          pendingAnalysisImports.update(all =>
+            all.map(other => (other.revisionId === imported.revisionId ? { ...other, seen: true } : other)),
+          );
+        }
+        return;
+      }
+      // Settled once: the library may report again before this resolves.
+      if (
+        !get(pendingAnalysisImports).some(
+          ({ revisionId, status }) => revisionId === imported.revisionId && status === 'importing',
+        )
+      ) {
+        return;
+      }
+      if (outcome.state === 'failed') {
+        pendingAnalysisImports.update(all =>
+          all.map(other =>
+            other.revisionId === imported.revisionId ? { ...other, error: outcome.message, status: 'failed' } : other,
+          ),
+        );
+        showFailureToast(`Import of ${imported.file.name} failed: ${outcome.message} Reopen Add Source to retry.`);
+      } else {
+        dismissAnalysisImport(imported.revisionId);
+        const added = await addAnalysisSource(
+          {
+            kind: 'imported',
+            revisionId: imported.revisionId,
+            sourceId: imported.sourceId,
+            sourceName: outcome.sourceName,
+          },
+          importUser,
+        );
+        // Not added when the person added it themselves in the meantime.
+        if (added) {
+          showSuccessToast(`Added ${outcome.sourceName} to this analysis`);
+        }
+      }
+    });
+  if (!get(pendingAnalysisImports).some(({ status }) => status === 'importing')) {
+    stopWatching();
+  }
+}
+
+/** Adds the revision to the analysis once its import succeeds. */
+export function addAnalysisSourceWhenImported(
+  imported: { adapter: string; file: File; revisionId: number; sourceId: number },
+  user: User | null,
+) {
+  importUser = user;
+  pendingAnalysisImports.update(all => [...all, { ...imported, status: 'importing' }]);
+  watchImports();
+}
+
+export function dismissAnalysisImport(revisionId: number) {
+  pendingAnalysisImports.update(all => all.filter(imported => imported.revisionId !== revisionId));
+  if (!get(pendingAnalysisImports).some(({ status }) => status === 'importing')) {
+    stopWatching();
+  }
+}
+
+/** Imports the file again as a new revision of the same source, still to be added when it succeeds. */
+export async function retryAnalysisImport(failed: PendingAnalysisImport, user: User | null) {
+  const result = await effects.importSourceRevision(failed.file, { sourceId: failed.sourceId }, failed.adapter, user);
+  if (result) {
+    dismissAnalysisImport(failed.revisionId);
+    addAnalysisSourceWhenImported({ ...failed, ...result }, user);
+  }
+}
+
+function clearAnalysisImports() {
+  stopWatching();
+  pendingAnalysisImports.set([]);
 }
 
 /**

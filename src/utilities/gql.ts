@@ -1300,6 +1300,21 @@ const gql = {
     }
   `,
 
+  GET_ANALYSIS_SOURCE_RECOVERY: `#graphql
+    query GetAnalysisSourceRecovery($ids: [Int!]!) {
+      sources: ${Queries.SOURCES}(where: { id: { _in: $ids } }) {
+        id
+        name
+        revisions(where: { status: { _eq: "success" } }, order_by: { id: desc }) {
+          id
+          metadata
+          requested_at
+          status
+        }
+      }
+    }
+  `,
+
   GET_ANALYSIS_SOURCE_REVISIONS: `#graphql
     query GetAnalysisSourceRevisions($ids: [Int!]!) {
       revisions: ${Queries.SOURCE_REVISIONS}(where: { id: { _in: $ids } }) {

@@ -105,6 +105,7 @@ import type {
   SourceActivity,
   SourceAdapterDescriptor,
   SourceLibraryEntry,
+  SourceRecovery,
 } from '../types/analysis';
 import type { BaseUser, User, UserId, Version } from '../types/app';
 import type { ReqAuthResponse, ReqSessionResponse } from '../types/auth';
@@ -4567,6 +4568,22 @@ const effects = {
     }
   },
 
+  /** What is left of each of these sources: its name and successful revisions; null for one that was deleted. */
+  async getAnalysisSourceRecovery(ids: number[], user: User | null): Promise<Record<number, SourceRecovery | null>> {
+    const found: Record<number, SourceRecovery | null> = Object.fromEntries(ids.map(id => [id, null]));
+    if (!ids.length) {
+      return found;
+    }
+    try {
+      const data = await reqHasura<SourceRecovery[]>(gql.GET_ANALYSIS_SOURCE_RECOVERY, { ids }, user);
+      (data.sources ?? []).forEach((source: SourceRecovery) => (found[source.id] = source));
+      return found;
+    } catch (e) {
+      catchError('log', 'Unable to retrieve sources', e as Error);
+      return {}; // unknown, not deleted: the binding says only that its revision is unavailable
+    }
+  },
+
   async getAnalysisSourceRevisions(ids: number[], user: User | null): Promise<AnalysisSourceRevision[]> {
     if (!ids.length) {
       return [];
@@ -6138,14 +6155,14 @@ const effects = {
   /**
    * Imports a file as a new revision of a source: an existing one (`sourceId`) or a new one (`sourceName`). The file
    * is uploaded, the revision requested, and the ingest worker does the rest; the revision is pending until it does.
-   * Returns the revision id.
+   * Returns the revision and its source.
    */
   async importSourceRevision(
     file: File,
     target: { sourceId: number } | { sourceName: string },
     adapter: string,
     user: User | null,
-  ): Promise<number | null> {
+  ): Promise<{ revisionId: number; sourceId: number } | null> {
     try {
       if (!queryPermissions.CREATE_SOURCE_REVISION(user)) {
         throwPermissionError('import a source');
@@ -6185,7 +6202,7 @@ const effects = {
         throw Error(`Unable to import ${file.name}`);
       }
       showSuccessToast(`Importing ${file.name}`);
-      return data.revision.id;
+      return { revisionId: data.revision.id, sourceId };
     } catch (e) {
       catchError('log', 'Source Import Failed', e as Error);
       showFailureToast('Source Import Failed');

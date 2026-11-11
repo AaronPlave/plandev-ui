@@ -12,6 +12,7 @@
     analysis,
     analysisPlans,
     analysisSimulationDatasets,
+    analysisSourceRecovery,
     analysisSourceRevisions,
     rebindAnalysisSource,
     removeAnalysisSource,
@@ -22,6 +23,7 @@
     AnalysisSimulationDataset,
     AnalysisSourceBinding,
     AnalysisSourceRevision,
+    SourceRecovery,
   } from '../../types/analysis';
   import type { User } from '../../types/app';
   import type { TimelineSourceRegistry } from '../../types/timelineSource';
@@ -44,13 +46,22 @@
 
   let detailsShown: Record<string, boolean> = {};
   let renaming: string | null = null;
+  /** The replacement chosen for a source whose revision was deleted; the newest successful one until chosen. */
+  let replacements: Record<string, number> = {};
 
   $: savedSources = $analysis?.definition.sources ?? [];
   // What each source is, recomputed whenever the details it is built from arrive or change.
   $: described = Object.fromEntries(
     bindings.map(binding => [
       binding.id,
-      describe(binding, $analysisSourceRevisions, $analysisSimulationDatasets, $analysisPlans ?? [], savedSources),
+      describe(
+        binding,
+        $analysisSourceRevisions,
+        $analysisSimulationDatasets,
+        $analysisPlans ?? [],
+        savedSources,
+        $analysisSourceRecovery,
+      ),
     ]),
   );
   // Only the kinds of source the analysis has: an analysis of one plan shows no empty "Imported Sources".
@@ -64,15 +75,21 @@
     datasets: AnalysisSimulationDataset[],
     plans: AnalysisPlan[],
     saved: AnalysisSourceBinding[],
+    recoveries: Record<number, SourceRecovery | null>,
   ) {
     const revision = binding.kind === 'imported' ? revisions.find(({ id }) => id === binding.revisionId) : undefined;
     const dataset =
       binding.kind === 'simulation' ? datasets.find(({ id }) => id === binding.simulationDatasetId) : undefined;
     const plan = binding.kind === 'plan' ? plans.find(({ id }) => id === binding.planId) : undefined;
+    // What is left of the source when its bound revision is gone (null: the source is gone too).
+    const recovery =
+      binding.kind === 'imported' && !revision && binding.sourceId !== undefined
+        ? recoveries[binding.sourceId]
+        : undefined;
     const savedBinding = saved.find(({ id }) => id === binding.id);
     const newer = getNewerRevision(revision);
     return {
-      ...getAnalysisSourceNames(binding, { dataset, plan, revision }),
+      ...getAnalysisSourceNames(binding, { dataset, plan, revision, source: recovery }),
       dataset,
       // Not offered when the newer revision is already here too (comparing revisions).
       newer: bindings.some(b => b.kind === 'imported' && b.revisionId === newer?.id) ? null : newer,
@@ -83,6 +100,7 @@
         savedBinding?.kind === 'plan' &&
         savedBinding.planRevision !== undefined &&
         savedBinding.planRevision !== plan.revision,
+      recovery,
       revision,
     };
   }
@@ -166,10 +184,71 @@
               size="xs"
               variant="outline"
               on:click={() =>
-                info.newer && rebindAnalysisSource(binding.id, { kind: 'imported', revisionId: info.newer.id }, user)}
-              >Use it</Button
+                info.newer &&
+                info.revision &&
+                rebindAnalysisSource(
+                  binding.id,
+                  {
+                    kind: 'imported',
+                    revisionId: info.newer.id,
+                    sourceId: info.revision.source.id,
+                    sourceName: info.revision.source.name,
+                  },
+                  user,
+                )}>Use it</Button
             >
           </div>
+        {/if}
+
+        {#if info.recovery !== undefined}
+          {@const recovery = info.recovery}
+          {#if recovery === null}
+            <div class="text-[11px] text-red-700">
+              The source was deleted, so its data is gone. Remove it from this analysis; rows that show it are removed
+              with it.
+            </div>
+          {:else if !recovery.revisions.length}
+            <div class="text-[11px] text-red-700">This revision was deleted, and no successful revision remains.</div>
+          {:else if !readOnly}
+            {@const bound = new Set(bindings.flatMap(b => (b.kind === 'imported' ? [b.revisionId] : [])))}
+            {@const choice =
+              replacements[binding.id] ??
+              recovery.revisions.find(({ id }) => !bound.has(id))?.id ??
+              recovery.revisions[0].id}
+            <div class="text-[11px] text-red-700">
+              This revision was deleted. Its rows stay on this source; pick a revision to show them again.
+            </div>
+            <div class="newer">
+              <select
+                class="st-select min-w-0 flex-1"
+                aria-label="Replacement revision for {info.label}"
+                value={choice}
+                on:change={event =>
+                  (replacements = { ...replacements, [binding.id]: Number(event.currentTarget.value) })}
+              >
+                {#each recovery.revisions as revision (revision.id)}
+                  <option value={revision.id} disabled={bound.has(revision.id)}
+                    >{getRevisionVersionLabel(revision)}{revision.id === recovery.revisions[0].id
+                      ? ' · latest'
+                      : ''}</option
+                  >
+                {/each}
+              </select>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={bound.has(choice)}
+                on:click={() =>
+                  rebindAnalysisSource(
+                    binding.id,
+                    { kind: 'imported', revisionId: choice, sourceId: recovery.id, sourceName: recovery.name },
+                    user,
+                  )}>Use it</Button
+              >
+            </div>
+          {:else}
+            <div class="text-[11px] text-red-700">This revision was deleted.</div>
+          {/if}
         {/if}
 
         {#if detailsShown[binding.id]}

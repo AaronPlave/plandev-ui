@@ -8,6 +8,12 @@
 <script lang="ts">
   import { Badge, Button, Dialog, Tabs } from '@nasa-jpl/stellar-svelte';
   import { createEventDispatcher } from 'svelte';
+  import {
+    addAnalysisSourceWhenImported,
+    dismissAnalysisImport,
+    pendingAnalysisImports,
+    retryAnalysisImport,
+  } from '../../stores/analysis';
   import type { AnalysisSourceBinding, AnalysisSourceOptions, AnalysisSourceTarget } from '../../types/analysis';
   import type { User } from '../../types/app';
   import {
@@ -19,6 +25,7 @@
     splitSourceRevisions,
   } from '../../utilities/analysis';
   import effects from '../../utilities/effects';
+  import { queryPermissions } from '../../utilities/permissions';
   import SourceImportForm from '../sources/SourceImportForm.svelte';
 
   export let bindings: AnalysisSourceBinding[] = [];
@@ -40,7 +47,10 @@
     source => source.revisions.length && (!needle || source.name.toLowerCase().includes(needle)),
   );
   $: plans = (options?.plans ?? []).filter(plan => !needle || plan.name.toLowerCase().includes(needle));
-  $: ownSources = (options?.sources ?? []).filter(source => source.owner === user?.id);
+  // The sources the user may add a revision to: an admin any, anyone else their own (as Hasura allows).
+  $: importableSources = (options?.sources ?? []).filter(source =>
+    queryPermissions.CREATE_SOURCE_REVISION(user, source),
+  );
 
   async function load() {
     options = await effects.getAnalysisSourceOptions(user);
@@ -50,8 +60,8 @@
     return current.some(binding => isSameAnalysisSource(binding, target));
   }
 
-  function importedTarget(revisionId: number): AnalysisSourceTarget {
-    return { kind: 'imported', revisionId };
+  function importedTarget(source: { id: number; name: string }, revisionId: number): AnalysisSourceTarget {
+    return { kind: 'imported', revisionId, sourceId: source.id, sourceName: source.name };
   }
 
   function planTarget(plan: { id: number; revision: number }): AnalysisSourceTarget {
@@ -66,9 +76,12 @@
     dispatch('add', target);
   }
 
-  async function onImported({ detail: { add: addIt, revisionId } }: CustomEvent<{ add: boolean; revisionId: number }>) {
+  async function onImported({
+    detail: { add: addIt, ...imported },
+  }: CustomEvent<{ adapter: string; add: boolean; file: File; revisionId: number; sourceId: number }>) {
+    // Not added now: it can't be read until the import succeeds. The analysis adds it then.
     if (addIt) {
-      add({ kind: 'imported', revisionId });
+      addAnalysisSourceWhenImported(imported, user);
     }
     options = await effects.getAnalysisSourceOptions(user);
   }
@@ -104,7 +117,7 @@
             <div class="source">
               <div class="text-sm font-medium">{source.name}</div>
               {#if usable}
-                {@const target = importedTarget(usable.id)}
+                {@const target = importedTarget(source, usable.id)}
                 <div class="option">
                   <div class="min-w-0">
                     <div>
@@ -138,7 +151,7 @@
                 </button>
                 {#if olderShown[source.id]}
                   {#each older as revision (revision.id)}
-                    {@const olderTarget = importedTarget(revision.id)}
+                    {@const olderTarget = importedTarget(source, revision.id)}
                     <div class="option nested">
                       <div class="min-w-0">
                         {#if revision.status === 'success'}
@@ -207,7 +220,32 @@
             <div class="text-muted-foreground">No plans{needle ? ' match' : ''}.</div>
           {/each}
         {:else}
-          <SourceImportForm offerAdd {ownSources} {user} on:imported={onImported} />
+          <SourceImportForm offerAdd {importableSources} {user} on:imported={onImported} />
+          {#each $pendingAnalysisImports as imported (imported.revisionId)}
+            <div class="import-status" role="status">
+              {#if imported.status === 'importing'}
+                <span class="min-w-0 break-words"
+                  >Importing {imported.file.name}. It is added to this analysis when it succeeds, even if you close this
+                  dialog.</span
+                >
+                <Button size="xs" variant="outline" on:click={() => dismissAnalysisImport(imported.revisionId)}
+                  >Don't add</Button
+                >
+              {:else}
+                <span class="min-w-0 break-words text-red-700"
+                  >Importing {imported.file.name} failed: {imported.error}</span
+                >
+                <span class="flex shrink-0 gap-1">
+                  <Button size="xs" variant="outline" on:click={() => retryAnalysisImport(imported, user)}
+                    >Try again</Button
+                  >
+                  <Button size="xs" variant="outline" on:click={() => dismissAnalysisImport(imported.revisionId)}
+                    >Dismiss</Button
+                  >
+                </span>
+              {/if}
+            </div>
+          {/each}
         {/if}
       </div>
     </Tabs.Root>
@@ -229,6 +267,16 @@
     gap: 8px;
     justify-content: space-between;
     padding-left: 8px;
+  }
+
+  .import-status {
+    align-items: center;
+    border-top: 1px solid var(--st-gray-20);
+    display: flex;
+    gap: 8px;
+    justify-content: space-between;
+    margin-top: 12px;
+    padding-top: 8px;
   }
 
   .option.nested {

@@ -9,6 +9,7 @@ import { resolveResourceLayerSource } from '../utilities/timelineSources';
 const effects = vi.hoisted(() => ({
   getAnalysisPlans: vi.fn(async () => []),
   getAnalysisSimulationDatasets: vi.fn(),
+  getAnalysisSourceRecovery: vi.fn(async () => ({})),
   getAnalysisSourceRevisions: vi.fn(),
   getSpans: vi.fn(),
   updateAnalysis: vi.fn(),
@@ -24,10 +25,12 @@ vi.mock('./subscribable', () => {
 const {
   addAnalysisSource,
   analysisSourceBindings,
+  analysisSourceRecovery,
   analysisTimelineSources,
   autosaveAnalysis,
   closeAnalysis,
   openAnalysis,
+  rebindAnalysisSource,
   removeAnalysisSource,
   selectedAnalysisActivity,
 } = await import('./analysis');
@@ -166,7 +169,8 @@ describe('analysis store', () => {
     const [, { definition }] = effects.updateAnalysis.mock.calls.at(-1)!;
     expect(definition.sources).toEqual([
       { id: 'source-1', kind: 'simulation', simulationDatasetId: 1 },
-      { id: 'source-2', kind: 'imported', revisionId: 18 },
+      // Added with only its revision: the source it belongs to is recorded once the revision is read.
+      { id: 'source-2', kind: 'imported', revisionId: 18, sourceId: 1, sourceName: 'TOL' },
     ]);
     expect(definition.view.plan.timelines).toHaveLength(1);
     stop();
@@ -195,5 +199,87 @@ describe('analysis store', () => {
     expect(rows[0].layers.map(layer => layer.sourceId)).toEqual(['source-2']);
     expect(get(analysisSourceBindings).map(binding => binding.id)).toEqual(['source-2']);
     expect(get(selectedAnalysisActivity)).toBeNull();
+  });
+  describe('source identity', () => {
+    const legacy = (): AnalysisDefinition => {
+      const definition = definitionWithRows();
+      definition.sources = [
+        { id: 'source-1', kind: 'imported', label: 'Ops', revisionId: 18 },
+        { id: 'source-2', kind: 'simulation', simulationDatasetId: 1 },
+      ];
+      return definition;
+    };
+
+    it('loads an analysis saved with only a revision id, and records its source', async () => {
+      await openAnalysis(savedAnalysis(legacy()), user);
+      expect(get(analysisSourceBindings)[0]).toEqual({
+        id: 'source-1',
+        kind: 'imported',
+        label: 'Ops',
+        revisionId: 18,
+        sourceId: 1,
+        sourceName: 'TOL',
+      });
+      expect(effects.getAnalysisSourceRecovery).toHaveBeenCalledWith([], user);
+    });
+
+    it('names a deleted revision by its source and rebinds to another one, keeping the id, alias and rows', async () => {
+      const definition = legacy();
+      definition.sources[0] = {
+        id: 'source-1',
+        kind: 'imported',
+        label: 'Ops',
+        revisionId: 99,
+        sourceId: 1,
+        sourceName: 'TOL',
+      };
+      effects.getAnalysisSourceRecovery.mockResolvedValue({
+        1: {
+          id: 1,
+          name: 'TOL (renamed)',
+          revisions: [{ id: 18, metadata: null, requested_at: '2026-10-03T12:00:00Z', status: 'success' }],
+        },
+      });
+      await openAnalysis(savedAnalysis(definition), user);
+      expect(effects.getAnalysisSourceRecovery).toHaveBeenCalledWith([1], user);
+      expect(get(analysisSourceRecovery)[1]?.name).toBe('TOL (renamed)');
+      const [unavailable] = get(analysisTimelineSources).sources;
+      expect(unavailable.label).toBe('Ops');
+      expect(unavailable.resources?.unavailableReason).toBe('This revision was deleted');
+      // Not switched on its own.
+      expect(get(analysisSourceBindings)[0]).toMatchObject({ revisionId: 99 });
+
+      await rebindAnalysisSource(
+        'source-1',
+        { kind: 'imported', revisionId: 18, sourceId: 1, sourceName: 'TOL' },
+        user,
+      );
+      expect(get(analysisSourceBindings)[0]).toEqual({
+        id: 'source-1',
+        kind: 'imported',
+        label: 'Ops',
+        revisionId: 18,
+        sourceId: 1,
+        sourceName: 'TOL',
+      });
+      // Its rows are still bound to it.
+      expect(get(view)?.definition.plan.timelines[0].rows[0].layers[0].sourceId).toBe('source-1');
+    });
+
+    it('says the source was deleted when the whole source is gone, using the name it was bound with', async () => {
+      const definition = legacy();
+      definition.sources[0] = {
+        id: 'source-1',
+        kind: 'imported',
+        revisionId: 99,
+        sourceId: 7,
+        sourceName: 'Demo tour',
+      };
+      effects.getAnalysisSourceRecovery.mockResolvedValue({ 7: null });
+      await openAnalysis(savedAnalysis(definition), user);
+      const [gone] = get(analysisTimelineSources).sources;
+      expect(gone.label).toBe('Demo tour · Source deleted');
+      expect(gone.resources?.unavailableReason).toBe('The source was deleted');
+    });
   });
 });

@@ -9,6 +9,7 @@ import type {
   AnalysisSourceRevision,
   AnalysisSourceTarget,
   AnalysisSourceUsage,
+  SourceRecovery,
   SourceRevisionSummary,
 } from '../types/analysis';
 import type { SourceResource } from '../types/importedSource';
@@ -173,7 +174,7 @@ export function createAnalysisDefinition(): AnalysisDefinition {
  */
 export function bindViewToAnalysisSources(
   timelines: Timeline[],
-  planSources: { id: number; source_revision: { id: number } }[],
+  planSources: { id: number; source_revision: { id: number; source?: { id: number; name: string } } }[],
   bindings: AnalysisSourceBinding[],
   planSourceId: TimelineSourceId,
   simulationSourceId: TimelineSourceId | null,
@@ -189,7 +190,14 @@ export function bindViewToAnalysisSources(
           return layer; // ponytail: a plan source since removed keeps its id and draws nothing
         }
         const id = getNextAnalysisSourceId(result);
-        result.push({ id, kind: 'imported', revisionId: planSource.source_revision.id });
+        const { source } = planSource.source_revision;
+        result.push({
+          id,
+          kind: 'imported',
+          revisionId: planSource.source_revision.id,
+          sourceId: source?.id,
+          sourceName: source?.name,
+        });
         importedIds.set(sourceId, id);
       }
       return { ...layer, sourceId: importedIds.get(sourceId) };
@@ -354,6 +362,8 @@ export type AnalysisSourcesInput = {
   simulationDatasets: AnalysisSimulationDataset[];
   /** Span types present in each simulation dataset, by simulation dataset id; absent while they load. */
   simulationTypeCounts: Record<number, { count: number; name: string }[]>;
+  /** What is left of each source (by id) whose bound revision is gone; null when the source is gone too. */
+  sourceRecovery?: Record<number, SourceRecovery | null>;
   subscribeImportedActivities: (
     binding: AnalysisSourceBinding,
     revision: AnalysisSourceRevision,
@@ -426,7 +436,12 @@ export function getRevisionSummary(revision: {
   status: string;
 }): string {
   if (revision.status !== 'success') {
-    return revision.status === 'failed' ? 'Import failed' : 'Importing…';
+    // Pending: no worker has claimed it yet (none is running, or the one that is is busy with another import).
+    return revision.status === 'failed'
+      ? 'Import failed'
+      : revision.status === 'pending'
+        ? 'Waiting for an ingest worker…'
+        : 'Importing…';
   }
   const resources = revision.resources_aggregate.aggregate?.count ?? 0;
   const activities = revision.activity_types_aggregate.aggregate?.sum?.count ?? 0;
@@ -442,6 +457,86 @@ export function getRevisionUsage(analyses: AnalysisSourceUsage[]): Record<number
     }),
   );
   return usage;
+}
+
+/**
+ * The analyses that reference a source: through any of its revisions, or (for a revision since deleted) through the
+ * source itself. Each analysis once, by id, however many revisions or bindings it uses. Deleting the source affects
+ * exactly these; deleting one revision affects only `getRevisionUsage` of it.
+ */
+export function getSourceUsage(
+  source: { id: number; revisions: { id: number }[] },
+  analyses: AnalysisSourceUsage[],
+): AnalysisSourceUsage[] {
+  const revisionIds = new Set(source.revisions.map(({ id }) => id));
+  const found = new Map<number, AnalysisSourceUsage>();
+  analyses.forEach(analysis => {
+    const uses = (analysis.sources ?? []).some(
+      binding => binding.kind === 'imported' && (binding.sourceId === source.id || revisionIds.has(binding.revisionId)),
+    );
+    if (uses && !found.has(analysis.id)) {
+      found.set(analysis.id, analysis);
+    }
+  });
+  return [...found.values()];
+}
+
+/**
+ * Records, on each imported binding, which source its revision belongs to (and that source's name), from the
+ * revisions just read. Bindings saved before that was recorded gain it, and renamed sources are followed. Returns
+ * `bindings` itself when nothing changes.
+ */
+export function withSourceIdentity(
+  bindings: AnalysisSourceBinding[],
+  revisions: { id: number; source: { id: number; name: string } }[],
+): AnalysisSourceBinding[] {
+  let changed = false;
+  const next = bindings.map(binding => {
+    const revision = binding.kind === 'imported' ? revisions.find(({ id }) => id === binding.revisionId) : undefined;
+    if (
+      binding.kind !== 'imported' ||
+      !revision ||
+      (binding.sourceId === revision.source.id && binding.sourceName === revision.source.name)
+    ) {
+      return binding;
+    }
+    changed = true;
+    return { ...binding, sourceId: revision.source.id, sourceName: revision.source.name };
+  });
+  return changed ? next : bindings;
+}
+
+/** How an import started from an analysis stands, read from the Sources library (which updates live). */
+export type ImportOutcome =
+  | { message: string; state: 'failed' }
+  | { sourceName: string; state: 'success' }
+  /** `present`: the library has listed the revision (it may not have yet, just after the import was requested). */
+  | { present: boolean; state: 'importing' };
+
+export function getImportOutcome(
+  library: {
+    id: number;
+    name: string;
+    revisions: { error?: { message?: string } | null; id: number; status: string }[];
+  }[],
+  imported: { revisionId: number; seen?: boolean; sourceId: number },
+): ImportOutcome {
+  const source = library.find(({ id }) => id === imported.sourceId);
+  const revision = source?.revisions.find(({ id }) => id === imported.revisionId);
+  if (!source || !revision) {
+    // Not listed yet is not deleted: only a revision the library has listed before can have been deleted since.
+    return imported.seen
+      ? { message: 'The import was deleted before it finished.', state: 'failed' }
+      : { present: false, state: 'importing' };
+  }
+  switch (revision.status) {
+    case 'success':
+      return { sourceName: source.name, state: 'success' };
+    case 'failed':
+      return { message: revision.error?.message || 'The import failed.', state: 'failed' };
+    default:
+      return { present: true, state: 'importing' };
+  }
 }
 
 /**
@@ -473,14 +568,26 @@ export function splitSourceRevisions<T extends { status: string }>(
  */
 export function getAnalysisSourceNames(
   binding: AnalysisSourceBinding,
-  details: { dataset?: AnalysisSimulationDataset; plan?: AnalysisPlan; revision?: AnalysisSourceRevision },
+  details: {
+    dataset?: AnalysisSimulationDataset;
+    plan?: AnalysisPlan;
+    revision?: AnalysisSourceRevision;
+    /** What is left of the source when the bound revision is gone: null when the source is gone too. */
+    source?: SourceRecovery | null;
+  },
 ): { label: string; name: string; version: string } {
   let name: string;
   let version: string;
   let short: string;
   if (binding.kind === 'imported') {
-    name = details.revision?.source.name ?? 'Imported source';
-    version = details.revision ? getRevisionVersionLabel(details.revision) : 'Unavailable revision';
+    name = details.revision?.source.name ?? details.source?.name ?? binding.sourceName ?? 'Imported source';
+    version = details.revision
+      ? getRevisionVersionLabel(details.revision)
+      : details.source
+        ? 'Revision deleted'
+        : details.source === null
+          ? 'Source deleted'
+          : 'Unavailable revision';
     // Captions keep the date only; the details and the Sources panel show the full version.
     short = details.revision
       ? version
@@ -558,6 +665,7 @@ export function createAnalysisSources(input: AnalysisSourcesInput): TimelineSour
           input,
           binding,
           input.revisions.find(revision => revision.id === binding.revisionId),
+          binding.sourceId === undefined ? undefined : input.sourceRecovery?.[binding.sourceId],
         );
       case 'simulation':
         return createSimulationDatasetSource(
@@ -584,7 +692,10 @@ export function createAnalysisSources(input: AnalysisSourcesInput): TimelineSour
       return source;
     }
     const revision = input.revisions.find(({ id }) => id === binding.revisionId);
-    const { name, version } = getAnalysisSourceNames(binding, { revision });
+    const { name, version } = getAnalysisSourceNames(binding, {
+      revision,
+      source: binding.sourceId === undefined ? undefined : input.sourceRecovery?.[binding.sourceId],
+    });
     return { ...source, label: `${name} · ${version.replace(/^Imported /, '')}` };
   });
 }
@@ -649,14 +760,19 @@ function createImportedRevisionSource(
   input: AnalysisSourcesInput,
   binding: AnalysisSourceBinding,
   revision: AnalysisSourceRevision | undefined,
+  recovery: SourceRecovery | null | undefined,
 ): TimelineSource {
   const sourceId = binding.id;
-  const { label } = getAnalysisSourceNames(binding, { revision });
+  const { label } = getAnalysisSourceNames(binding, { revision, source: recovery });
   const ready = revision?.status === 'success';
   const unavailableReason = !revision
     ? input.loading
       ? undefined
-      : 'The revision no longer exists'
+      : recovery === null
+        ? 'The source was deleted'
+        : recovery
+          ? 'This revision was deleted'
+          : 'The revision no longer exists'
     : ready
       ? undefined
       : revision.status === 'failed'

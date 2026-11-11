@@ -24,8 +24,12 @@ import {
   removeSourceFromTimelines,
   simulationSpanToActivity,
   getAvailableAdapters,
+  getImportOutcome,
+  getRevisionSummary,
   getRevisionUsage,
+  getSourceUsage,
   splitSourceRevisions,
+  withSourceIdentity,
   type AnalysisSourcesInput,
 } from './analysis';
 import { generateDiscreteTreeUtil } from './timeline';
@@ -575,5 +579,110 @@ describe('bindViewToAnalysisSources', () => {
     );
     expect(bindings.at(-1)).toEqual({ id: 'source-3', kind: 'imported', revisionId: 26 });
     expect(out[0].rows[0].layers.map(l => l.sourceId)).toEqual(['source-3', 'source-3', 'source-1', 'source-2']);
+  });
+});
+
+describe('where a source is used', () => {
+  const use = (id: number, name: string, ...revisionIds: number[]) => ({
+    id,
+    name,
+    owner: 'test',
+    sources: revisionIds.map((revisionId, index) => ({
+      id: `source-${index + 1}`,
+      kind: 'imported' as const,
+      revisionId,
+    })),
+  });
+  const source = { id: 12, revisions: [{ id: 27 }, { id: 28 }] };
+
+  it('counts an analysis once, however many revisions or bindings of the source it has', () => {
+    const analyses = [
+      use(1, 'one revision', 27),
+      use(2, 'two revisions', 27, 28),
+      use(3, 'same revision twice', 28, 28),
+      use(4, 'another source', 99),
+    ];
+    // Distinct objects with the same id, as two reads of one analysis would give.
+    const reread = [...analyses, { ...analyses[1] }];
+    expect(getSourceUsage(source, reread).map(({ id }) => id)).toEqual([1, 2, 3]);
+  });
+
+  it('counts different analyses using different revisions, and the revision usage of each', () => {
+    const analyses = [use(1, 'a', 27), use(2, 'b', 28), use(3, 'c', 27, 27)];
+    expect(getSourceUsage(source, analyses).map(({ id }) => id)).toEqual([1, 2, 3]);
+    const byRevision = getRevisionUsage(analyses);
+    // A revision's own deletion affects only the analyses that bind that revision, each once.
+    expect(byRevision[27].map(({ id }) => id)).toEqual([1, 3]);
+    expect(byRevision[28].map(({ id }) => id)).toEqual([2]);
+  });
+
+  it('includes an analysis whose binding names the source but whose revision is already deleted', () => {
+    const analyses = [
+      { ...use(1, 'a'), sources: [{ id: 'source-1', kind: 'imported' as const, revisionId: 5, sourceId: 12 }] },
+    ];
+    expect(getSourceUsage(source, analyses)).toHaveLength(1);
+    expect(getRevisionUsage(analyses)[27]).toBeUndefined();
+    expect(getSourceUsage(source, [{ ...analyses[0], sources: null }])).toEqual([]);
+  });
+});
+
+describe('source identity of bindings', () => {
+  it('adds the source to bindings saved without it, follows renames, and returns the same array when nothing changes', () => {
+    const revisions = [{ id: 18, source: { id: 1, name: 'TOL' } }];
+    const legacy: AnalysisSourceBinding[] = [imported, planA];
+    const identified = withSourceIdentity(legacy, revisions);
+    expect(identified[0]).toEqual({ ...imported, sourceId: 1, sourceName: 'TOL' });
+    expect(identified[1]).toBe(planA);
+    expect(withSourceIdentity(identified, revisions)).toBe(identified);
+    expect(withSourceIdentity(identified, [{ id: 18, source: { id: 1, name: 'TOL 2' } }])[0]).toMatchObject({
+      sourceName: 'TOL 2',
+    });
+    // A revision that wasn't read keeps what it recorded.
+    expect(withSourceIdentity(identified, [])).toBe(identified);
+  });
+});
+
+describe('an import that is waiting to be added', () => {
+  const library = (revisions: { error?: { message: string }; id: number; status: string }[]) => [
+    { id: 5, name: 'Demo tour', revisions },
+  ];
+  const wanted = { revisionId: 30, sourceId: 5 };
+
+  it('waits while pending or importing, succeeds with the source name, fails with the error', () => {
+    expect(getImportOutcome(library([{ id: 30, status: 'pending' }]), wanted)).toEqual({
+      present: true,
+      state: 'importing',
+    });
+    expect(getImportOutcome(library([{ id: 30, status: 'incomplete' }]), wanted)).toEqual({
+      present: true,
+      state: 'importing',
+    });
+    expect(getImportOutcome(library([{ id: 30, status: 'success' }]), wanted)).toEqual({
+      sourceName: 'Demo tour',
+      state: 'success',
+    });
+    expect(getImportOutcome(library([{ error: { message: 'bad file' }, id: 30, status: 'failed' }]), wanted)).toEqual({
+      message: 'bad file',
+      state: 'failed',
+    });
+    expect(getImportOutcome(library([{ id: 30, status: 'failed' }]), wanted)).toMatchObject({ state: 'failed' });
+  });
+
+  it('treats a revision not listed yet as importing, and one listed before and now gone as failed', () => {
+    expect(getImportOutcome(library([]), wanted)).toEqual({ present: false, state: 'importing' });
+    expect(getImportOutcome([], wanted)).toEqual({ present: false, state: 'importing' });
+    expect(getImportOutcome(library([]), { ...wanted, seen: true })).toMatchObject({ state: 'failed' });
+  });
+
+  it('says a pending revision is waiting for a worker, and one a worker has claimed is importing', () => {
+    const base = {
+      activity_types_aggregate: { aggregate: null },
+      coverage_end: null,
+      coverage_start: null,
+      resources_aggregate: { aggregate: null },
+    };
+    expect(getRevisionSummary({ ...base, status: 'pending' })).toBe('Waiting for an ingest worker…');
+    expect(getRevisionSummary({ ...base, status: 'incomplete' })).toBe('Importing…');
+    expect(getRevisionSummary({ ...base, status: 'failed' })).toBe('Import failed');
   });
 });

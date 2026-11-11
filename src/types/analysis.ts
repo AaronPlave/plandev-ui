@@ -11,7 +11,18 @@ import type { ViewDefinition } from './view';
  * analysis was last saved, so the page can say the plan has changed since.
  */
 export type AnalysisSourceTarget =
-  | { kind: 'imported'; revisionId: number }
+  | {
+      kind: 'imported';
+      revisionId: number;
+      /**
+       * The logical source the revision belongs to, so the binding can still say which source it was, and offer
+       * another revision of it, after the revision is deleted. Absent in analyses saved before it was recorded:
+       * it is filled in when they open.
+       */
+      sourceId?: number;
+      /** The source's name when it was bound or last seen; shown only when the source itself can't be read. */
+      sourceName?: string;
+    }
   | { kind: 'simulation'; simulationDatasetId: number }
   | { kind: 'plan'; planId: number; planRevision?: number };
 
@@ -101,6 +112,12 @@ export type AnalysisSourceRevision = SourceRevisionSummary & {
   /** The source with its newest successful revision, to offer an update. */
   source: { id: number; latest: SourceRevisionSummary[]; name: string; source_type: string };
 };
+
+/**
+ * What is left of an imported source whose bound revision was deleted: its current name and its successful revisions
+ * (newest first), to offer a replacement.
+ */
+export type SourceRecovery = { id: number; name: string; revisions: SourceRevisionSummary[] };
 
 /** A plan, as an analysis that reads its current activities needs to know it. */
 export type AnalysisPlan = {

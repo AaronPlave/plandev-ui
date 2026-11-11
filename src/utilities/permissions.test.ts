@@ -6,7 +6,9 @@ import {
   isPlanOwner,
   isUserAdmin,
   isUserOwner,
+  queryPermissions,
 } from './permissions';
+import type { User } from '../types/app';
 import { ADMIN_ROLE } from './roles';
 
 describe('hasNoAuthorization', () => {
@@ -200,5 +202,37 @@ describe('Check roles', () => {
         },
       ),
     ).toEqual(true);
+  });
+});
+
+describe('importing a source revision', () => {
+  const as = (activeRole: string, id: string, permissibleQueries: Record<string, true> = {}): User => ({
+    activeRole,
+    allowedRoles: [ADMIN_ROLE, 'user'],
+    defaultRole: activeRole,
+    id,
+    permissibleQueries,
+    rolePermissions: {},
+    token: '',
+  });
+  const insert: Record<string, true> = { insert_source_one: true, insert_source_revision_one: true };
+
+  test("admins can import into any source, ownerless or someone else's", () => {
+    const admin = as(ADMIN_ROLE, 'admin');
+    expect(queryPermissions.CREATE_SOURCE_REVISION(admin, { owner: null })).toEqual(true);
+    expect(queryPermissions.CREATE_SOURCE_REVISION(admin, { owner: 'someone' })).toEqual(true);
+  });
+
+  test('anyone else can import into their own sources only, as Hasura checks', () => {
+    const user = as('user', 'me', insert);
+    expect(queryPermissions.CREATE_SOURCE_REVISION(user, { owner: 'me' })).toEqual(true);
+    expect(queryPermissions.CREATE_SOURCE_REVISION(user, { owner: 'someone' })).toEqual(false);
+    expect(queryPermissions.CREATE_SOURCE_REVISION(user, { owner: null })).toEqual(false);
+    expect(queryPermissions.CREATE_SOURCE_REVISION(as('user', 'me'), { owner: 'me' })).toEqual(false);
+  });
+
+  test('a new source needs both inserts', () => {
+    expect(queryPermissions.CREATE_SOURCE_REVISION(as('user', 'me', insert))).toEqual(true);
+    expect(queryPermissions.CREATE_SOURCE_REVISION(as('user', 'me', { insert_source_one: true }))).toEqual(false);
   });
 });

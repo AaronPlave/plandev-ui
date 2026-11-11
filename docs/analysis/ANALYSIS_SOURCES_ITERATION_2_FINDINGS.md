@@ -4,7 +4,7 @@ This iteration follows [the first Analysis + Sources iteration](./ANALYSIS_SOURC
 
 The second real format was deferred at the user's request, so the adapter abstraction has still only met TOL. Simulation storage and the other profile findings were deliberately left alone (see [What stayed separate](#what-stayed-separate)).
 
-Branches: `claude/analysis-sources-next` in plandev-ui and plandev.
+Branches: `claude/analysis-sources-next` in plandev-ui and plandev. The final correctness pass ([section 9](#9-final-correctness-pass)) was made on `claude/tol-sections-options` in plandev-ui, which is `claude/analysis-sources-next` plus the merged timeline sections and rendering-options work.
 
 ## Summary
 
@@ -109,14 +109,14 @@ Usage and deletion had no answer at all, and failed imports pile up with no way 
 
 - each source with its latest successful revision and summary, its number of revisions, whether a newer import failed or is in progress, how many analyses use it, and its owner;
 - expanded, every revision: label or status, contents, error, file and format, who requested it, and links to the analyses that use it;
-- import (the same form as Add Source, now one component), "Import revision" into a source you own, rename, and delete for the source or one revision. Deleting names the analyses that will lose it.
+- import (the same form as Add Source, now one component, in a dialog), "Import revision", rename, and delete for the source or one revision. Deleting names the analyses that will lose it.
 
 Usage is computed in the browser from every analysis's `definition.sources` (`definition(path: "sources")`). This is fine for hundreds of analyses; past that it needs a server-side index of analysis → revision.
 
 **Observations:**
 
-- **Deleting a revision an Analysis uses** leaves "Imported source / Unavailable revision", and the Analysis no longer knows which source it was. A binding only stores `revisionId`. Storing the source's id and name on the binding would let it say "Demo tour (revision deleted)" and offer that source's latest revision.
-- **Ownership is too narrow for teams.** Sources registered with the CLI have no owner, so only admins can rename, delete or import into them, and nobody can import a new revision of someone else's source. A team will hit this at once.
+- **Deleting a revision an Analysis uses** left "Imported source / Unavailable revision", with no way to tell which source it was. Fixed in section 9.
+- **Ownership is too narrow for teams.** Sources registered with the CLI have no owner, so only admins can rename, delete or import into them, and nobody can import a new revision of someone else's source. A team will hit this at once. The UI now matches what Hasura allows (section 9); the model itself is unchanged.
 - **Naming collision.** The app already has "External Sources" (external event sources). "Imported Sources" sits next to it in the menu, and the difference isn't obvious. This needs a product decision before shipping.
 - **Archiving wasn't needed.** Deleting old revisions was enough here. Archiving earns its place only if deleting turns out to be too final for revisions an Analysis uses.
 
@@ -143,6 +143,51 @@ There was nothing new to test without a second format. TOL reports no product me
 **Not built.** Workers with different adapter sets would need adapter-aware claiming, i.e. `adapter = 'auto' or adapter = any(<installed>)`. One worker image doesn't need it.
 
 Migration 41, which is unreleased and exists only on these branches, gained the column, rather than adding a new migration.
+
+## 9. Final correctness pass
+
+A focused pass over the lifecycle edges; no new architecture.
+
+### Fixed
+
+- **Import → add.** "Add it to this analysis" no longer binds a revision that is still importing. The analysis remembers the intent (`pendingAnalysisImports`) and follows the existing live Sources library subscription; when the revision succeeds it is bound (with a toast), when it fails the error is shown in the Import tab with **Try again** (re-uploads the same file as a new revision of the same source) and **Dismiss**. The intent survives closing the dialog, and is dropped, with its subscription, when the analysis closes or another opens. A revision added by hand meanwhile is not bound twice. A revision the library has not listed yet is not treated as deleted.
+- **Source identity.** An imported binding now records `sourceId` and a `sourceName` snapshot. Analyses saved with only `revisionId` still load; on open the fields are filled in from the revision (and a rename is followed), and are saved with the analysis's next save. A deleted revision shows as "<Source> · Revision deleted" and offers a choice among the source's other successful revisions (newest preselected, already-bound ones disabled). Choosing one rebinds in place, keeping the binding id, the alias and every timeline row. Nothing switches on its own. When the whole source is deleted, the binding shows "<name> · Source deleted" using the snapshot name and says to remove it; rows bound to it show the same reason. The snapshot is read only when the source can no longer be read.
+- **Usage and deletion impact.** Analyses are now de-duplicated by `analysis.id` (`getSourceUsage`), not by object reference. Deleting a source warns about analyses that bind any of its revisions, or name the source in a binding whose revision is already gone (they would lose their recovery path). Deleting one revision warns only about analyses binding that revision. The "used by" count, the revision links and the warning come from the same functions.
+- **Imported Sources page.** Browsing has the full width. **Import Source** is a dialog opened from the page header, and **Import revision** opens the same dialog with its source preselected (one `SourceImportForm`). The revision table scrolls horizontally below 560 px and wraps long file names and errors. See [Not verified](#not-verified).
+- **Permissions match Hasura.** `source_revision` insert is allowed for admins on any source, for anyone else only on a source they own. The Import revision button and the import form's "new revision of" list used `owner === me`, which blocked admins; both now use `CREATE_SOURCE_REVISION(user, source)`. Rename and delete already matched (admin, or owner; ownerless means admin only).
+- **Waiting state.** A pending revision (no worker has claimed it) reads "Waiting for an ingest worker…"; one a worker has claimed reads "Importing…".
+
+### Adapter availability (checked)
+
+Read from the code and confirmed with the integration tests, run against the `tol` stack's database:
+
+| Question                               | Result                                                                                                                                                             |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Idle workers refresh `last_seen_at`    | Yes: before every claim, and the idle wait is 30 s. `publishingMarksEveryInstalledAdapterSeenNow`                                                                  |
+| Long imports keep refreshing           | Yes: every 5 s heartbeat. `aRunningIngestKeepsItsAdaptersSeen`                                                                                                     |
+| Stopped workers drop out of the UI     | Yes: after 2 minutes (`getAvailableAdapters`, unit-tested). The catalog row stays                                                                                  |
+| Missing input file                     | Revision fails with "The file is missing: …"; worker continues. `aMissingFileFailsTheRevisionNotTheWorker`                                                         |
+| Next revision after a failure          | Claimed and read. `aFailedRevisionDoesNotKeepTheNextOneFromBeingClaimedAndRead`                                                                                    |
+| Explicit adapter that is not installed | Revision fails with "No adapter … is installed (installed: …)"; not reclaimed; next revision unaffected. `anAdapterThatIsNotInstalledFailsTheRevisionNotTheWorker` |
+| `auto` with no worker                  | The form says "No ingest worker is running: an import waits until one starts", and the revision reads "Waiting for an ingest worker…"                              |
+
+The 2-minute window compares the browser's clock with the database's `last_seen_at`; a skew of more than about a minute would hide or wrongly offer formats. Fine locally; a deployment with unsynchronised clocks would need the comparison done in SQL. The worker's main loop also ends if its listen connection fails (a database outage); a supervisor restarts it.
+
+### Remaining limitations
+
+- **Ownership.** Still owner-or-admin. Ownerless (CLI-registered) sources can be renamed, deleted and imported into only by admins, and a user cannot import a revision of someone else's source. That is the correct UI for the current Hasura rules and the wrong model for shared mission products; it needs groups or roles, which this pass deliberately did not start.
+- A revision deleted while an Analysis is open is noticed when the Analysis is next opened, not live.
+- Backfilled `sourceId`s on old analyses reach the database with the next save, so an analysis opened only read-only keeps its old definition.
+- "Imported Sources" vs "External Sources" naming, Analyze creating duplicates, and the stale "plan has changed" note are unchanged (sections 2 and 5).
+
+### Not verified
+
+The pass was not exercised in a browser. The `tol` stack's gateway runs with CAM authentication, which cannot be used locally, and a no-auth gateway needs that process's secrets, which I did not copy. So the Imported Sources layout at normal and narrower widths, the Add Source import progress, the replacement picker and the manual regression list (workflow steps 1–11) have **not** been walked through by hand. The behaviour behind them is covered by the automated tests below. Restarting the `tol` gateway with `AUTH_TYPE=none` would allow it.
+
+### Checks run
+
+- plandev-ui: `npm run check` (0 errors), `eslint` and `prettier --check` on the changed files, and `vitest` over `src/utilities`, `src/stores` and `src/components/analysis` (52 files, 1155 tests), all passing.
+- plandev: `./gradlew :source-ingest:test` with `SOURCES_IT_DB_URL` pointing at the `tol` stack database: 30 tests, none skipped, all passing.
 
 ## What stayed separate
 

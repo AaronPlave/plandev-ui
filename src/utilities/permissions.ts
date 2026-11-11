@@ -542,8 +542,23 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
   CREATE_SOURCE: (user: User | null): boolean => {
     return isUserAdmin(user) || getPermission([Queries.INSERT_SOURCE], user);
   },
-  CREATE_SOURCE_REVISION: (user: User | null): boolean => {
-    return isUserAdmin(user) || getPermission([Queries.INSERT_SOURCE, Queries.INSERT_SOURCE_REVISION], user);
+  /**
+   * Importing a file as a new source needs both inserts. As a new revision of `source`: an admin may add to any
+   * source, anyone else only to a source they own (Hasura's check on source_revision), so an ownerless source takes
+   * revisions from admins only.
+   */
+  CREATE_SOURCE_REVISION: (user: User | null, source?: { owner: UserId | null }): boolean => {
+    if (isUserAdmin(user)) {
+      return true;
+    }
+    if (!source) {
+      return getPermission([Queries.INSERT_SOURCE, Queries.INSERT_SOURCE_REVISION], user);
+    }
+    return (
+      getPermission([Queries.INSERT_SOURCE_REVISION], user) &&
+      source.owner !== null &&
+      isUserOwner(user, { owner: source.owner })
+    );
   },
   CREATE_TAG: (user: User | null): boolean => {
     return isUserAdmin(user) || getPermission([Queries.INSERT_TAG], user);
@@ -803,6 +818,7 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
   GET_ANALYSIS_ACTIVITY_COUNT: () => true,
   GET_ANALYSIS_SIMULATION_DATASETS: () => true,
   GET_ANALYSIS_SOURCE_OPTIONS: () => true,
+  GET_ANALYSIS_SOURCE_RECOVERY: () => true,
   GET_ANALYSIS_SOURCE_REVISIONS: () => true,
   GET_CONSTRAINT_PROCEDURE_EFFECTIVE_ARGUMENTS_BULK: () => true,
   GET_EFFECTIVE_ACTIVITY_ARGUMENTS_BULK: () => true,
