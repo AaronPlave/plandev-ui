@@ -27,7 +27,8 @@ export type EmbedRequest =
   | { type: 'ready' }
   | { timeMs: number; type: 'setTime' }
   | { directiveId: number | null; spanId: number | null; type: 'select' }
-  | { planId: number; type: 'openPlan' };
+  | { planId: number; type: 'openPlan' }
+  | { simulationDatasetId: number; type: 'showSimulation' };
 
 export function contextMessage(context: EmbedContext) {
   return { protocol: EMBED_PROTOCOL, type: 'context', ...context };
@@ -61,6 +62,10 @@ export function parseEmbedRequest(data: unknown): EmbedRequest | null {
     case 'openPlan':
       return Number.isInteger(m.planId) && (m.planId as number) >= 0
         ? { planId: m.planId as number, type: 'openPlan' }
+        : null;
+    case 'showSimulation':
+      return Number.isInteger(m.simulationDatasetId) && (m.simulationDatasetId as number) >= 0
+        ? { simulationDatasetId: m.simulationDatasetId as number, type: 'showSimulation' }
         : null;
     default:
       return null;

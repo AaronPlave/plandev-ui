@@ -33,6 +33,11 @@ describe('embedBridge', () => {
       type: 'openPlan',
     });
     expect(parseEmbedRequest({ planId: '24', protocol: EMBED_PROTOCOL, type: 'openPlan' })).toBeNull();
+    expect(parseEmbedRequest({ protocol: EMBED_PROTOCOL, simulationDatasetId: 91, type: 'showSimulation' })).toEqual({
+      simulationDatasetId: 91,
+      type: 'showSimulation',
+    });
+    expect(parseEmbedRequest({ protocol: EMBED_PROTOCOL, simulationDatasetId: -1, type: 'showSimulation' })).toBeNull();
     expect(parseEmbedRequest({ protocol: 'other', type: 'ready' })).toBeNull();
     expect(parseEmbedRequest({ protocol: EMBED_PROTOCOL, type: 'getToken' })).toBeNull();
     expect(parseEmbedRequest('ready')).toBeNull();

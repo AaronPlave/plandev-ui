@@ -6,7 +6,7 @@
   import { onDestroy } from 'svelte';
   import { activityDirectivesMap, selectActivity, selectedActivityDirectiveId } from '../../stores/activities';
   import { plan, planRevision, timeCursorMs, viewTimeRange } from '../../stores/plan';
-  import { selectedSpanId, simulationDatasetId, spansMap } from '../../stores/simulation';
+  import { selectedSpanId, simulationDatasetId, simulationDatasetsPlan, spansMap } from '../../stores/simulation';
   import { view } from '../../stores/views';
   import type { ViewIFrame } from '../../types/view';
   import { contextMessage, originOf, parseEmbedRequest, type EmbedContext } from '../../utilities/embedBridge';
@@ -89,6 +89,12 @@
     } else if (request?.type === 'openPlan' && request.planId !== $plan?.id) {
       // Stay in the current view; the plan page enforces the user's own permissions on the target plan.
       goto(`${base}/plans/${request.planId}${$view ? `?viewId=${$view.id}` : ''}`);
+    } else if (
+      request?.type === 'showSimulation' &&
+      $simulationDatasetsPlan.some(dataset => dataset.id === request.simulationDatasetId)
+    ) {
+      // Only a simulation of the open plan; the context change is posted back to the app.
+      simulationDatasetId.set(request.simulationDatasetId);
     }
   }
 
