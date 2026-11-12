@@ -16,7 +16,7 @@
   } from '../../stores/analysis';
   import { initialViewsLoading, view, views } from '../../stores/views';
   import type { User } from '../../types/app';
-  import type { DataGridColumnDef, DataGridRowSelection } from '../../types/data-grid';
+  import type { DataGridColumnDef, RowId } from '../../types/data-grid';
   import type { ViewSlim } from '../../types/view';
   import {
     countUnboundLayers,
@@ -51,7 +51,7 @@
   let filter: string = '';
   let loaded: ViewForTimelineImport | null = null;
   let loading: boolean = false;
-  let selectedViewId: number | null = null;
+  let selectedViewId: RowId | null = null;
   let timelineIndex: number = 0;
 
   $: if (!open) {
@@ -96,12 +96,12 @@
     return `${layers.length} layer${layers.length === 1 ? '' : 's'} in ${rows.slice(0, 4).join(', ')}${rows.length > 4 ? `, and ${rows.length - 4} more` : ''}`;
   }
 
-  async function choose(viewId: number | null) {
+  async function choose(viewId: RowId | null) {
     if (viewId === null || loading) {
       return;
     }
     loading = true;
-    const read = await readViewForTimelineImport(viewId, user);
+    const read = await readViewForTimelineImport(Number(viewId), user);
     loading = false;
     if (read) {
       loaded = read;
@@ -119,12 +119,6 @@
       open = false;
     }
   }
-
-  function onSelected({ detail: { data, isSelected } }: CustomEvent<DataGridRowSelection<ViewSlim>>) {
-    if (isSelected) {
-      selectedViewId = data.id;
-    }
-  }
 </script>
 
 <Dialog.Root bind:open>
@@ -140,13 +134,13 @@
       <input bind:value={filter} class="st-input w-full" placeholder="Filter views" aria-label="Filter views" />
       <div class="h-[320px]">
         <DataGrid
+          bind:currentSelectedRowId={selectedViewId}
           {columnDefs}
           filterExpression={filter}
           loading={$initialViewsLoading}
           rowData={viewRows}
           rowSelection="single"
           noRowsOverlayText="No saved views"
-          on:rowSelected={onSelected}
           on:rowDoubleClicked={({ detail: { data } }) => choose(data.id)}
         />
       </div>
