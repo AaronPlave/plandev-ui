@@ -56,11 +56,15 @@ export function createPlanActivitySubscription(
 }
 
 const simulationSpans = new WeakMap<User, Map<number, Promise<Span[]>>>();
-const revisionActivities = new WeakMap<User, Map<string, Promise<Span[]>>>();
+type SourceActivity = Awaited<ReturnType<typeof effects.getSourceActivities>>[number];
+const revisionActivities = new WeakMap<User, Map<string, Promise<SourceActivity[]>>>();
 
 /**
  * Every activity of one imported revision of the given types (all, for null), fetched once per session and shared
  * by the rows asking for the same types. Revisions are immutable, so what was fetched stays right.
+ *
+ * What is cached is the raw records, not spans: a span carries the id of the timeline source that reads it, and one
+ * revision is read under several (a Plan's `imported:42`, an Analysis's `source-1`). Each caller converts for itself.
  *
  * ponytail: whole loads, no windowing or LOD. Fine at hundreds of thousands of activities; page by time if a
  * revision outgrows what the browser holds.
@@ -68,22 +72,23 @@ const revisionActivities = new WeakMap<User, Map<string, Promise<Span[]>>>();
 export function getRevisionActivities(
   revisionId: number,
   types: string[] | null,
-  toSpan: (activity: Awaited<ReturnType<typeof effects.getSourceActivities>>[number]) => Span,
+  toSpan: (activity: SourceActivity) => Span,
   user: User | null,
 ): Promise<Span[]> {
   if (!user) {
     return Promise.resolve([]);
   }
-  const byKey = revisionActivities.get(user) ?? new Map<string, Promise<Span[]>>();
+  const byKey = revisionActivities.get(user) ?? new Map<string, Promise<SourceActivity[]>>();
   revisionActivities.set(user, byKey);
   const key = `${revisionId}:${types ? [...types].sort().join(',') : '*'}`;
-  let spans = byKey.get(key);
-  if (!spans) {
-    spans = effects.getSourceActivities(revisionId, types, user).then(activities => activities.map(toSpan));
-    spans.catch(() => byKey.delete(key));
-    byKey.set(key, spans);
+  let activities = byKey.get(key);
+  if (!activities) {
+    activities = effects.getSourceActivities(revisionId, types, user);
+    // A failed load is not kept, so the next read retries.
+    activities.catch(() => byKey.delete(key));
+    byKey.set(key, activities);
   }
-  return spans;
+  return activities.then(records => records.map(toSpan));
 }
 
 /**
