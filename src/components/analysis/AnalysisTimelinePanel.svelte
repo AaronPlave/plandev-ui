@@ -7,6 +7,7 @@
 -->
 <script lang="ts">
   import { Button } from '@nasa-jpl/stellar-svelte';
+  import { LayoutTemplate } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
   import {
     addSourceActivityRow,
@@ -45,6 +46,7 @@
     addSource: 'imported' | 'plans' | 'import';
     editRow: Row;
     inspect: void;
+    loadView: void;
   }>();
   const noSpanMaps: SpanUtilityMaps = {
     directiveIdToSpanIdMap: {},
@@ -117,6 +119,16 @@
       <div class="st-typography-medium timeline-title">Timeline</div>
       <PanelHeaderActions>
         <div class="header-actions timeline-icon-tray">
+          {#if !readOnly}
+            <Button
+              size="xs"
+              variant="outline"
+              aria-label="Load timeline from view"
+              on:click={() => dispatch('loadView')}
+            >
+              <LayoutTemplate size={14} class="mr-1" />Load from view
+            </Button>
+          {/if}
           <TimelineViewControls
             planControls={false}
             maxTimeRange={$analysisMaxTimeRange}
@@ -207,13 +219,16 @@
           <div class="text-muted-foreground">
             Drag resources or activity types from Sources onto the timeline, or use the filter button beside an item.
           </div>
-          {#if !readOnly && suggestedRows.length}
+          {#if !readOnly}
             <div class="flex flex-wrap gap-2">
               {#each suggestedRows as source (source.id)}
                 <Button size="sm" variant="outline" on:click={() => addSourceActivityRow(source.id, 'Activities')}>
                   Show all activities of {source.label}
                 </Button>
               {/each}
+              <Button size="sm" variant="outline" on:click={() => dispatch('loadView')}
+                >Load timeline from a view</Button
+              >
             </div>
           {/if}
         </div>

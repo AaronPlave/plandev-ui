@@ -6,6 +6,7 @@
   import { onDestroy, tick } from 'svelte';
   import AnalysisActivityDetails from '../../../components/analysis/AnalysisActivityDetails.svelte';
   import AnalysisAddSourceDialog from '../../../components/analysis/AnalysisAddSourceDialog.svelte';
+  import AnalysisLoadViewDialog from '../../../components/analysis/AnalysisLoadViewDialog.svelte';
   import AnalysisActivityTable from '../../../components/analysis/AnalysisActivityTable.svelte';
   import AnalysisSourcesPanel from '../../../components/analysis/AnalysisSourcesPanel.svelte';
   import AnalysisTimelinePanel from '../../../components/analysis/AnalysisTimelinePanel.svelte';
@@ -46,6 +47,7 @@
   let stopAutosave: (() => void) | null = null;
   let addSourceOpen: boolean = false;
   let addSourceTab: 'imported' | 'plans' | 'import' = 'imported';
+  let loadViewOpen: boolean = false;
 
   function openAddSource(tab: typeof addSourceTab = 'imported') {
     addSourceTab = tab;
@@ -131,6 +133,7 @@
               user={$user}
               on:addSource={({ detail }) => openAddSource(detail)}
               on:editRow={() => (rightTab = 'editor')}
+              on:loadView={() => (loadViewOpen = true)}
               on:inspect={() => (rightTab = 'details')}
             />
           </Resizable.Pane>
@@ -205,6 +208,10 @@
   user={$user}
   on:add={({ detail }) => addAnalysisSource(detail, $user)}
 />
+
+{#if !readOnly}
+  <AnalysisLoadViewDialog bind:open={loadViewOpen} {sourceLabels} user={$user} />
+{/if}
 
 <style>
   .analysis-page {

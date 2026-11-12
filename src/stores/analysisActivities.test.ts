@@ -12,6 +12,7 @@ const { getRevisionActivities } = await import('./analysisActivities');
 
 const user = { activeRole: 'user', id: 'test', permissibleQueries: {}, token: 't' } as unknown as User;
 const record = (id: number, type = 'Pass') => ({
+  category: null as string | null,
   end_time: '2030-01-01T01:00:00Z',
   id,
   name: `${type} ${id}`,

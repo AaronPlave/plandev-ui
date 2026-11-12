@@ -266,6 +266,7 @@ import {
   bulkShiftActivityDirectivesInPlan,
   packActivityDirectivesInPlan,
 } from './activities';
+import type { ViewImportPlanSource } from './analysisViewImport';
 import { convertToQuery } from './generic';
 import gql, { convertToGQLArray } from './gql';
 import {
@@ -5368,6 +5369,30 @@ const effects = {
       }
     } catch (e) {
       catchError('log', 'Unable to retrieve plan snapshot activity directives', e as Error);
+      return null;
+    }
+  },
+
+  /**
+   * The imported revisions that plan_source ids stand for, to translate a saved view's layers. Ids that no longer
+   * exist are simply absent. `null` when the read failed.
+   */
+  async getPlanSourcesForImport(ids: number[], user: User | null): Promise<ViewImportPlanSource[] | null> {
+    if (!ids.length) {
+      return [];
+    }
+    try {
+      const data = await reqHasura<
+        { id: number; source_revision: { id: number; source: { id: number; name: string } } }[]
+      >(gql.GET_PLAN_SOURCES_BY_ID, { ids }, user);
+      return (data.planSources ?? []).map(({ id, source_revision: { id: revisionId, source } }) => ({
+        id,
+        revisionId,
+        sourceId: source.id,
+        sourceName: source.name,
+      }));
+    } catch (e) {
+      catchError('log', 'Unable to read the sources a view uses', e as Error);
       return null;
     }
   },

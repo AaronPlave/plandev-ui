@@ -1827,6 +1827,21 @@ const gql = {
   // Windowed pull: returns the profile header + only the segments past
   // sinceOffset. Pass "-00:00:01" on the first call to get everything; pass
   // the last seen start_offset on subsequent calls to get only the delta.
+  GET_PLAN_SOURCES_BY_ID: `#graphql
+    query GetPlanSourcesById($ids: [Int!]!) {
+      planSources: ${Queries.PLAN_SOURCES}(where: { id: { _in: $ids } }) {
+        id
+        source_revision {
+          id
+          source {
+            id
+            name
+          }
+        }
+      }
+    }
+  `,
+
   GET_PROFILE_SINCE: `#graphql
     query GetProfileSince($datasetId: Int!, $name: String!, $sinceOffset: interval!) {
       ${Queries.PROFILES}(where: { _and: { dataset_id: { _eq: $datasetId }, name: { _eq: $name } } }, limit: 1) {

@@ -1,4 +1,5 @@
 import { debounce, isEqual } from 'lodash-es';
+import { SearchParameters } from '../enums/searchParameters';
 import { derived, get, writable, type Readable, type Writable } from 'svelte/store';
 import type {
   Analysis,
@@ -13,7 +14,7 @@ import type {
   SourceRecovery,
 } from '../types/analysis';
 import type { User, UserId } from '../types/app';
-import type { TimeRange } from '../types/timeline';
+import type { TimeRange, Timeline } from '../types/timeline';
 import type { TimelineSourceRegistry } from '../types/timelineSource';
 import {
   bindViewToAnalysisSources,
@@ -32,6 +33,7 @@ import {
   simulationSpanToActivity,
   withSourceIdentity,
 } from '../utilities/analysis';
+import { getImportedPlanSourceIds, type ViewImportPlanSource } from '../utilities/analysisViewImport';
 import effects from '../utilities/effects';
 import gql from '../utilities/gql';
 import { featurePermissions } from '../utilities/permissions';
@@ -51,7 +53,15 @@ import { createProfileSubscription } from './profile';
 import { gqlSubscribable } from './subscribable';
 import { sources } from './sources';
 import { planSources } from './timelineSources';
-import { initializeView, view, viewAddFilterToRow, viewUpdateTimeline } from './views';
+import {
+  initializeView,
+  selectedLayerId,
+  selectedSectionId,
+  view,
+  viewAddFilterToRow,
+  viewSetSelectedRow,
+  viewUpdateTimeline,
+} from './views';
 
 /*
  * State of the one Analysis page that is open. The timeline, its editor and the Sources browser read the analysis's
@@ -476,6 +486,75 @@ export function addSourceActivityRow(sourceId: string, name: string) {
     const timelines = get(view)?.definition.plan.timelines ?? [];
     viewUpdateTimeline('rows', [...timeline.rows, createSourceActivityRow(timelines, sourceId, name)], timeline.id);
   }
+}
+
+/** A saved view as far as loading its timeline goes: read, never changed. */
+export type ViewForTimelineImport = {
+  id: number;
+  name: string;
+  /** Every plan_source the view's layers name that still exists. */
+  planSources: ViewImportPlanSource[];
+  timelines: Timeline[];
+};
+
+/**
+ * Reads a saved view for loading its timeline into an analysis, at the current view version. Unlike opening it on a
+ * Plan page, this migrates in memory only: a view the user can merely read is never written to. Null (reported) when
+ * it can't be read.
+ */
+export async function readViewForTimelineImport(
+  viewId: number,
+  user: User | null,
+): Promise<ViewForTimelineImport | null> {
+  // getView falls back to a default view for an id it can't find; that is not what was asked for.
+  const saved = await effects.getView(new URLSearchParams(`?${SearchParameters.VIEW_ID}=${viewId}`), user, false);
+  if (!saved || saved.id !== viewId) {
+    showFailureToast('The View Could Not Be Read');
+    return null;
+  }
+  const { error, migratedViewDefinition } = applyViewDefinitionMigrations(saved.definition);
+  if (error) {
+    showFailureToast(`Unable To Read View "${saved.name}"`);
+    return null;
+  }
+  const timelines = (migratedViewDefinition ?? saved.definition).plan.timelines;
+  const planSources = await effects.getPlanSourcesForImport(
+    [...new Set(timelines.flatMap(getImportedPlanSourceIds))],
+    user,
+  );
+  if (!planSources) {
+    showFailureToast('Unable To Read The Sources This View Uses');
+    return null;
+  }
+  return { id: saved.id, name: saved.name, planSources, timelines };
+}
+
+/**
+ * Replaces the analysis's timeline with `timeline` (see importViewTimeline). Its sources, name, owner and everything
+ * else in the view are untouched, and, like any edit, it is saved by the autosave. Not offered when the user can't
+ * edit the analysis. Returns whether it replaced.
+ */
+export function replaceAnalysisTimeline(timeline: Timeline, user: User | null): boolean {
+  const current = get(analysis);
+  if (!current || !featurePermissions.analysis.canUpdate(user, current)) {
+    return false;
+  }
+  view.update(currentView =>
+    currentView
+      ? {
+          ...currentView,
+          definition: {
+            ...currentView.definition,
+            plan: { ...currentView.definition.plan, timelines: [timeline] },
+          },
+        }
+      : currentView,
+  );
+  // Selections named rows and layers of the old timeline.
+  viewSetSelectedRow(null);
+  selectedSectionId.set(null);
+  selectedLayerId.set(null);
+  return true;
 }
 
 /** Removes a source and every layer bound to it; rows that only showed it go too. */

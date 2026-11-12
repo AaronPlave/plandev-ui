@@ -592,6 +592,24 @@ describe('bindViewToAnalysisSources', () => {
     expect(bindings.at(-1)).toEqual({ id: 'source-3', kind: 'imported', revisionId: 26 });
     expect(out[0].rows[0].layers.map(l => l.sourceId)).toEqual(['source-3', 'source-3', 'source-1', 'source-2']);
   });
+
+  it("treats a layer on the Plan's own source (what new Plan layers name) like one with no source", () => {
+    const layer = (sourceId: string, chartType: string) => ({ chartType, filter: {}, id: 1, name: '', sourceId });
+    const timelines = [
+      { rows: [{ layers: [layer('plan', 'activity'), layer('plan', 'line')] }] },
+    ] as unknown as Parameters<typeof bindViewToAnalysisSources>[0];
+    const { timelines: out } = bindViewToAnalysisSources(
+      timelines,
+      [],
+      [
+        { id: 'source-1', kind: 'plan', planId: 1 },
+        { id: 'source-2', kind: 'simulation', simulationDatasetId: 3 },
+      ],
+      'source-1',
+      'source-2',
+    );
+    expect(out[0].rows[0].layers.map(l => l.sourceId)).toEqual(['source-1', 'source-2']);
+  });
 });
 
 describe('where a source is used', () => {

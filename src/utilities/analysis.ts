@@ -32,6 +32,7 @@ import {
   countLabel,
   createStaticResourceSubscription,
   groupBrowserNodes,
+  PLAN_SOURCE_ID,
   summarizeActivityTypes,
   toIntervalType,
 } from './timelineSources';
@@ -209,7 +210,8 @@ export function bindViewToAnalysisSources(
       }
       return { ...layer, sourceId: importedIds.get(sourceId) };
     }
-    if (!sourceId) {
+    // New Plan layers name the Plan's own source explicitly; it means the same as no source.
+    if (!sourceId || sourceId === PLAN_SOURCE_ID) {
       const id = isActivityLayer(layer) ? planSourceId : simulationSourceId;
       return id ? { ...layer, sourceId: id } : layer;
     }
