@@ -3,13 +3,16 @@ import { derived, type Readable } from 'svelte/store';
 import type { PlanSource } from '../types/importedSource';
 import type { ResourceType } from '../types/simulation';
 import type { TimelineSourceRegistry } from '../types/timelineSource';
+import { importedActivityToSpan } from '../utilities/analysis';
 import gql from '../utilities/gql';
 import {
   createExternalDatasetSources,
   createExternalEventsSource,
   createImportedSources,
   createPlanSimulationSource,
+  getImportedSourceId,
 } from '../utilities/timelineSources';
+import { createLoadedActivitySubscription, getRevisionActivities } from './analysisActivities';
 import { externalEventTypes, selectedExternalEvents, selectedExternalEventsRaw } from './external-event';
 import {
   derivationGroups,
@@ -119,6 +122,15 @@ export const planSources = gqlSubscribable<PlanSource[]>(gql.SUB_PLAN_SOURCES, {
 const importedSources = derived(planSources, $planSources =>
   createImportedSources({
     planSources: $planSources,
+    subscribeActivities: (planSource, request, { user }) =>
+      createLoadedActivitySubscription(() =>
+        getRevisionActivities(
+          planSource.source_revision.id,
+          request.types,
+          activity => importedActivityToSpan(getImportedSourceId(planSource.id), activity),
+          user,
+        ),
+      ),
     subscribeImported: (planSource, resource, { user }) =>
       createImportedResourceSubscription({
         coverage: {

@@ -503,6 +503,10 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
   CREATE_PLAN_SNAPSHOT_TAGS: (user: User | null): boolean => {
     return isUserAdmin(user) || getPermission([Queries.INSERT_PLAN_SNAPSHOT_TAGS], user);
   },
+  /** Hasura lets a plan's owner (any admin) use a revision in it; a collaborator may not. */
+  CREATE_PLAN_SOURCE: (user: User | null, plan: PlanWithOwners): boolean => {
+    return isUserAdmin(user) || (getPermission([Queries.INSERT_PLAN_SOURCE], user) && isPlanOwner(user, plan));
+  },
   CREATE_PLAN_TAGS: (user: User | null, plan: PlanWithOwners): boolean => {
     return isUserAdmin(user) || (getPermission([Queries.INSERT_PLAN_TAGS], user) && isPlanOwner(user, plan));
   },

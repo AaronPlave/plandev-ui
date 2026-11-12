@@ -5,6 +5,8 @@ export type PlanSource = {
   id: number;
   label: string | null;
   source_revision: {
+    /** Each activity type in the revision, with how many there are. */
+    activity_types: { category: string | null; count: number; parameters: Record<string, string>; type: string }[];
     coverage_end: string | null;
     coverage_start: string | null;
     id: number;

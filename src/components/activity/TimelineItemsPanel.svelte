@@ -48,7 +48,7 @@
         </Tabs>
       </TabPanel>
       <TabPanel>
-        <SourceBrowser {user} />
+        <SourceBrowser showAddSource {user} />
       </TabPanel>
     </Tabs>
   </svelte:fragment>

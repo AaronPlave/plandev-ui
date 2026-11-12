@@ -5,7 +5,9 @@
   creates a layer bound to that item's source through the same path as the Plan catalog lists.
 -->
 <script lang="ts">
+  import PlusIcon from '@nasa-jpl/stellar/icons/plus.svg?component';
   import UploadIcon from '@nasa-jpl/stellar/icons/upload.svg?component';
+  import { plan } from '../../stores/plan';
   import { getTimelineSourcesContext } from '../../stores/timelineSources';
   import { view, viewAddFilterToRow } from '../../stores/views';
   import type { User } from '../../types/app';
@@ -19,6 +21,7 @@
   import { filterSourceBrowserNodes, getSource } from '../../utilities/timelineSources';
   import { tooltip } from '../../utilities/tooltip';
   import ExternalDatasetUpload from '../ExternalDatasetUpload.svelte';
+  import PlanAddSourceDialog from './PlanAddSourceDialog.svelte';
   import SourceBrowserTree from './SourceBrowserTree.svelte';
 
   const timelineSources = getTimelineSourcesContext();
@@ -31,11 +34,14 @@
     'Imported Sources': 'No imported sources are attached to this plan',
   };
   export let readOnly: boolean = false;
+  /** The Plan page's "add an imported source to this plan" action. */
+  export let showAddSource: boolean = false;
   export let showUpload: boolean = true;
   export let user: User | null;
 
   let expanded: Record<string, boolean> = {};
   let filterText: string = '';
+  let isAddSourceOpen: boolean = false;
   let isUploadVisible: boolean = false;
 
   $: rows = $view?.definition.plan.timelines[0]?.rows ?? [];
@@ -115,6 +121,16 @@
       placeholder="Filter sources"
       aria-label="Filter sources"
     />
+    {#if showAddSource && $plan}
+      <button
+        class="st-button secondary"
+        aria-label="Add Source to Plan"
+        on:click={() => (isAddSourceOpen = true)}
+        use:tooltip={{ content: 'Add Source to Plan' }}
+      >
+        <PlusIcon />
+      </button>
+    {/if}
     {#if showUpload}
       <button
         class="st-button secondary"
@@ -126,6 +142,9 @@
       </button>
     {/if}
   </div>
+  {#if showAddSource && $plan}
+    <PlanAddSourceDialog bind:open={isAddSourceOpen} plan={$plan} {user} />
+  {/if}
   {#if isUploadVisible}
     <ExternalDatasetUpload {user} on:close={() => (isUploadVisible = false)} />
   {/if}

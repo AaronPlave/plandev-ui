@@ -16,7 +16,6 @@ import type { SourceResource } from '../types/importedSource';
 import type { ResourceType, Span } from '../types/simulation';
 import type { TimeRange, Timeline } from '../types/timeline';
 import type {
-  SourceBrowserNode,
   TimelineActivityRequest,
   TimelineActivitySubscription,
   TimelineResourceSubscription,
@@ -27,7 +26,14 @@ import type {
 import { ViewDefaultDiscreteOptions } from '../constants/view';
 import { getIntervalInMs } from './time';
 import { createRow, createTimeline, createTimelineActivityLayer, isActivityLayer } from './timeline';
-import { createStaticResourceSubscription, toIntervalType } from './timelineSources';
+import {
+  activityItemNode,
+  countLabel,
+  createStaticResourceSubscription,
+  groupBrowserNodes,
+  summarizeActivityTypes,
+  toIntervalType,
+} from './timelineSources';
 import { generateDefaultView } from './view';
 
 /* Activity identity. */
@@ -605,56 +611,6 @@ export function getAnalysisSourceNames(
     short = 'Current';
   }
   return { label: binding.label || `${name} · ${short}`, name, version };
-}
-
-function groupBrowserNodes<T>(
-  sourceId: TimelineSourceId,
-  kind: string,
-  items: T[],
-  getCategory: (item: T) => string | null,
-  toNode: (item: T) => SourceBrowserNode,
-  summarize: (members: T[]) => Pick<SourceBrowserNode, 'badge' | 'tooltip'>,
-): SourceBrowserNode[] {
-  const byCategory = new Map<string, T[]>();
-  items.forEach(item => {
-    const category = getCategory(item) ?? 'Uncategorized';
-    const members = byCategory.get(category) ?? [];
-    members.push(item);
-    byCategory.set(category, members);
-  });
-  return [...byCategory.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([category, members]) => ({
-      ...summarize(members),
-      children: members.map(toNode),
-      id: `${sourceId}/${kind}/category/${category}`,
-      kind: 'group',
-      label: category,
-    }));
-}
-
-function activityItemNode(sourceId: TimelineSourceId, name: string, count: number): SourceBrowserNode {
-  return {
-    action: { item: toIntervalType(name), sourceId, typeName: 'activity' },
-    badge: `${count}`,
-    id: `${sourceId}/activity/${name}`,
-    kind: 'item',
-    label: name,
-    tooltip: countLabel(count, 'activity', 'activities'),
-  };
-}
-
-function countLabel(count: number, one: string, many: string): string {
-  return `${count.toLocaleString()} ${count === 1 ? one : many}`;
-}
-
-/** What a group of activity types shows: its activities, with how many types they are of. */
-function summarizeActivityTypes(types: { count: number }[]): Pick<SourceBrowserNode, 'badge' | 'tooltip'> {
-  const activities = types.reduce((total, type) => total + type.count, 0);
-  return {
-    badge: `${activities}`,
-    tooltip: `${countLabel(types.length, 'type', 'types')} · ${countLabel(activities, 'activity', 'activities')}`,
-  };
 }
 
 export function createAnalysisSources(input: AnalysisSourcesInput): TimelineSource[] {

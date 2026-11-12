@@ -104,6 +104,7 @@ export enum Queries {
   DERIVATION_GROUP = 'derivation_group',
   DERIVATION_GROUP_COMP = 'derivation_group_comp',
   INSERT_ANALYSIS = 'insert_analysis_one',
+  INSERT_PLAN_SOURCE = 'insert_plan_source_one',
   INSERT_SOURCE = 'insert_source_one',
   INSERT_SOURCE_REVISION = 'insert_source_revision_one',
   PLAN_DERIVATION_GROUP = 'plan_derivation_group',

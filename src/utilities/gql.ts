@@ -424,6 +424,14 @@ const gql = {
     }
   `,
 
+  CREATE_PLAN_SOURCE: `#graphql
+    mutation CreatePlanSource($planSource: plan_source_insert_input!) {
+      planSource: ${Queries.INSERT_PLAN_SOURCE}(object: $planSource) {
+        id
+      }
+    }
+  `,
+
   CREATE_PLAN_TAGS: `#graphql
     mutation CreatePlanTags($tags: [plan_tags_insert_input!]!) {
       ${Queries.INSERT_PLAN_TAGS}(objects: $tags, on_conflict: {
@@ -3384,6 +3392,12 @@ const gql = {
         id
         label
         source_revision {
+          activity_types(order_by: { type: asc }) {
+            category
+            count
+            parameters
+            type
+          }
           coverage_end
           coverage_start
           id

@@ -1,11 +1,13 @@
 import { get } from 'svelte/store';
 import { describe, expect, test, vi } from 'vitest';
 import type { ExternalEvent } from '../types/external-event';
+import type { PlanSource } from '../types/importedSource';
 import type { PlanDataset, ResourceType, SimulationDataset, Span } from '../types/simulation';
 import type { SourceBrowserNode, TimelineSourceRegistry } from '../types/timelineSource';
 import {
   createExternalDatasetSources,
   createExternalEventsSource,
+  createImportedSources,
   createPlanSimulationSource,
   EXTERNAL_EVENTS_SOURCE_ID,
   filterSourceBrowserNodes,
@@ -152,6 +154,52 @@ describe('source browser adapters', () => {
       ['OBSERVE', '2', 'activity'],
       ['SLEW', '1', 'activity'],
     ]);
+  });
+
+  test('an imported revision with activities offers them by category and type, and serves them once it is ready', () => {
+    const subscribeActivities = vi.fn(() => ({
+      store: { subscribe: () => () => {} },
+      unsubscribe: () => {},
+    }));
+    const planSource = (status: string) =>
+      ({
+        id: 5,
+        label: null,
+        source_revision: {
+          activity_types: [
+            { category: 'DSN', count: 38, parameters: {}, type: 'ALLOCATION' },
+            { category: 'DSN', count: 700, parameters: {}, type: 'STATION_VIEW' },
+          ],
+          coverage_end: null,
+          coverage_start: null,
+          id: 110,
+          progress: {},
+          resources: [],
+          source: { id: 1, name: 'cruise015', source_type: 'pef_json' },
+          status,
+        },
+      }) as unknown as PlanSource;
+    const [source] = createImportedSources({
+      planSources: [planSource('success')],
+      subscribeActivities,
+      subscribeImported: vi.fn(),
+    });
+    const [activities] = source.browserNodes;
+    expect(activities.label).toEqual('Activities (738)');
+    expect(activities.children?.[0].children?.map(node => [node.label, node.badge, node.action?.sourceId])).toEqual([
+      ['ALLOCATION', '38', 'imported:5'],
+      ['STATION_VIEW', '700', 'imported:5'],
+    ]);
+    source.intervals?.subscribe?.({ types: ['ALLOCATION'] }, { plan: null, simulationDataset: null, user: null });
+    expect(subscribeActivities).toHaveBeenCalledOnce();
+
+    const [pending] = createImportedSources({
+      planSources: [planSource('pending')],
+      subscribeActivities,
+      subscribeImported: vi.fn(),
+    });
+    pending.intervals?.subscribe?.({ types: null }, { plan: null, simulationDataset: null, user: null });
+    expect(subscribeActivities).toHaveBeenCalledOnce();
   });
 
   test('external events keep derivation group > source > event type, and each leaf carries its source scope', () => {

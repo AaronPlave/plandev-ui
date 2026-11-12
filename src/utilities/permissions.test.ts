@@ -236,3 +236,24 @@ describe('importing a source revision', () => {
     expect(queryPermissions.CREATE_SOURCE_REVISION(as('user', 'me', { insert_source_one: true }))).toEqual(false);
   });
 });
+
+describe('using a source in a plan', () => {
+  const as = (activeRole: string, id: string, permissibleQueries: Record<string, true> = {}): User => ({
+    activeRole,
+    allowedRoles: [ADMIN_ROLE, 'user'],
+    defaultRole: activeRole,
+    id,
+    permissibleQueries,
+    rolePermissions: {},
+    token: '',
+  });
+  const plan = { collaborators: [{ collaborator: 'friend' }], id: 1, model_id: 1, owner: 'me' };
+  const insert: Record<string, true> = { insert_plan_source_one: true };
+
+  test("admins can add to any plan; anyone else only to a plan they own, as Hasura's check says", () => {
+    expect(queryPermissions.CREATE_PLAN_SOURCE(as(ADMIN_ROLE, 'admin'), plan)).toEqual(true);
+    expect(queryPermissions.CREATE_PLAN_SOURCE(as('user', 'me', insert), plan)).toEqual(true);
+    expect(queryPermissions.CREATE_PLAN_SOURCE(as('user', 'friend', insert), plan)).toEqual(false);
+    expect(queryPermissions.CREATE_PLAN_SOURCE(as('user', 'me'), plan)).toEqual(false);
+  });
+});

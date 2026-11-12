@@ -1993,6 +1993,33 @@ const effects = {
     }
   },
 
+  /** Makes an imported revision usable by a plan: it then appears under the plan's Sources. */
+  async createPlanSource(
+    plan: PlanWithOwners,
+    revision: { id: number; label: string },
+    user: User | null,
+  ): Promise<boolean> {
+    try {
+      if (!queryPermissions.CREATE_PLAN_SOURCE(user, plan)) {
+        throwPermissionError('add a source to this plan');
+      }
+      const data = await reqHasura<{ id: number }>(
+        gql.CREATE_PLAN_SOURCE,
+        { planSource: { plan_id: plan.id, source_revision_id: revision.id } },
+        user,
+      );
+      if (!data.planSource) {
+        throw Error(`Unable to add ${revision.label} to the plan`);
+      }
+      showSuccessToast(`Added ${revision.label} to the plan`);
+      return true;
+    } catch (e) {
+      catchError('log', 'Add Source to Plan Failed', e as Error);
+      showFailureToast('Add Source to Plan Failed');
+      return false;
+    }
+  },
+
   async createPlanTags(
     tags: PlanTagsInsertInput[],
     plan: PlanWithOwners,

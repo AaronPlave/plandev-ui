@@ -8,6 +8,7 @@ import type { PlanDataset, Profile, ResourceType, SimulationDataset, Span } from
 import type { Layer } from '../types/timeline';
 import type {
   SourceBrowserNode,
+  TimelineActivitySubscription,
   TimelineResourceSubscription,
   TimelineResourceSubscriptionContext,
   TimelineSource,
@@ -394,8 +395,64 @@ export function createExternalDatasetSources(input: ExternalDatasetSourcesInput)
     });
 }
 
+export function groupBrowserNodes<T>(
+  sourceId: TimelineSourceId,
+  kind: string,
+  items: T[],
+  getCategory: (item: T) => string | null,
+  toNode: (item: T) => SourceBrowserNode,
+  summarize: (members: T[]) => Pick<SourceBrowserNode, 'badge' | 'tooltip'>,
+): SourceBrowserNode[] {
+  const byCategory = new Map<string, T[]>();
+  items.forEach(item => {
+    const category = getCategory(item) ?? 'Uncategorized';
+    const members = byCategory.get(category) ?? [];
+    members.push(item);
+    byCategory.set(category, members);
+  });
+  return [...byCategory.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([category, members]) => ({
+      ...summarize(members),
+      children: members.map(toNode),
+      id: `${sourceId}/${kind}/category/${category}`,
+      kind: 'group',
+      label: category,
+    }));
+}
+
+export function activityItemNode(sourceId: TimelineSourceId, name: string, count: number): SourceBrowserNode {
+  return {
+    action: { item: toIntervalType(name), sourceId, typeName: 'activity' },
+    badge: `${count}`,
+    id: `${sourceId}/activity/${name}`,
+    kind: 'item',
+    label: name,
+    tooltip: countLabel(count, 'activity', 'activities'),
+  };
+}
+
+export function countLabel(count: number, one: string, many: string): string {
+  return `${count.toLocaleString()} ${count === 1 ? one : many}`;
+}
+
+/** What a group of activity types shows: its activities, with how many types they are of. */
+export function summarizeActivityTypes(types: { count: number }[]): Pick<SourceBrowserNode, 'badge' | 'tooltip'> {
+  const activities = types.reduce((total, type) => total + type.count, 0);
+  return {
+    badge: `${activities}`,
+    tooltip: `${countLabel(types.length, 'type', 'types')} · ${countLabel(activities, 'activity', 'activities')}`,
+  };
+}
+
 export type ImportedSourcesInput = {
   planSources: PlanSource[];
+  /** The revision's activities, of the requested types (all when null). */
+  subscribeActivities: (
+    planSource: PlanSource,
+    request: { types: string[] | null },
+    context: TimelineResourceSubscriptionContext,
+  ) => TimelineActivitySubscription;
   subscribeImported: (
     planSource: PlanSource,
     resource: SourceResource,
@@ -427,34 +484,74 @@ export function createImportedSources(input: ImportedSourcesInput): TimelineSour
       : revision.status === 'failed'
         ? 'The import failed'
         : 'The source is still being imported';
+    const activityTypes = revision.activity_types;
+    const activityCount = activityTypes.reduce((total, type) => total + type.count, 0);
     return {
-      browserNodes: [...byCategory.entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([category, members]) => ({
-          badge: `${members.length}`,
-          children: members.map(resource => ({
-            action: {
-              item: { name: resource.key, schema: resource.schema },
-              sourceId,
-              typeName: 'resource' as const,
-            },
-            id: `${sourceId}/resource/${resource.key}`,
-            kind: 'item' as const,
-            label: resource.key,
-            tags: [resource.schema.type],
-            tooltip: [resource.units, resource.sample_count !== null ? `${resource.sample_count} samples` : null]
-              .filter(Boolean)
-              .join(' · '),
+      browserNodes: [
+        ...[...byCategory.entries()]
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([category, members]) => ({
+            badge: `${members.length}`,
+            children: members.map(resource => ({
+              action: {
+                item: { name: resource.key, schema: resource.schema },
+                sourceId,
+                typeName: 'resource' as const,
+              },
+              id: `${sourceId}/resource/${resource.key}`,
+              kind: 'item' as const,
+              label: resource.key,
+              tags: [resource.schema.type],
+              tooltip: [resource.units, resource.sample_count !== null ? `${resource.sample_count} samples` : null]
+                .filter(Boolean)
+                .join(' · '),
+            })),
+            id: `${sourceId}/category/${category}`,
+            kind: 'group' as const,
+            label: category,
           })),
-          id: `${sourceId}/category/${category}`,
-          kind: 'group' as const,
-          label: category,
-        })),
+        ...(activityTypes.length
+          ? [
+              {
+                children: groupBrowserNodes(
+                  sourceId,
+                  'activity',
+                  activityTypes,
+                  type => type.category,
+                  type => activityItemNode(sourceId, type.type, type.count),
+                  summarizeActivityTypes,
+                ),
+                id: `${sourceId}/activities`,
+                kind: 'group' as const,
+                label: `Activities (${activityCount.toLocaleString()})`,
+                tooltip: summarizeActivityTypes(activityTypes).tooltip,
+              },
+            ]
+          : []),
+      ],
       description: ready
         ? `Revision ${revision.id} · ${revision.coverage_start ?? '?'} – ${revision.coverage_end ?? '?'}`
         : `Revision ${revision.id} · ${revision.status}`,
       group: 'Imported Sources',
       id: sourceId,
+      ...(activityTypes.length
+        ? {
+            intervals: {
+              catalog: activityTypes.map(type => toIntervalType(type.type, type.parameters)),
+              hasDirectives: false,
+              loading: false,
+              present: activityTypes.map(type => ({ count: type.count, name: type.type })),
+              revisionKey: ready ? `source-revision:${revision.id}` : null,
+              subscribe: (request: { types: string[] | null }, context: TimelineResourceSubscriptionContext) =>
+                ready
+                  ? input.subscribeActivities(planSource, request, context)
+                  : {
+                      store: readable({ error: unavailableReason ?? '', loading: false, spans: [] }),
+                      unsubscribe: () => {},
+                    },
+            },
+          }
+        : {}),
       kind: 'imported' as const,
       label: planSource.label ?? revision.source.name,
       resources: {
