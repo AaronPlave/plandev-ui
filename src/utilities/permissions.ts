@@ -719,6 +719,10 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
   DELETE_PLAN_SNAPSHOT: (user: User | null): boolean => {
     return getPermission([Queries.DELETE_PLAN_SNAPSHOT], user) && isUserAdmin(user);
   },
+  /** Hasura lets a plan's owner (any admin) stop using a revision; the revision itself is never touched. */
+  DELETE_PLAN_SOURCE: (user: User | null, plan: PlanWithOwners): boolean => {
+    return isUserAdmin(user) || (getPermission([Queries.DELETE_PLAN_SOURCE], user) && isPlanOwner(user, plan));
+  },
   DELETE_PLAN_TAG: (user: User | null): boolean => {
     return isUserAdmin(user) || getPermission([Queries.DELETE_PLAN_TAG], user);
   },

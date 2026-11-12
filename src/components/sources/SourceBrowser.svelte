@@ -8,7 +8,7 @@
   import PlusIcon from '@nasa-jpl/stellar/icons/plus.svg?component';
   import UploadIcon from '@nasa-jpl/stellar/icons/upload.svg?component';
   import { plan } from '../../stores/plan';
-  import { getTimelineSourcesContext } from '../../stores/timelineSources';
+  import { getTimelineSourcesContext, planSources } from '../../stores/timelineSources';
   import { view, viewAddFilterToRow } from '../../stores/views';
   import type { User } from '../../types/app';
   import type { Layer, Row, TimelineItemMetadata } from '../../types/timeline';
@@ -18,7 +18,14 @@
     TimelineSource,
     TimelineSourceRegistry,
   } from '../../types/timelineSource';
-  import { filterSourceBrowserNodes, getSource } from '../../utilities/timelineSources';
+  import effects from '../../utilities/effects';
+  import { queryPermissions } from '../../utilities/permissions';
+  import {
+    filterSourceBrowserNodes,
+    getImportedSourceId,
+    getLayersUsingSource,
+    getSource,
+  } from '../../utilities/timelineSources';
   import { tooltip } from '../../utilities/tooltip';
   import ExternalDatasetUpload from '../ExternalDatasetUpload.svelte';
   import PlanAddSourceDialog from './PlanAddSourceDialog.svelte';
@@ -45,9 +52,15 @@
   let isUploadVisible: boolean = false;
 
   $: rows = $view?.definition.plan.timelines[0]?.rows ?? [];
-  $: nodes = filterSourceBrowserNodes(getBrowserNodes($timelineSources, groups), filterText);
+  // On the Plan page, an imported source is a plan_source the plan's owner can detach.
+  $: canRemoveSources = showAddSource && !!$plan && queryPermissions.DELETE_PLAN_SOURCE(user, $plan);
+  $: nodes = filterSourceBrowserNodes(getBrowserNodes($timelineSources, groups, canRemoveSources), filterText);
 
-  function getBrowserNodes(registry: TimelineSourceRegistry, groupOrder: string[]): SourceBrowserNode[] {
+  function getBrowserNodes(
+    registry: TimelineSourceRegistry,
+    groupOrder: string[],
+    canRemove: boolean,
+  ): SourceBrowserNode[] {
     return groupOrder.map(group => {
       const sources = registry.sources.filter(source => source.group === group);
       // A group holding a single source of the same name shows that source's contents directly.
@@ -60,6 +73,7 @@
             id: `source:${source.id}`,
             kind: 'source',
             label: source.label,
+            removable: canRemove && source.kind === 'imported',
             tooltip: source.description,
           }));
       return {
@@ -104,6 +118,26 @@
       event.dataTransfer.dropEffect = 'link';
       event.dataTransfer.effectAllowed = 'link';
     }
+  }
+
+  async function onRemove({ detail: { id } }: CustomEvent<{ id: string; label: string }>) {
+    const planSource = $planSources.find(
+      ({ id: planSourceId }) => `source:${getImportedSourceId(planSourceId)}` === id,
+    );
+    if (!planSource || !$plan) {
+      return;
+    }
+    // Layers that read it are left alone: they show the source as unavailable instead of silently reading another.
+    const layersUsing = getLayersUsingSource(
+      $view?.definition.plan.timelines ?? [],
+      getImportedSourceId(planSource.id),
+    );
+    await effects.deletePlanSource(
+      $plan,
+      { id: planSource.id, label: planSource.label ?? planSource.source_revision.source.name },
+      layersUsing,
+      user,
+    );
   }
 
   function onToggle({ detail: { id, open } }: CustomEvent<{ id: string; open: boolean }>) {
@@ -157,6 +191,7 @@
       {rows}
       on:add={onAdd}
       on:dragstart={onDragStart}
+      on:remove={onRemove}
       on:toggle={onToggle}
     />
   </div>

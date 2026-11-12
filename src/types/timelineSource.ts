@@ -144,6 +144,8 @@ export type SourceBrowserNode = {
   id: string;
   kind: 'source' | 'group' | 'item';
   label: string;
+  /** A source the user can take away (the tree offers a Remove button, and says so with `remove`). */
+  removable?: boolean;
   tags?: string[];
   tooltip?: string;
 };

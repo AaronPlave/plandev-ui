@@ -959,6 +959,14 @@ const gql = {
     }
   `,
 
+  DELETE_PLAN_SOURCE: `#graphql
+    mutation DeletePlanSource($id: Int!) {
+      deleted: ${Queries.DELETE_PLAN_SOURCE}(id: $id) {
+        id
+      }
+    }
+  `,
+
   DELETE_PLAN_TAG: `#graphql
     mutation DeletePlanTag($tag_id: Int!, $plan_id: Int!) {
         ${Queries.DELETE_PLAN_TAG}( tag_id: $tag_id, plan_id: $plan_id) {

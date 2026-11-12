@@ -8,7 +8,7 @@
   import { Button } from '@nasa-jpl/stellar-svelte';
   import CaretDownIcon from '@nasa-jpl/stellar/icons/caret_down.svg?component';
   import CaretRightIcon from '@nasa-jpl/stellar/icons/caret_right.svg?component';
-  import { Filter, GripVertical } from 'lucide-svelte';
+  import { Filter, GripVertical, Trash2 } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
   import type { ChartType, Layer, Row } from '../../types/timeline';
   import type { SourceBrowserAction, SourceBrowserNode } from '../../types/timelineSource';
@@ -26,6 +26,7 @@
   const dispatch = createEventDispatcher<{
     add: { action: SourceBrowserAction; layer?: Layer; row?: Row };
     dragstart: { action: SourceBrowserAction; event: DragEvent };
+    remove: { id: string; label: string };
     toggle: { id: string; open: boolean };
   }>();
 
@@ -82,24 +83,36 @@
     </div>
   {:else}
     {@const open = isExpanded(node, expanded, forceExpanded)}
-    <button
-      class="source-browser-node st-typography-medium"
-      class:source={node.kind === 'source'}
-      style:padding-left={`${4 + depth * 12}px`}
-      aria-expanded={open}
-      data-node-id={node.id}
-      on:click={() => dispatch('toggle', { id: node.id, open })}
-      use:tooltip={{ content: node.tooltip ?? '', disabled: !node.tooltip, placement: 'right' }}
-    >
-      {#if open}<CaretDownIcon />{:else}<CaretRightIcon />{/if}
-      <span class="label">{node.label}</span>
-      {#each node.tags ?? [] as tag}
-        <span class="tag st-typography-label">{tag}</span>
-      {/each}
-      {#if node.badge}
-        <span class="badge st-typography-label">{node.badge}</span>
+    <div class="source-browser-node-row">
+      <button
+        class="source-browser-node st-typography-medium"
+        class:source={node.kind === 'source'}
+        style:padding-left={`${4 + depth * 12}px`}
+        aria-expanded={open}
+        data-node-id={node.id}
+        on:click={() => dispatch('toggle', { id: node.id, open })}
+        use:tooltip={{ content: node.tooltip ?? '', disabled: !node.tooltip, placement: 'right' }}
+      >
+        {#if open}<CaretDownIcon />{:else}<CaretRightIcon />{/if}
+        <span class="label">{node.label}</span>
+        {#each node.tags ?? [] as tag}
+          <span class="tag st-typography-label">{tag}</span>
+        {/each}
+        {#if node.badge}
+          <span class="badge st-typography-label">{node.badge}</span>
+        {/if}
+      </button>
+      {#if node.removable && !readOnly}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`Remove ${node.label} from plan`}
+          on:click={() => dispatch('remove', { id: node.id, label: node.label })}
+        >
+          <Trash2 size={14} />
+        </Button>
       {/if}
-    </button>
+    </div>
     {#if open}
       {#if node.children?.length}
         <svelte:self
@@ -111,6 +124,7 @@
           {rows}
           on:add
           on:dragstart
+          on:remove
           on:toggle
         />
       {:else if node.emptyMessage}
@@ -121,6 +135,12 @@
 {/each}
 
 <style>
+  .source-browser-node-row {
+    align-items: center;
+    display: flex;
+    padding-right: 4px;
+  }
+
   .source-browser-node,
   .source-browser-item {
     align-items: center;

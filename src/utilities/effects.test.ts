@@ -400,6 +400,66 @@ describe('Handle modal and requests in effects', () => {
     });
   });
 
+  describe('plan sources', () => {
+    const planOwner = (id: string): User => ({
+      ...mockUser,
+      activeRole: 'user',
+      id,
+      permissibleQueries: { delete_plan_source_by_pk: true, insert_plan_source_one: true },
+    });
+    const plan = { collaborators: [], id: 4, owner: 'me' } as unknown as Parameters<typeof effects.createPlanSource>[0];
+    const reqHasura = () => vi.mocked(Requests.reqHasura);
+
+    beforeEach(() => {
+      vi.spyOn(Errors, 'catchError').mockImplementation(catchErrorSpy);
+    });
+
+    it('attaches a revision once: a second attach is refused by the database and reported as already added', async () => {
+      const spy = vi.spyOn(Requests, 'reqHasura').mockResolvedValueOnce({ planSource: { id: 9 } });
+      expect(await effects.createPlanSource(plan, { id: 70, label: 'Tour' }, planOwner('me'))).toBe(true);
+      expect(spy).toHaveBeenCalledWith(
+        expect.stringContaining('insert_plan_source_one'),
+        { planSource: { plan_id: 4, source_revision_id: 70 } },
+        expect.anything(),
+      );
+      spy.mockRejectedValueOnce(
+        new Error('Uniqueness violation. duplicate key value violates unique constraint "plan_source_unique"'),
+      );
+      expect(await effects.createPlanSource(plan, { id: 70, label: 'Tour' }, planOwner('me'))).toBe(false);
+      const { showFailureToast } = await import('./toast');
+      expect(showFailureToast).toHaveBeenLastCalledWith('Tour is already in this plan');
+    });
+
+    it('detaches only the plan_source row, after confirmation, naming the layers that read it', async () => {
+      const confirm = vi.spyOn(Modals, 'showConfirmModal').mockResolvedValue({ confirm: true });
+      vi.spyOn(Requests, 'reqHasura').mockResolvedValue({ deleted: { id: 9 } });
+      expect(await effects.deletePlanSource(plan, { id: 9, label: 'Tour' }, ['"Power"'], planOwner('me'))).toBe(true);
+      expect(confirm.mock.calls[0][1]).toContain('not deleted');
+      expect(confirm.mock.calls[0][1]).toContain('"Power"');
+      expect(reqHasura()).toHaveBeenCalledTimes(1);
+      const [query, variables] = reqHasura().mock.calls[0];
+      expect(query).toContain('delete_plan_source_by_pk');
+      expect(query).not.toContain('delete_source');
+      expect(variables).toEqual({ id: 9 });
+    });
+
+    it('does nothing when the confirmation is declined, or when the user may not remove it', async () => {
+      vi.spyOn(Modals, 'showConfirmModal').mockResolvedValue({ confirm: false });
+      vi.spyOn(Requests, 'reqHasura').mockResolvedValue({ deleted: { id: 9 } });
+      expect(await effects.deletePlanSource(plan, { id: 9, label: 'Tour' }, [], planOwner('me'))).toBe(false);
+      // Not the plan's owner (a collaborator, as Hasura's check on the plan's owner would also refuse).
+      expect(await effects.deletePlanSource(plan, { id: 9, label: 'Tour' }, [], planOwner('someone'))).toBe(false);
+      expect(reqHasura()).not.toHaveBeenCalled();
+    });
+
+    it('reports a removal Hasura did not make', async () => {
+      vi.spyOn(Modals, 'showConfirmModal').mockResolvedValue({ confirm: true });
+      vi.spyOn(Requests, 'reqHasura').mockResolvedValue({ deleted: null });
+      expect(await effects.deletePlanSource(plan, { id: 9, label: 'Tour' }, [], planOwner('me'))).toBe(false);
+      expect(catchErrorSpy).toHaveBeenCalled();
+    });
+  });
+
   describe('getAnalysisSourceRevisions', () => {
     it('says null, not "none", when the read fails, and none when they are really gone', async () => {
       vi.spyOn(Errors, 'catchError').mockImplementation(catchErrorSpy);

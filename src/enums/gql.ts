@@ -64,6 +64,7 @@ export enum Queries {
   DELETE_PLAN_COLLABORATOR = 'delete_plan_collaborators_by_pk',
   DELETE_PLAN_DERIVATION_GROUP = 'delete_plan_derivation_group',
   DELETE_PLAN_SNAPSHOT = 'delete_plan_snapshot_by_pk',
+  DELETE_PLAN_SOURCE = 'delete_plan_source_by_pk',
   DELETE_PLAN_TAG = 'delete_plan_tags_by_pk', // pluralization is a typo in the db
   DELETE_PRESET_TO_DIRECTIVE = 'delete_preset_to_directive_by_pk',
   DELETE_SCHEDULING_CONDITION_DEFINITION_TAGS = 'delete_scheduling_condition_definition_tags',

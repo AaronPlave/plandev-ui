@@ -5,7 +5,7 @@ import type { ExternalEvent, ExternalEventType } from '../types/external-event';
 import type { DerivationGroup, PlanDerivationGroup } from '../types/external-source';
 import type { PlanSource, SourceResource } from '../types/importedSource';
 import type { PlanDataset, Profile, ResourceType, SimulationDataset, Span } from '../types/simulation';
-import type { Layer } from '../types/timeline';
+import type { Layer, Timeline } from '../types/timeline';
 import type {
   SourceBrowserNode,
   TimelineActivitySubscription,
@@ -34,6 +34,27 @@ export function getExternalDatasetSourceId(datasetId: number): TimelineSourceId 
  */
 export function getImportedSourceId(planSourceId: number): TimelineSourceId {
   return `${IMPORTED_SOURCE_PREFIX}${planSourceId}`;
+}
+
+/**
+ * What a layer bound to a source the registry doesn't have says. A removed plan source is told apart from other
+ * missing ones, because a layer outlives its removal (and a saved view can still name it): nothing replaces it, and
+ * adding the source to the plan again is a new binding, not this one.
+ */
+export function getSourceUnavailableMessage(sourceId: TimelineSourceId): string {
+  return sourceId.startsWith(IMPORTED_SOURCE_PREFIX)
+    ? `Imported source ${sourceId} is no longer in this plan, so this layer has nothing to show`
+    : `Source "${sourceId}" is not available in this plan`;
+}
+
+/** Row names (with a count when a row has several) of the layers in `timelines` that read `sourceId`. */
+export function getLayersUsingSource(timelines: Timeline[], sourceId: TimelineSourceId): string[] {
+  return timelines.flatMap(timeline =>
+    timeline.rows.flatMap(row => {
+      const count = row.layers.filter(layer => layer.sourceId === sourceId).length;
+      return count ? [`"${row.name || `Row ${row.id}`}"${count > 1 ? ` (${count} layers)` : ''}`] : [];
+    }),
+  );
 }
 
 /** The external profile a legacy (unbound) resource name resolves to, and the plan_dataset row it comes from. */
@@ -195,9 +216,7 @@ export function resolveResourceLayerSource(
   }
   return {
     kind: 'unavailable',
-    message: source
-      ? `Source "${source.label}" has no resources`
-      : `Source "${layer.sourceId}" is not available in this plan`,
+    message: source ? `Source "${source.label}" has no resources` : getSourceUnavailableMessage(layer.sourceId),
   };
 }
 

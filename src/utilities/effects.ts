@@ -2015,7 +2015,12 @@ const effects = {
       return true;
     } catch (e) {
       catchError('log', 'Add Source to Plan Failed', e as Error);
-      showFailureToast('Add Source to Plan Failed');
+      // plan_source is unique per plan and revision: a second tab or user may have added it first.
+      showFailureToast(
+        (e as Error).message.includes('plan_source_unique')
+          ? `${revision.label} is already in this plan`
+          : 'Add Source to Plan Failed',
+      );
       return false;
     }
   },
@@ -3605,6 +3610,46 @@ const effects = {
     } catch (e) {
       catchError('log', 'Delete Plan Snapshot Failed', e as Error);
       showFailureToast('Delete Plan Snapshot Failed');
+      return false;
+    }
+  },
+
+  /**
+   * Stops a plan using an imported revision. Only the plan_source row goes: the revision and its data stay, and
+   * timeline layers bound to it are left as they are, showing the source as unavailable.
+   * `layersUsing` names what in the open timeline reads it, for the confirmation.
+   */
+  async deletePlanSource(
+    plan: PlanWithOwners,
+    planSource: { id: number; label: string },
+    layersUsing: string[],
+    user: User | null,
+  ): Promise<boolean> {
+    try {
+      if (!queryPermissions.DELETE_PLAN_SOURCE(user, plan)) {
+        throwPermissionError('remove a source from this plan');
+      }
+      const { confirm } = await showConfirmModal(
+        'Remove',
+        `Remove "${planSource.label}" from this plan? The imported source and its data are not deleted, and it can be added again. ${
+          layersUsing.length
+            ? `${layersUsing.length === 1 ? 'This timeline layer reads' : 'These timeline layers read'} it and will show it as unavailable until it is added again: ${layersUsing.join(', ')}. `
+            : ''
+        }Saved views that use it will do the same.`,
+        'Remove Source from Plan',
+      );
+      if (!confirm) {
+        return false;
+      }
+      const data = await reqHasura<{ id: number }>(gql.DELETE_PLAN_SOURCE, { id: planSource.id }, user);
+      if (!data.deleted) {
+        throw Error(`Unable to remove ${planSource.label} from the plan`);
+      }
+      showSuccessToast(`Removed ${planSource.label} from the plan`);
+      return true;
+    } catch (e) {
+      catchError('log', 'Remove Source from Plan Failed', e as Error);
+      showFailureToast('Remove Source from Plan Failed');
       return false;
     }
   },

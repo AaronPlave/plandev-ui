@@ -96,6 +96,7 @@
     getLayerResourceRequestKey,
     getResourceRequestKey,
     getSource,
+    getSourceUnavailableMessage,
     PLAN_SOURCE_ID,
     resolveActivityLayerSourceId,
     resolveResourceLayerSource,
@@ -464,7 +465,7 @@
           const source = getSource($timelineSources, layer.sourceId);
           return source
             ? `Source "${source.label}" has no activities`
-            : `Source "${layer.sourceId}" is not available in this plan`;
+            : getSourceUnavailableMessage(resolveActivityLayerSourceId(layer));
         }),
     ),
   ];

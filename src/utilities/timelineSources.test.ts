@@ -15,13 +15,15 @@ import {
   findResourceType,
   getExternalDatasetSourceId,
   getLayerResourceRequestKey,
+  getLayersUsingSource,
   getResourceRequestKey,
+  getSourceUnavailableMessage,
   PLAN_SOURCE_ID,
   resolveActivityLayerSourceId,
   resolveResourceLayerSource,
   selectLegacyExternalProfile,
 } from './timelineSources';
-import { createTimelineResourceLayer, createRow, rebindResourceLayer } from './timeline';
+import { createRow, createTimelineActivityLayer, createTimelineResourceLayer, rebindResourceLayer } from './timeline';
 
 const soc: ResourceType = { name: '/battery/soc', schema: { type: 'real' } };
 
@@ -361,5 +363,36 @@ describe('legacy resource resolution', () => {
       sourceLabel: 'Dataset 50',
     });
     expect(wrong.horizontalGuides).toHaveLength(1);
+  });
+});
+
+describe('a plan source removed from the plan', () => {
+  const layer = (id: number, sourceId?: string) => ({ ...createTimelineActivityLayer([], { id }), sourceId });
+  const registryWith = (...sourceIds: string[]): TimelineSourceRegistry => ({
+    loading: false,
+    sources: sourceIds.map(id => ({ browserNodes: [], group: 'Imported Sources', id, kind: 'imported', label: id })),
+  });
+
+  test('its layers say it is gone and are never read from another source', () => {
+    const removed = layer(1, 'imported:9');
+    // The plan still has another imported source, and the same resource name might exist in it.
+    const registry = registryWith('imported:10');
+    const resolution = resolveResourceLayerSource(removed, registry);
+    expect(resolution).toEqual({ kind: 'unavailable', message: getSourceUnavailableMessage('imported:9') });
+    expect(getSourceUnavailableMessage('imported:9')).toContain('imported:9');
+    expect(getSourceUnavailableMessage('imported:9')).toContain('no longer in this plan');
+    // Ids are never reused, so adding the revision again is a different binding: the old layer stays unavailable.
+    expect(resolveResourceLayerSource(removed, registryWith('imported:10', 'imported:11')).kind).toBe('unavailable');
+  });
+
+  test('names the rows whose layers read it', () => {
+    const rows = [
+      { ...createRow([], { id: 1 }), layers: [layer(1, 'imported:9'), layer(2, 'imported:9')], name: 'Power' },
+      { ...createRow([], { id: 2 }), layers: [layer(3, 'imported:10')], name: 'Other' },
+      { ...createRow([], { id: 3 }), layers: [layer(4)], name: 'Plan' },
+    ];
+    const timelines = [{ rows }] as unknown as Parameters<typeof getLayersUsingSource>[0];
+    expect(getLayersUsingSource(timelines, 'imported:9')).toEqual(['"Power" (2 layers)']);
+    expect(getLayersUsingSource(timelines, 'imported:77')).toEqual([]);
   });
 });
