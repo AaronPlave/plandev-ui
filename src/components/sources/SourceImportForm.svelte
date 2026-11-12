@@ -8,12 +8,12 @@
   import { Button } from '@nasa-jpl/stellar-svelte';
   import { createEventDispatcher, onMount } from 'svelte';
   import type { SourceAdapterDescriptor } from '../../types/analysis';
-  import type { User } from '../../types/app';
+  import type { User, UserId } from '../../types/app';
   import { getAvailableAdapters } from '../../utilities/analysis';
   import effects from '../../utilities/effects';
 
   /** The sources a new revision can go into: those the user may import into (see CREATE_SOURCE_REVISION). */
-  export let importableSources: { id: number; name: string }[] = [];
+  export let importableSources: { id: number; name: string; owner: UserId | null }[] = [];
   /** Preselects a source to import a new revision of. */
   export let sourceId: number | null = null;
   /** Shows "Add it to this analysis" (on by default). */
@@ -21,7 +21,7 @@
   export let user: User | null;
 
   const dispatch = createEventDispatcher<{
-    imported: { adapter: string; add: boolean; file: File; revisionId: number; sourceId: number };
+    imported: { adapter: string; add: boolean; file: File; owner: UserId | null; revisionId: number; sourceId: number };
   }>();
 
   let adapters: SourceAdapterDescriptor[] = [];
@@ -55,7 +55,9 @@
     importing = true;
     const result = await effects.importSourceRevision(
       file,
-      importInto === 'new' ? { sourceName: newSourceName.trim() || file.name } : { sourceId: importInto },
+      importInto === 'new'
+        ? { sourceName: newSourceName.trim() || file.name }
+        : { owner: importableSources.find(({ id }) => id === importInto)?.owner ?? null, sourceId: importInto },
       adapter,
       user,
     );

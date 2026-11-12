@@ -12,7 +12,7 @@ import type {
   AnalysisSourceTarget,
   SourceRecovery,
 } from '../types/analysis';
-import type { User } from '../types/app';
+import type { User, UserId } from '../types/app';
 import type { TimeRange } from '../types/timeline';
 import type { TimelineSourceRegistry } from '../types/timelineSource';
 import {
@@ -20,10 +20,12 @@ import {
   createAnalysisDefinition,
   createAnalysisSources,
   createSourceActivityRow,
+  findAnalysisToReopen,
   getAnalysisTimeRanges,
   getImportOutcome,
   getNextAnalysisSourceId,
   importedActivityToSpan,
+  INITIAL_ACTIVITY_ROW_LIMIT,
   isActivityTypeShown,
   isSameAnalysisSource,
   removeSourceFromTimelines,
@@ -190,7 +192,7 @@ async function loadSourceDetails(bindings: AnalysisSourceBinding[], user: User |
   const datasetIds = bindings.flatMap(binding => (binding.kind === 'simulation' ? [binding.simulationDatasetId] : []));
   const planIds = bindings.flatMap(binding => (binding.kind === 'plan' ? [binding.planId] : []));
   // Plans are subscribed to (analysisPlans); this read is only for the time they cover.
-  const [revisions, datasets, plans] = await Promise.all([
+  const [revisionsRead, datasets, plans] = await Promise.all([
     effects.getAnalysisSourceRevisions(revisionIds, user),
     effects.getAnalysisSimulationDatasets(datasetIds, user),
     effects.getAnalysisPlans(planIds, user),
@@ -198,10 +200,12 @@ async function loadSourceDetails(bindings: AnalysisSourceBinding[], user: User |
   if (request !== sourceDetailsRequest) {
     return undefined;
   }
-  // A revision that is gone leaves the binding's source: what is left of it decides what can be offered instead.
+  // A failed read says nothing about deletion: keep what was known, and offer no recovery for revisions not read.
+  const revisions = revisionsRead ?? get(analysisSourceRevisions);
+  // A revision missing from a successful read is deleted; what is left of its source decides what can be offered.
   const lostSourceIds = [
     ...new Set(
-      bindings.flatMap(binding =>
+      (revisionsRead ? bindings : []).flatMap(binding =>
         binding.kind === 'imported' &&
         binding.sourceId !== undefined &&
         !revisions.some(revision => revision.id === binding.revisionId)
@@ -214,7 +218,9 @@ async function loadSourceDetails(bindings: AnalysisSourceBinding[], user: User |
   if (request !== sourceDetailsRequest) {
     return undefined;
   }
-  analysisSourceRecovery.set(recovery);
+  if (revisionsRead) {
+    analysisSourceRecovery.set(recovery);
+  }
   // Bindings saved before they recorded their source gain it here (saved with the analysis's next save).
   const identified = withSourceIdentity(get(analysisSourceBindings), revisions);
   if (identified !== get(analysisSourceBindings)) {
@@ -311,6 +317,8 @@ export type PendingAnalysisImport = {
   error?: string;
   /** Kept so a failed import can be tried again. */
   file: File;
+  /** The source's owner, which decides whether the user may import into it again. */
+  owner: UserId | null;
   revisionId: number;
   /** The Sources library has listed the revision; one listed and then gone was deleted. */
   seen?: boolean;
@@ -396,7 +404,7 @@ function settleImports(library: Parameters<typeof getImportOutcome>[0]) {
 
 /** Adds the revision to the analysis once its import succeeds. */
 export function addAnalysisSourceWhenImported(
-  imported: { adapter: string; file: File; revisionId: number; sourceId: number },
+  imported: { adapter: string; file: File; owner: UserId | null; revisionId: number; sourceId: number },
   user: User | null,
 ) {
   importUser = user;
@@ -413,7 +421,12 @@ export function dismissAnalysisImport(revisionId: number) {
 
 /** Imports the file again as a new revision of the same source, still to be added when it succeeds. */
 export async function retryAnalysisImport(failed: PendingAnalysisImport, user: User | null) {
-  const result = await effects.importSourceRevision(failed.file, { sourceId: failed.sourceId }, failed.adapter, user);
+  const result = await effects.importSourceRevision(
+    failed.file,
+    { owner: failed.owner, sourceId: failed.sourceId },
+    failed.adapter,
+    user,
+  );
   if (result) {
     dismissAnalysisImport(failed.revisionId);
     addAnalysisSourceWhenImported({ ...failed, ...result }, user);
@@ -500,14 +513,8 @@ async function save() {
     return;
   }
   analysisSaveStatus.set('saving');
-  // A plan source remembers the plan's revision as of this save, so the page can say when the plan has changed since.
-  const plans = get(analysisPlans) ?? [];
   const definition = {
-    sources: get(analysisSourceBindings).map(binding =>
-      binding.kind === 'plan'
-        ? { ...binding, planRevision: plans.find(plan => plan.id === binding.planId)?.revision ?? binding.planRevision }
-        : binding,
-    ),
+    sources: get(analysisSourceBindings),
     version: 1 as const,
     view: currentView.definition,
   };
@@ -552,18 +559,105 @@ export function autosaveAnalysis(user: User | null): () => void {
 }
 
 /**
- * "Analyze this plan": a new analysis of the plan's current activities and, when given, one of its simulations, with
- * a row for each. Returns the new analysis's id.
+ * Opens the analysis Analyze should return to, or makes `create` run. Returns the analysis's id, or null when the
+ * lookup or the creation failed (each reports itself).
+ */
+async function reopenOrCreate(
+  wanted: AnalysisSourceTarget[],
+  fresh: boolean,
+  user: User | null,
+  create: () => Promise<number | null>,
+): Promise<number | null> {
+  if (!fresh) {
+    const analyses = await effects.getAnalysisSourceUsage(user);
+    if (analyses === null) {
+      return null;
+    }
+    const existing = findAnalysisToReopen(analyses, wanted, {
+      canCreate: featurePermissions.analysis.canCreate(user),
+      userId: user?.id,
+    });
+    if (existing) {
+      return existing.id;
+    }
+  }
+  return create();
+}
+
+/**
+ * "Analyze" on a plan, with the simulation the user is looking at (`simulationDatasetId`) if any: the user's most
+ * recently updated analysis of that plan, and that simulation if given (see `findAnalysisToReopen`), else a new one.
+ * `fresh` ("New analysis") always makes a new one. Returns the analysis's id.
+ */
+export async function analyzePlan(
+  plan: { id: number; name: string },
+  simulationDatasetId: number | null,
+  user: User | null,
+  { fresh = false }: { fresh?: boolean } = {},
+): Promise<number | null> {
+  const wanted: AnalysisSourceTarget[] = [{ kind: 'plan', planId: plan.id }];
+  if (simulationDatasetId !== null) {
+    wanted.push({ kind: 'simulation', simulationDatasetId });
+  }
+  return reopenOrCreate(wanted, fresh, user, () => createPlanAnalysis(plan, simulationDatasetId, user));
+}
+
+/**
+ * "Analyze" on a successful imported revision: the user's most recently updated analysis that binds exactly that
+ * revision, else a new single-source analysis. `fresh` always makes a new one. Pending and failed revisions can't be
+ * analyzed. Returns the analysis's id.
+ */
+export async function analyzeRevision(
+  source: { id: number; name: string },
+  revision: { activityCount: number; id: number; status: string },
+  user: User | null,
+  { fresh = false }: { fresh?: boolean } = {},
+): Promise<number | null> {
+  if (revision.status !== 'success') {
+    return null;
+  }
+  const target: AnalysisSourceTarget = {
+    kind: 'imported',
+    revisionId: revision.id,
+    sourceId: source.id,
+    sourceName: source.name,
+  };
+  return reopenOrCreate([target], fresh, user, () =>
+    createRevisionAnalysis(source.name, target, revision.activityCount, user),
+  );
+}
+
+/**
+ * A new analysis of one imported revision, useful when it opens: it opens on the revision's coverage (every analysis
+ * does, from its sources) and, unless there are too many to load at once, has a row of its activities. Its resources
+ * are in the Sources browser.
+ */
+export async function createRevisionAnalysis(
+  sourceName: string,
+  target: Extract<AnalysisSourceTarget, { kind: 'imported' }>,
+  activityCount: number,
+  user: User | null,
+): Promise<number | null> {
+  const definition = createAnalysisDefinition();
+  const sources: AnalysisSourceBinding[] = [{ ...target, id: 'source-1' }];
+  if (activityCount > 0 && activityCount <= INITIAL_ACTIVITY_ROW_LIMIT) {
+    const [timeline] = definition.view.plan.timelines;
+    timeline.rows = [createSourceActivityRow(definition.view.plan.timelines, 'source-1', 'Activities')];
+  }
+  return effects.createAnalysis(`${sourceName} analysis`, { ...definition, sources }, user);
+}
+
+/**
+ * A new analysis of the plan's current activities and, when given, one of its simulations, with a row for each (or
+ * the plan's own view, rebound). Returns the new analysis's id.
  */
 export async function createPlanAnalysis(
-  plan: { id: number; name: string; revision: number },
+  plan: { id: number; name: string },
   simulationDatasetId: number | null,
   user: User | null,
 ): Promise<number | null> {
   const definition = createAnalysisDefinition();
-  const sources: AnalysisSourceBinding[] = [
-    { id: 'source-1', kind: 'plan', planId: plan.id, planRevision: plan.revision },
-  ];
+  const sources: AnalysisSourceBinding[] = [{ id: 'source-1', kind: 'plan', planId: plan.id }];
   if (simulationDatasetId !== null) {
     sources.push({ id: 'source-2', kind: 'simulation', simulationDatasetId });
   }

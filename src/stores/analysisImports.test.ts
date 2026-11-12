@@ -102,7 +102,7 @@ describe('an import started from an analysis, to be added when it succeeds', () 
   });
 
   const track = (revisionId = 30) =>
-    addAnalysisSourceWhenImported({ adapter: 'auto', file, revisionId, sourceId: 5 }, user);
+    addAnalysisSourceWhenImported({ adapter: 'auto', file, owner: 'test', revisionId, sourceId: 5 }, user);
   const bound = () => get(analysisSourceBindings).map(({ id, ...rest }) => rest);
 
   it('adds nothing while the revision is pending or importing, then adds it, with its source, once it succeeds', async () => {
@@ -145,7 +145,7 @@ describe('an import started from an analysis, to be added when it succeeds', () 
 
     effects.importSourceRevision.mockResolvedValue({ revisionId: 31, sourceId: 5 });
     await retryAnalysisImport(failed, user);
-    expect(effects.importSourceRevision).toHaveBeenCalledWith(file, { sourceId: 5 }, 'auto', user);
+    expect(effects.importSourceRevision).toHaveBeenCalledWith(file, { owner: 'test', sourceId: 5 }, 'auto', user);
     expect(get(pendingAnalysisImports)).toMatchObject([{ revisionId: 31, status: 'importing' }]);
     expect(library.count()).toBe(1);
 

@@ -824,6 +824,7 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
   GET_ANALYSIS_SOURCE_OPTIONS: () => true,
   GET_ANALYSIS_SOURCE_RECOVERY: () => true,
   GET_ANALYSIS_SOURCE_REVISIONS: () => true,
+  GET_ANALYSIS_SOURCE_USAGE: () => true,
   GET_CONSTRAINT_PROCEDURE_EFFECTIVE_ARGUMENTS_BULK: () => true,
   GET_EFFECTIVE_ACTIVITY_ARGUMENTS_BULK: () => true,
   GET_EFFECTIVE_MODEL_ARGUMENTS: () => true,

@@ -15,7 +15,7 @@
     retryAnalysisImport,
   } from '../../stores/analysis';
   import type { AnalysisSourceBinding, AnalysisSourceOptions, AnalysisSourceTarget } from '../../types/analysis';
-  import type { User } from '../../types/app';
+  import type { User, UserId } from '../../types/app';
   import {
     formatRange,
     formatRequestTime,
@@ -64,8 +64,8 @@
     return { kind: 'imported', revisionId, sourceId: source.id, sourceName: source.name };
   }
 
-  function planTarget(plan: { id: number; revision: number }): AnalysisSourceTarget {
-    return { kind: 'plan', planId: plan.id, planRevision: plan.revision };
+  function planTarget(plan: { id: number }): AnalysisSourceTarget {
+    return { kind: 'plan', planId: plan.id };
   }
 
   function simulationTarget(simulationDatasetId: number): AnalysisSourceTarget {
@@ -78,7 +78,14 @@
 
   async function onImported({
     detail: { add: addIt, ...imported },
-  }: CustomEvent<{ adapter: string; add: boolean; file: File; revisionId: number; sourceId: number }>) {
+  }: CustomEvent<{
+    adapter: string;
+    add: boolean;
+    file: File;
+    owner: UserId | null;
+    revisionId: number;
+    sourceId: number;
+  }>) {
     // Not added now: it can't be read until the import succeeds. The analysis adds it then.
     if (addIt) {
       addAnalysisSourceWhenImported(imported, user);

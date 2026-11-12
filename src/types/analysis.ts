@@ -7,8 +7,7 @@ import type { ViewDefinition } from './view';
 
 /**
  * What an analysis source reads: an imported revision, a simulation dataset of any plan, or a plan's current
- * activity directives. A plan is live: it changes after it is added. `planRevision` is the plan's revision when the
- * analysis was last saved, so the page can say the plan has changed since.
+ * activity directives. A plan is live: it changes after it is added, and the analysis always shows it as it is now.
  */
 export type AnalysisSourceTarget =
   | {
@@ -24,7 +23,7 @@ export type AnalysisSourceTarget =
       sourceName?: string;
     }
   | { kind: 'simulation'; simulationDatasetId: number }
-  | { kind: 'plan'; planId: number; planRevision?: number };
+  | { kind: 'plan'; planId: number };
 
 /**
  * A source an analysis composes. The analysis references it and never copies its data. `id` is what the analysis's
@@ -196,7 +195,9 @@ export type SourceLibraryEntry = {
 };
 
 /** Which analyses reference which sources (their bindings, read from each definition). */
-export type AnalysisSourceUsage = Pick<Analysis, 'id' | 'name' | 'owner'> & { sources: AnalysisSourceBinding[] | null };
+export type AnalysisSourceUsage = Pick<Analysis, 'id' | 'name' | 'owner' | 'updated_at'> & {
+  sources: AnalysisSourceBinding[] | null;
+};
 
 /** What can be added to an analysis: every source with its revisions, and every plan with its simulations. */
 export type AnalysisSourceOptions = {

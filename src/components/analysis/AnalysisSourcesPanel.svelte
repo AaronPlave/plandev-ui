@@ -9,7 +9,6 @@
   import { Badge, Button } from '@nasa-jpl/stellar-svelte';
   import { createEventDispatcher } from 'svelte';
   import {
-    analysis,
     analysisPlans,
     analysisSimulationDatasets,
     analysisSourceRecovery,
@@ -49,7 +48,6 @@
   /** The replacement chosen for a source whose revision was deleted; the newest successful one until chosen. */
   let replacements: Record<string, number> = {};
 
-  $: savedSources = $analysis?.definition.sources ?? [];
   // What each source is, recomputed whenever the details it is built from arrive or change.
   $: described = Object.fromEntries(
     bindings.map(binding => [
@@ -59,7 +57,6 @@
         $analysisSourceRevisions,
         $analysisSimulationDatasets,
         $analysisPlans ?? [],
-        savedSources,
         $analysisSourceRecovery,
       ),
     ]),
@@ -74,7 +71,6 @@
     revisions: AnalysisSourceRevision[],
     datasets: AnalysisSimulationDataset[],
     plans: AnalysisPlan[],
-    saved: AnalysisSourceBinding[],
     recoveries: Record<number, SourceRecovery | null>,
   ) {
     const revision = binding.kind === 'imported' ? revisions.find(({ id }) => id === binding.revisionId) : undefined;
@@ -86,7 +82,6 @@
       binding.kind === 'imported' && !revision && binding.sourceId !== undefined
         ? recoveries[binding.sourceId]
         : undefined;
-    const savedBinding = saved.find(({ id }) => id === binding.id);
     const newer = getNewerRevision(revision);
     return {
       ...getAnalysisSourceNames(binding, { dataset, plan, revision, source: recovery }),
@@ -94,12 +89,6 @@
       // Not offered when the newer revision is already here too (comparing revisions).
       newer: bindings.some(b => b.kind === 'imported' && b.revisionId === newer?.id) ? null : newer,
       plan,
-      // The plan has been edited since this analysis last saved what it saw of it.
-      planChanged:
-        !!plan &&
-        savedBinding?.kind === 'plan' &&
-        savedBinding.planRevision !== undefined &&
-        savedBinding.planRevision !== plan.revision,
       recovery,
       revision,
     };
@@ -150,9 +139,6 @@
             </div>
             {#if source?.resources?.unavailableReason}
               <div class="text-[11px] text-red-700">{source.resources.unavailableReason}</div>
-            {/if}
-            {#if info.planChanged}
-              <div class="text-[11px] text-muted-foreground">The plan has changed since this analysis was saved</div>
             {/if}
           </div>
           <div class="flex shrink-0">

@@ -12,6 +12,7 @@ import type {
   SourceRecovery,
   SourceRevisionSummary,
 } from '../types/analysis';
+import type { UserId } from '../types/app';
 import type { SourceResource } from '../types/importedSource';
 import type { ResourceType, Span } from '../types/simulation';
 import type { TimeRange, Timeline } from '../types/timeline';
@@ -236,6 +237,34 @@ export function isSameAnalysisSource(a: AnalysisSourceTarget, b: AnalysisSourceT
   }
   return a.kind === 'plan' && b.kind === 'plan' && a.planId === b.planId;
 }
+
+/**
+ * The analysis "Analyze" should return to, or null when it should make one: an analysis that binds every one of
+ * `wanted`. Analyze never adds to or swaps what an analysis binds, so a plan's analysis that lacks the simulation
+ * asked for does not match.
+ *
+ * Someone else's analysis is not a default for working: only the user's own analyses are candidates. They are used
+ * (read-only, as opened) only when the user cannot create one themselves. The most recently updated wins; ties go to
+ * the newest id, so the choice is the same every time.
+ */
+export function findAnalysisToReopen(
+  analyses: AnalysisSourceUsage[],
+  wanted: AnalysisSourceTarget[],
+  who: { canCreate: boolean; userId: UserId | undefined },
+): AnalysisSourceUsage | null {
+  const matching = analyses.filter(({ sources }) =>
+    wanted.every(target => (sources ?? []).some(binding => isSameAnalysisSource(binding, target))),
+  );
+  const own = matching.filter(({ owner }) => who.userId !== undefined && owner === who.userId);
+  const candidates = own.length || who.canCreate ? own : matching;
+  return [...candidates].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at) || b.id - a.id)[0] ?? null;
+}
+
+/**
+ * An imported revision with more activities than this does not get a starting activity row: one row would load them
+ * all into the browser. Its resources and activity types are added from the Sources browser instead.
+ */
+export const INITIAL_ACTIVITY_ROW_LIMIT = 10000;
 
 /** How merlin.analysis_activity names a binding's activities: its source_kind and source_ref. */
 export function getAnalysisActivitySource(binding: AnalysisSourceTarget): {

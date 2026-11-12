@@ -5,6 +5,7 @@
   source or revision (in a dialog), rename or delete it.
 -->
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { base } from '$app/paths';
   import { Badge, Button, Dialog } from '@nasa-jpl/stellar-svelte';
   import Nav from '../../components/app/Nav.svelte';
@@ -13,6 +14,7 @@
   import CssGrid from '../../components/ui/CssGrid.svelte';
   import Panel from '../../components/ui/Panel.svelte';
   import SectionTitle from '../../components/ui/SectionTitle.svelte';
+  import { analyzeRevision } from '../../stores/analysis';
   import { analysisSourceUsage, sources } from '../../stores/sources';
   import { getUserStore } from '../../stores/user';
   import type { SourceLibraryEntry } from '../../types/analysis';
@@ -46,6 +48,19 @@
   function openImport(sourceId: number | null) {
     importInto = sourceId;
     importOpen = true;
+  }
+
+  /** Opens your latest analysis of the revision, or makes one of it; `fresh` always makes a new one. */
+  async function analyze(source: SourceLibraryEntry, revision: SourceLibraryEntry['revisions'][number], fresh = false) {
+    const id = await analyzeRevision(
+      source,
+      { activityCount: revision.activity_types_aggregate.aggregate?.sum?.count ?? 0, ...revision },
+      $user,
+      { fresh },
+    );
+    if (id !== null) {
+      goto(`${base}/analyses/${id}`);
+    }
   }
 
   async function onRename(source: SourceLibraryEntry, event: Event) {
@@ -127,6 +142,9 @@
                   </div>
                 </div>
                 <div class="flex shrink-0 flex-wrap gap-1">
+                  <Button size="xs" disabled={!usable} on:click={() => usable && analyze(source, usable)}
+                    >Analyze</Button
+                  >
                   <Button
                     size="xs"
                     variant="outline"
@@ -183,7 +201,13 @@
                               <span class="text-muted-foreground">—</span>
                             {/each}
                           </td>
-                          <td>
+                          <td class="whitespace-nowrap">
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              disabled={revision.status !== 'success'}
+                              on:click={() => analyze(source, revision)}>Analyze</Button
+                            >
                             <Button
                               size="xs"
                               variant="outline"

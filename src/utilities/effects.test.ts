@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Errors from '../stores/console';
 import { mockUser } from '../tests/mocks/user/mockUser';
+import type { User } from '../types/app';
 import type { DerivationGroupInsertInput } from '../types/external-source';
 import type { Model } from '../types/model';
 import type { ArgumentsMap, ParametersMap } from '../types/parameter';
@@ -348,6 +349,64 @@ describe('Handle modal and requests in effects', () => {
         'Create Activity Directive Tags Failed',
         Error('Some activity directive tags were not successfully created'),
       );
+    });
+  });
+
+  describe('importSourceRevision', () => {
+    const owner = (id: string, queries: string[]): User => ({
+      ...mockUser,
+      activeRole: 'user',
+      id,
+      permissibleQueries: Object.fromEntries(queries.map(query => [query, true as const])),
+    });
+    const file = new File(['x'], 'tour.xml');
+    const inserted = { revision: { id: 70 }, source: { id: 7 } };
+    const reqHasura = () => vi.mocked(Requests.reqHasura);
+
+    beforeEach(() => {
+      vi.spyOn(effects, 'uploadFile').mockResolvedValue(3);
+      vi.spyOn(Requests, 'reqHasura').mockResolvedValue(inserted);
+    });
+
+    it('lets the owner of a source add a revision without permission to create sources', async () => {
+      const user = owner('me', ['insert_source_revision_one']);
+      const result = await effects.importSourceRevision(file, { owner: 'me', sourceId: 5 }, 'auto', user);
+      expect(result).toEqual({ owner: 'me', revisionId: 70, sourceId: 5 });
+      expect(reqHasura()).toHaveBeenCalledTimes(1); // the revision only: no source is created
+    });
+
+    it("refuses a revision of someone else's or an ownerless source, as Hasura would", async () => {
+      const user = owner('me', ['insert_source_one', 'insert_source_revision_one']);
+      expect(await effects.importSourceRevision(file, { owner: 'you', sourceId: 5 }, 'auto', user)).toBeNull();
+      expect(await effects.importSourceRevision(file, { owner: null, sourceId: 5 }, 'auto', user)).toBeNull();
+      expect(reqHasura()).not.toHaveBeenCalled();
+    });
+
+    it('lets an admin add a revision to any source', async () => {
+      const result = await effects.importSourceRevision(file, { owner: 'you', sourceId: 5 }, 'auto', mockUser);
+      expect(result?.revisionId).toBe(70);
+    });
+
+    it('needs both inserts to create a source and its first revision', async () => {
+      const revisionOnly = owner('me', ['insert_source_revision_one']);
+      expect(await effects.importSourceRevision(file, { sourceName: 'Tour' }, 'auto', revisionOnly)).toBeNull();
+      expect(reqHasura()).not.toHaveBeenCalled();
+      const both = owner('me', ['insert_source_one', 'insert_source_revision_one']);
+      expect(await effects.importSourceRevision(file, { sourceName: 'Tour' }, 'auto', both)).toEqual({
+        owner: 'me',
+        revisionId: 70,
+        sourceId: 7,
+      });
+    });
+  });
+
+  describe('getAnalysisSourceRevisions', () => {
+    it('says null, not "none", when the read fails, and none when they are really gone', async () => {
+      vi.spyOn(Errors, 'catchError').mockImplementation(catchErrorSpy);
+      vi.spyOn(Requests, 'reqHasura').mockRejectedValueOnce(new Error('permission denied'));
+      expect(await effects.getAnalysisSourceRevisions([1], mockUser)).toBeNull();
+      vi.spyOn(Requests, 'reqHasura').mockResolvedValueOnce({ revisions: [] });
+      expect(await effects.getAnalysisSourceRevisions([1], mockUser)).toEqual([]);
     });
   });
 

@@ -178,7 +178,7 @@ The 2-minute window compares the browser's clock with the database's `last_seen_
 - **Ownership.** Still owner-or-admin. Ownerless (CLI-registered) sources can be renamed, deleted and imported into only by admins, and a user cannot import a revision of someone else's source. That is the correct UI for the current Hasura rules and the wrong model for shared mission products; it needs groups or roles, which this pass deliberately did not start.
 - A revision deleted while an Analysis is open is noticed when the Analysis is next opened, not live.
 - Backfilled `sourceId`s on old analyses reach the database with the next save, so an analysis opened only read-only keeps its old definition.
-- "Imported Sources" vs "External Sources" naming, Analyze creating duplicates, and the stale "plan has changed" note are unchanged (sections 2 and 5).
+- "Imported Sources" vs "External Sources" naming is unchanged (section 5). Analyze creating duplicates and the stale "plan has changed" note are fixed in [section 10](#10-entering-and-returning-to-an-analysis).
 
 ### Not verified
 
@@ -188,6 +188,31 @@ The pass was not exercised in a browser. The `tol` stack's gateway runs with CAM
 
 - plandev-ui: `npm run check` (0 errors), `eslint` and `prettier --check` on the changed files, and `vitest` over `src/utilities`, `src/stores` and `src/components/analysis` (52 files, 1155 tests), all passing.
 - plandev: `./gradlew :source-ingest:test` with `SOURCES_IT_DB_URL` pointing at the `tol` stack database: 30 tests, none skipped, all passing.
+
+## 10. Entering and returning to an Analysis
+
+A follow-up on `claude/tol-sections-options`, closing the two workflow gaps above and three correctness items. No new entities or backend tables.
+
+**Analyze reopens.** Plan menu → **Analyze** now opens the user's existing analysis when there is a suitable one, and **New analysis** (same menu) always makes another. Selection (`findAnalysisToReopen`, one read of every analysis's `definition.sources`, the same data as the Sources page's "used by"):
+
+- an analysis must bind _every_ source asked for: the plan, and the simulation shown on the plan page when it succeeded. Analyze never adds to or swaps what an analysis binds, so a plan's analysis without that simulation does not match, and a new analysis (plan + simulation) is made. Running a new simulation therefore leads to a new analysis on the next Analyze; "New analysis" is also the way to get a plan-only one;
+- only the user's own analyses are candidates (an admin can edit anyone's, but opening someone else's analysis to work in is not a sensible default). Someone who _cannot_ create analyses gets another person's, read-only, rather than nothing;
+- most recently updated wins; ties go to the newest id.
+
+If the read fails, Analyze reports it and does nothing rather than creating a possible duplicate.
+
+**Imported Sources → Analyze.** Each source has **Analyze** (its latest successful revision), and every _successful_ row in the revision table has one for that exact revision. Pending and failed revisions have none. It opens the user's latest analysis that binds that revision (same rule as above; the revision may be one of several sources in it), else creates a single-source analysis, "<source> analysis". It opens on the revision's coverage like any analysis does (from its sources) and has one "Activities" row of the revision's activities, unless it has more than 10,000 (`INITIAL_ACTIVITY_ROW_LIMIT`) or none; a bigger product starts with an empty timeline and its resources and activity types in the Sources browser. There is no "New analysis" button on the Sources page: a second analysis of the same revision is made from the Analyses list.
+
+**Plan revision note removed.** A plan is live, so "The plan has changed since this analysis was saved" implied a snapshot that does not exist. `planRevision` is gone from bindings and from saves (old saved JSON still loads; the field is ignored and dropped on the next save).
+
+**Corrections.**
+
+- Importing a revision into an _existing_ source needed Source-creation permission, because `importSourceRevision` checked `CREATE_SOURCE_REVISION(user)` without the source. It now takes the source's owner and checks `CREATE_SOURCE_REVISION(user, source)`: revision insert and ownership (or admin). A new source and its first revision still need both inserts. The form, the page buttons, the action and Hasura's insert checks agree; the retry of a failed import carries the owner.
+- `getAnalysisSourceRevisions` returned `[]` on a failed read, which the analysis read as "every revision was deleted" and showed the replacement picker. It now returns `null`. A confirmed deletion (successful read, revision missing) still offers recovery; an unreadable revision shows "Unavailable revision" and keeps what was loaded, and offers no recovery. A failed read is retried only by reopening the analysis (or the existing 5 s poll when a revision is importing).
+- Removed the accidental `src/schemas/ui-view-schema-v4.json.rej`; its hunks were already in the schema.
+- Backend: the heartbeat test is renamed `anIngestRefreshesItsAdaptersSeenThroughItsHeartbeat` and says what it proves: an ingest refreshes its adapters' `last_seen_at` (the heartbeat beats once as it starts); it does not wait out the 5 s interval. `publishingMarksEveryInstalledAdapterSeenNow` no longer rewrites every adapter's timestamp, only those the worker installs.
+
+**Tests**: `findAnalysisToReopen` (ordering, ties, simulation match, read-only, no sources), `analyzePlan` and `analyzeRevision` (first use, reopen, fresh, simulation with and without a match, older revision, exact-revision reopen, pending/failed, large revision), import permissions, and deleted vs unavailable revisions.
 
 ## What stayed separate
 

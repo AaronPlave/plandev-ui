@@ -4611,7 +4611,11 @@ const effects = {
     }
   },
 
-  async getAnalysisSourceRevisions(ids: number[], user: User | null): Promise<AnalysisSourceRevision[]> {
+  /**
+   * The revisions that exist among `ids`. A revision missing from a successful read is deleted; `null` means the read
+   * failed, so nothing is known about any of them.
+   */
+  async getAnalysisSourceRevisions(ids: number[], user: User | null): Promise<AnalysisSourceRevision[] | null> {
     if (!ids.length) {
       return [];
     }
@@ -4620,7 +4624,19 @@ const effects = {
       return data.revisions ?? [];
     } catch (e) {
       catchError('log', 'Unable to retrieve source revisions', e as Error);
-      return [];
+      return null;
+    }
+  },
+
+  /** Every analysis with the sources it binds, to find one to reopen. `null` when the read failed. */
+  async getAnalysisSourceUsage(user: User | null): Promise<AnalysisSourceUsage[] | null> {
+    try {
+      const data = await reqHasura<AnalysisSourceUsage[]>(gql.GET_ANALYSIS_SOURCE_USAGE, {}, user);
+      return data.analyses ?? [];
+    } catch (e) {
+      catchError('log', 'Unable to look for an existing analysis', e as Error);
+      showFailureToast('Unable To Look For An Existing Analysis');
+      return null;
     }
   },
 
@@ -6180,18 +6196,24 @@ const effects = {
   },
 
   /**
-   * Imports a file as a new revision of a source: an existing one (`sourceId`) or a new one (`sourceName`). The file
-   * is uploaded, the revision requested, and the ingest worker does the rest; the revision is pending until it does.
-   * Returns the revision and its source.
+   * Imports a file as a new revision of a source: an existing one (`sourceId`, with its `owner`, which decides
+   * whether the user may add to it) or a new one (`sourceName`). A new source and its first revision need both
+   * inserts; a revision of an existing source needs only the revision insert and ownership (or admin), as Hasura
+   * checks. The file is uploaded, the revision requested, and the ingest worker does the rest; the revision is
+   * pending until it does. Returns the revision and its source, with the source's owner.
    */
   async importSourceRevision(
     file: File,
-    target: { sourceId: number } | { sourceName: string },
+    target: { owner: UserId | null; sourceId: number } | { sourceName: string },
     adapter: string,
     user: User | null,
-  ): Promise<{ revisionId: number; sourceId: number } | null> {
+  ): Promise<{ owner: UserId | null; revisionId: number; sourceId: number } | null> {
     try {
-      if (!queryPermissions.CREATE_SOURCE_REVISION(user)) {
+      const allowed =
+        'sourceId' in target
+          ? queryPermissions.CREATE_SOURCE_REVISION(user, { owner: target.owner })
+          : queryPermissions.CREATE_SOURCE_REVISION(user);
+      if (!allowed) {
         throwPermissionError('import a source');
       }
       const fileId = await effects.uploadFile(file, user);
@@ -6199,9 +6221,11 @@ const effects = {
         throw Error(`Unable to upload ${file.name}`);
       }
       let sourceId: number;
+      let owner: UserId | null;
       if ('sourceId' in target) {
-        sourceId = target.sourceId;
+        ({ owner, sourceId } = target);
       } else {
+        owner = user?.id ?? null;
         const data = await reqHasura<{ id: number }>(
           gql.CREATE_SOURCE,
           { source: { name: target.sourceName, source_type: adapter === 'auto' ? 'imported' : adapter } },
@@ -6229,7 +6253,7 @@ const effects = {
         throw Error(`Unable to import ${file.name}`);
       }
       showSuccessToast(`Importing ${file.name}`);
-      return { revisionId: data.revision.id, sourceId };
+      return { owner, revisionId: data.revision.id, sourceId };
     } catch (e) {
       catchError('log', 'Source Import Failed', e as Error);
       showFailureToast('Source Import Failed');

@@ -7,7 +7,7 @@
   import { ChevronDown } from 'lucide-svelte';
   import { PlanStatusMessages } from '../../enums/planStatusMessages';
   import { activityDirectivesMap } from '../../stores/activities';
-  import { createPlanAnalysis } from '../../stores/analysis';
+  import { analyzePlan } from '../../stores/analysis';
   import { planReadOnly } from '../../stores/plan';
   import { initialPlanSnapshotsLoading } from '../../stores/planSnapshots';
   import { simulationDataset } from '../../stores/simulation';
@@ -70,11 +70,14 @@
     }
   }
 
-  /** Opens a new analysis of this plan's current activities, with its shown simulation if that one succeeded. */
-  async function analyzePlan() {
+  /**
+   * Opens your latest analysis of this plan (and its shown simulation, if that one succeeded), or makes one;
+   * `fresh` always makes a new one.
+   */
+  async function analyze(fresh: boolean) {
     planMenu.hide();
     const datasetId = $simulationDataset?.status === 'success' ? $simulationDataset.id : null;
-    const id = await createPlanAnalysis(plan, datasetId, user);
+    const id = await analyzePlan(plan, datasetId, user, { fresh });
     if (id !== null) {
       goto(`${base}/analyses/${id}`);
     }
@@ -170,8 +173,11 @@
         <div class="column-name">View Snapshot History</div>
       </MenuItem>
       <MenuDivider />
-      <MenuItem on:click={analyzePlan} disabled={!featurePermissions.analysis.canCreate(user)}>
+      <MenuItem on:click={() => analyze(false)}>
         <div class="column-name">Analyze</div>
+      </MenuItem>
+      <MenuItem on:click={() => analyze(true)} disabled={!featurePermissions.analysis.canCreate(user)}>
+        <div class="column-name">New analysis</div>
       </MenuItem>
       <MenuItem on:click={onExportPlan} disabled={planExporting}>
         {#if !planExporting}

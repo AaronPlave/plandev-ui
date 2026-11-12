@@ -1374,6 +1374,18 @@ const gql = {
     }
   `,
 
+  GET_ANALYSIS_SOURCE_USAGE: `#graphql
+    query GetAnalysisSourceUsage {
+      analyses: ${Queries.ANALYSES}(order_by: { updated_at: desc }) {
+        id
+        name
+        owner
+        sources: definition(path: "sources")
+        updated_at
+      }
+    }
+  `,
+
   GET_CONSTRAINT_PROCEDURE_EFFECTIVE_ARGUMENTS_BULK: `#graphql
     query GetConstraintProcedureEffectiveArgumentsBulk($arguments: [ProcedureEffectiveArgumentsInput!]!) {
       constraintProcedureEffectiveArgumentsBulk: ${Queries.GET_CONSTRAINT_PROCEDURE_EFFECTIVE_ARGUMENTS_BULK}(
@@ -2535,6 +2547,7 @@ const gql = {
         name
         owner
         sources: definition(path: "sources")
+        updated_at
       }
     }
   `,

@@ -1,6 +1,11 @@
 import { get } from 'svelte/store';
 import { describe, expect, it, vi } from 'vitest';
-import type { AnalysisSimulationDataset, AnalysisSourceBinding, AnalysisSourceRevision } from '../types/analysis';
+import type {
+  AnalysisSimulationDataset,
+  AnalysisSourceBinding,
+  AnalysisSourceRevision,
+  AnalysisSourceUsage,
+} from '../types/analysis';
 import type { Span } from '../types/simulation';
 import type { Row, Timeline } from '../types/timeline';
 import type { TimelineActivitySubscription, TimelineResourceSubscription } from '../types/timelineSource';
@@ -8,6 +13,7 @@ import {
   bindViewToAnalysisSources,
   createAnalysisSources,
   createStaticActivitySubscription,
+  findAnalysisToReopen,
   getAnalysisSourceNames,
   getNewerRevision,
   getRevisionVersionLabel,
@@ -361,8 +367,14 @@ describe('source identity', () => {
     ).toBeNull();
   });
   it('lists the analyses using each revision, once each', () => {
-    const tour = { id: 1, name: 'Tour', owner: 'a', sources: [imported, { ...imported, id: 'source-2' }, planA] };
-    const empty = { id: 2, name: 'Empty', owner: 'a', sources: null };
+    const tour = {
+      id: 1,
+      name: 'Tour',
+      owner: 'a',
+      sources: [imported, { ...imported, id: 'source-2' }, planA],
+      updated_at: '',
+    };
+    const empty = { id: 2, name: 'Empty', owner: 'a', sources: null, updated_at: '' };
     expect(getRevisionUsage([tour, empty])).toEqual({ 18: [tour] });
   });
 
@@ -592,6 +604,7 @@ describe('where a source is used', () => {
       kind: 'imported' as const,
       revisionId,
     })),
+    updated_at: '',
   });
   const source = { id: 12, revisions: [{ id: 27 }, { id: 28 }] };
 
@@ -684,5 +697,64 @@ describe('an import that is waiting to be added', () => {
     expect(getRevisionSummary({ ...base, status: 'pending' })).toBe('Waiting for an ingest worker…');
     expect(getRevisionSummary({ ...base, status: 'incomplete' })).toBe('Importing…');
     expect(getRevisionSummary({ ...base, status: 'failed' })).toBe('Import failed');
+  });
+});
+
+describe('the analysis Analyze returns to', () => {
+  const plan = { kind: 'plan', planId: 1 } as const;
+  const sim = (simulationDatasetId: number) => ({ kind: 'simulation', simulationDatasetId }) as const;
+  const make = (
+    id: number,
+    owner: string,
+    updated_at: string,
+    ...targets: AnalysisSourceBinding[]
+  ): AnalysisSourceUsage => ({
+    id,
+    name: `analysis ${id}`,
+    owner,
+    sources: targets,
+    updated_at,
+  });
+  const me: Parameters<typeof findAnalysisToReopen>[2] = { canCreate: true, userId: 'me' };
+  const pick = (analyses: AnalysisSourceUsage[], wanted: Parameters<typeof findAnalysisToReopen>[1], who = me) =>
+    findAnalysisToReopen(analyses, wanted, who)?.id ?? null;
+
+  it('is the most recently updated of your analyses with every wanted source', () => {
+    const analyses = [
+      make(1, 'me', '2026-10-01T00:00:00Z', { ...plan, id: 'source-1' }),
+      make(2, 'me', '2026-10-03T00:00:00Z', { ...plan, id: 'source-1' }, { ...sim(5), id: 'source-2' }),
+      make(3, 'me', '2026-10-02T00:00:00Z', { ...plan, id: 'source-1' }),
+    ];
+    expect(pick(analyses, [plan])).toBe(2);
+    expect(pick(analyses, [plan, sim(5)])).toBe(2);
+    expect(pick(analyses, [plan, sim(6)])).toBeNull(); // no analysis has that simulation: none is changed to fit
+    expect(pick(analyses, [{ kind: 'plan', planId: 9 }])).toBeNull();
+  });
+
+  it('breaks ties by the newest id, whatever the order it was listed in', () => {
+    const same = '2026-10-01T00:00:00Z';
+    const a = make(7, 'me', same, { ...plan, id: 'source-1' });
+    const b = make(9, 'me', same, { ...plan, id: 'source-1' });
+    expect(pick([a, b], [plan])).toBe(9);
+    expect(pick([b, a], [plan])).toBe(9);
+  });
+
+  it("skips other people's analyses, even an admin's, unless you can't create your own", () => {
+    const theirs = [make(1, 'you', '2026-10-05T00:00:00Z', { ...plan, id: 'source-1' })];
+    expect(pick(theirs, [plan])).toBeNull();
+    expect(pick(theirs, [plan], { canCreate: false, userId: 'me' })).toBe(1);
+    // Your own analysis still wins over a newer one of theirs.
+    const both = [...theirs, make(2, 'me', '2026-10-01T00:00:00Z', { ...plan, id: 'source-1' })];
+    expect(pick(both, [plan], { canCreate: false, userId: 'me' })).toBe(2);
+  });
+
+  it('copes with an analysis with no readable sources, and with no one signed in', () => {
+    expect(pick([{ ...make(1, 'me', '2026-10-01T00:00:00Z'), sources: null }], [plan])).toBeNull();
+    expect(
+      pick([make(1, 'me', '2026-10-01T00:00:00Z', { ...plan, id: 'source-1' })], [plan], {
+        canCreate: false,
+        userId: undefined,
+      }),
+    ).toBe(1);
   });
 });

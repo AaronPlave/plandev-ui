@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Analysis, AnalysisDefinition } from '../types/analysis';
 import type { User } from '../types/app';
 import type { Row } from '../types/timeline';
-import { createAnalysisDefinition } from '../utilities/analysis';
+import { createAnalysisDefinition, createSourceActivityRow } from '../utilities/analysis';
 import { resolveResourceLayerSource } from '../utilities/timelineSources';
 
 const effects = vi.hoisted(() => ({
@@ -157,6 +157,21 @@ describe('analysis store', () => {
     expect(effects.getAnalysisSimulationDatasets).toHaveBeenCalledWith([1], user);
   });
 
+  it("opens a one-source analysis on the revision's coverage, with its activity row", async () => {
+    const definition = createAnalysisDefinition();
+    definition.sources = [{ id: 'source-1', kind: 'imported', revisionId: 18, sourceId: 1, sourceName: 'TOL' }];
+    const [timeline] = definition.view.plan.timelines;
+    timeline.rows = [createSourceActivityRow(definition.view.plan.timelines, 'source-1', 'Activities')];
+    await openAnalysis(savedAnalysis(definition), user);
+    expect(get(viewTimeRange)).toEqual({
+      end: Date.parse(revision.coverage_end),
+      start: Date.parse(revision.coverage_start),
+    });
+    const registry = get(analysisTimelineSources);
+    expect(registry.sources.map(source => source.id)).toEqual(['source-1']);
+    expect(get(view)?.definition.plan.timelines[0].rows[0].layers[0].sourceId).toBe('source-1');
+  });
+
   it('saves added sources and view state, and a reopened analysis gets them back', async () => {
     vi.useFakeTimers();
     await openAnalysis(savedAnalysis(createAnalysisDefinition()), user);
@@ -173,10 +188,32 @@ describe('analysis store', () => {
       { id: 'source-2', kind: 'imported', revisionId: 18, sourceId: 1, sourceName: 'TOL' },
     ]);
     expect(definition.view.plan.timelines).toHaveLength(1);
+    expect(JSON.stringify(definition)).not.toContain('planRevision'); // a plan source is live: no revision is kept
     stop();
 
     closeAnalysis();
     await openAnalysis(savedAnalysis(definition), user);
+    expect(get(analysisSourceBindings)).toEqual(definition.sources);
+  });
+
+  it('offers recovery for a revision that is really gone, not for one that could not be read', async () => {
+    const definition = createAnalysisDefinition();
+    definition.sources = [{ id: 'source-1', kind: 'imported', revisionId: 99, sourceId: 5, sourceName: 'TOL' }];
+    const left = { id: 5, name: 'TOL', revisions: [{ id: 18, metadata: {}, requested_at: '', status: 'success' }] };
+
+    // Read succeeded and the revision isn't there: deleted, and what is left of its source is offered.
+    effects.getAnalysisSourceRecovery.mockResolvedValueOnce({ 5: left } as never);
+    await openAnalysis(savedAnalysis(definition), user);
+    expect(effects.getAnalysisSourceRecovery).toHaveBeenCalledWith([5], user);
+    expect(get(analysisSourceRecovery)).toEqual({ 5: left });
+    closeAnalysis();
+    effects.getAnalysisSourceRecovery.mockClear();
+
+    // Read failed: nothing is known, so no recovery is offered.
+    effects.getAnalysisSourceRevisions.mockResolvedValueOnce(null);
+    await openAnalysis(savedAnalysis(definition), user);
+    expect(effects.getAnalysisSourceRecovery).toHaveBeenCalledWith([], user); // none to look up
+    expect(get(analysisSourceRecovery)).toEqual({});
     expect(get(analysisSourceBindings)).toEqual(definition.sources);
   });
 
