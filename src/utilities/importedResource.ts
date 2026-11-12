@@ -19,6 +19,9 @@ export type SourceSeries = {
   v?: (number | null)[];
 };
 
+/** A composed series, with whether each element is an original sample (see `ResourceValue.is_sample`). */
+export type ComposedSeries = SourceSeries & { sample: boolean[] };
+
 export type SourceQueryResult = {
   after: SourceSeries | null;
   approximate: boolean;
@@ -81,9 +84,14 @@ export function planViewportQuery(visible: TimeWindow, pixels: number, policy = 
   return { end, fidelity: 'display', pointBudget, start };
 }
 
+/** Every sample of the window is present and unreduced. A raw but approximate response is not. */
+export function isCompleteRaw(result: SourceQueryResult): boolean {
+  return !result.approximate && result.representation === 'raw';
+}
+
 export function toLoadedWindow(query: SourceQuery, result: SourceQueryResult): LoadedWindow {
   return {
-    complete: !result.approximate && result.representation === 'raw',
+    complete: isCompleteRaw(result),
     end: query.end / MICROS_PER_MS,
     resolution: (query.end - query.start) / MICROS_PER_MS / query.pointBudget,
     result,
@@ -103,10 +111,11 @@ export function coversViewport(loaded: LoadedWindow, visible: TimeWindow, pixels
   return loaded.resolution <= needed * policy.resolutionSlack;
 }
 
-function append(target: Required<Pick<SourceSeries, 't'>> & SourceSeries, source: SourceSeries, from = 0, to?: number) {
+function append(target: ComposedSeries, source: SourceSeries, sample: boolean, from = 0, to?: number) {
   const end = to ?? source.t.length;
   for (let i = from; i < end; i++) {
     target.t.push(source.t[i]);
+    target.sample.push(sample && (source.k ? source.k[i] : VALUE) === VALUE);
     target.v?.push(source.v ? source.v[i] : null);
     target.s?.push(source.s ? source.s[i] : null);
     target.k!.push(source.k ? source.k[i] : VALUE);
@@ -117,19 +126,27 @@ function append(target: Required<Pick<SourceSeries, 't'>> & SourceSeries, source
  * One series from a coarse overview and a finer detail window: overview samples outside the detail's reach,
  * the detail's boundary samples, and the detail's samples. Every element is a real sample, so the result is a
  * time-ordered subset of the resource, and the overview fills whatever the detail does not cover.
+ *
+ * `sample` says, per element, whether it is an original sample: true only for elements of a complete raw
+ * response, judged separately for the overview and the detail, so a raw detail window never vouches for the
+ * summary points around it, and a summary never gains markers because a window was fetched over it.
  */
 export function composeSeries(
   overview: SourceQueryResult | null,
   detail: SourceQueryResult | null,
   numeric: boolean,
-): SourceSeries {
-  const out: SourceSeries & { k: number[] } = numeric ? { k: [], t: [], v: [] } : { k: [], s: [], t: [] };
+): ComposedSeries {
+  const out: ComposedSeries & { k: number[] } = numeric
+    ? { k: [], sample: [], t: [], v: [] }
+    : { k: [], s: [], sample: [], t: [] };
+  const coarseSample = !!overview && isCompleteRaw(overview);
   if (!detail) {
     if (overview) {
-      append(out, overview.series);
+      append(out, overview.series, coarseSample);
     }
     return out;
   }
+  const detailSample = isCompleteRaw(detail);
   const detailParts = [detail.before, detail.series, detail.after].filter(
     (p): p is SourceSeries => !!p && p.t.length > 0,
   );
@@ -137,13 +154,13 @@ export function composeSeries(
   const last = detailParts.length ? detailParts[detailParts.length - 1].t.at(-1)! : undefined;
   const coarse = overview?.series;
   if (coarse && first !== undefined) {
-    append(out, coarse, 0, lowerBound(coarse.t, first));
+    append(out, coarse, coarseSample, 0, lowerBound(coarse.t, first));
   }
-  detailParts.forEach(part => append(out, part));
+  detailParts.forEach(part => append(out, part, detailSample));
   if (coarse && last !== undefined) {
-    append(out, coarse, upperBound(coarse.t, last));
+    append(out, coarse, coarseSample, upperBound(coarse.t, last));
   } else if (coarse && first === undefined) {
-    append(out, coarse);
+    append(out, coarse, coarseSample);
   }
   return out;
 }
@@ -182,9 +199,11 @@ function upperBound(xs: number[], x: number): number {
  *  - step (constant) and discrete resources: each sample holds until the next one, drawn as a (start, end) pair,
  *    and the last holds until `holdUntil` (ms);
  *  - a valid null has y = null; a gap also has is_gap.
+ * A value is tagged `is_sample` only where `series.sample` vouches for the sample itself; the hold endpoint that
+ * extends a step is never one. The endpoint is not tagged `is_hold`, which would change the line a linear layer draws.
  */
 export function seriesToValues(
-  series: SourceSeries,
+  series: SourceSeries & { sample?: boolean[] },
   { holdUntil, interpolation, numeric }: { holdUntil: number; interpolation: 'linear' | 'constant'; numeric: boolean },
 ): ResourceValue[] {
   const values: ResourceValue[] = [];
@@ -201,12 +220,13 @@ export function seriesToValues(
     const x = series.t[i] / MICROS_PER_MS;
     const y = yAt(i);
     const is_gap = gapAt(i);
+    const is_sample = y !== null && series.sample?.[i] === true;
     if (numeric && interpolation === 'linear' && !is_gap) {
-      values.push({ x, y });
+      values.push(is_sample ? { is_sample, x, y } : { x, y });
       continue;
     }
     const nextX = i + 1 < n ? series.t[i + 1] / MICROS_PER_MS : Math.max(x, holdUntil);
-    values.push({ is_gap, x, y });
+    values.push(is_sample ? { is_gap, is_sample, x, y } : { is_gap, x, y });
     values.push({ is_gap, x: nextX, y });
   }
   return values;

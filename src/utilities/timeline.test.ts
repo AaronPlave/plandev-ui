@@ -30,6 +30,7 @@ import {
   DEFAULT_LINE_STYLE,
   DEFAULT_POINT_SHAPE,
   DEFAULT_SHOW_POINTS_MODE,
+  selectMarkerPoints,
   clampGuideBand,
   clampLineSize,
   clampOpacity,
@@ -3664,5 +3665,38 @@ describe('formatBandDuration', () => {
   test('does not roll hours into days below a full day, nor lose a day boundary', () => {
     expect(formatBandDuration(23 * h + 59 * m)).toEqual('23h 59m');
     expect(formatBandDuration(d)).toEqual('1d 00h');
+  });
+});
+
+describe('selectMarkerPoints', () => {
+  const sample = (x: number) => ({ sample: true, x, y: x });
+  const synthetic = (x: number) => ({ sample: false, x, y: x });
+  const unknown = (x: number) => ({ x, y: x });
+  const base = { decimationReduced: false, pointRadius: 2, width: 400 };
+
+  test('auto marks only verified samples', () => {
+    const points = [sample(1), synthetic(2), unknown(3), { sample: true, x: 4, y: null }, sample(5)];
+    expect(selectMarkerPoints(points, { ...base, mode: 'auto' }).map(p => p.x)).toEqual([1, 5]);
+  });
+
+  test('auto draws nothing once decimation reduced the set', () => {
+    expect(selectMarkerPoints([sample(1)], { ...base, decimationReduced: true, mode: 'auto' })).toEqual([]);
+  });
+
+  test('auto draws nothing when samples are too dense to tell apart; always still marks them', () => {
+    const dense = Array.from({ length: 200 }, (_, i) => sample(i));
+    expect(selectMarkerPoints(dense, { ...base, mode: 'auto' })).toEqual([]);
+    expect(selectMarkerPoints(dense, { ...base, mode: 'always' })).toHaveLength(200);
+    const sparse = Array.from({ length: 50 }, (_, i) => sample(i));
+    expect(selectMarkerPoints(sparse, { ...base, mode: 'auto' })).toHaveLength(50);
+  });
+
+  test('always never marks synthetic, summary or unverified points, even when decimated', () => {
+    const points = [sample(1), synthetic(2), unknown(3)];
+    expect(selectMarkerPoints(points, { ...base, decimationReduced: true, mode: 'always' }).map(p => p.x)).toEqual([1]);
+  });
+
+  test('never marks nothing', () => {
+    expect(selectMarkerPoints([sample(1)], { ...base, mode: 'never' })).toEqual([]);
   });
 });

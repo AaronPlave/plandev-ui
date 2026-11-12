@@ -45,6 +45,7 @@
     getYScale,
     isDroppableHoldPoint,
     minMaxDecimation,
+    selectMarkerPoints,
   } from '../../utilities/timeline';
 
   export let contextmenu: MouseEvent | undefined;
@@ -200,7 +201,7 @@
   }
 
   function processPoint(point: LinePoint, yScale: YScale | ScalePoint<string>): LinePoint {
-    const { id, name, type } = point;
+    const { id, name, sample, type } = point;
     const x = (xScaleView as ScaleTime<number, number, never>)(point.x);
     let y = null;
     if (point.y !== null) {
@@ -209,7 +210,7 @@
     // Scaled alongside y so the fill's lower edge survives decimation and gap insertion on the point
     // itself, rather than having to be looked up by an index that those steps invalidate
     const y0 = point.y0 === null || point.y0 === undefined ? point.y0 : (getScaledYValue(point.y0, yScale) ?? null);
-    return { id, name, type, x, y, y0 };
+    return { id, name, sample, type, x, y, y0 };
   }
 
   async function draw(): Promise<void> {
@@ -269,11 +270,16 @@
       finalPoints = pointsInView;
       // Perform decimation if requested
       if (pointsInView.length > 0 && decimate) {
+        const original = new Set(pointsInView);
         finalPoints = minMaxDecimation<LinePoint>(
           pointsInView as { x: number; y: number }[], // At this point we have filtered out all gaps
           0,
           pointsInView.length,
           drawWidth,
+        ).map(
+          // Decimation moves the min/max points it keeps to the bin's average x, so those copies are no longer
+          // where the sample was recorded
+          point => (original.has(point) ? point : { ...point, sample: false }),
         );
         // Push the last point in view again since decimation does not result in properly sorted points within a time bin
         const lastPoint = pointsInView.at(-1);
@@ -314,10 +320,16 @@
       // the set, since one sprite per pixel column reads as noise rather than as data.
       const decimationKeptEveryPoint =
         !decimate || Math.abs(finalPoints.length - gapPoints.length - pointsInView.length) < 4;
-      const shouldDrawPoints =
-        lineDrawOptions.showPoints === 'always' || (lineDrawOptions.showPoints !== 'never' && decimationKeptEveryPoint);
-      if (shouldDrawPoints) {
-        drawPointsRequest = window.requestAnimationFrame(() => drawPoints(finalPoints));
+      // Markers only ever go on verified original samples (see selectMarkerPoints); the line is drawn from
+      // finalPoints regardless, so none of this touches its geometry.
+      const markerPoints = selectMarkerPoints(finalPoints, {
+        decimationReduced: !decimationKeptEveryPoint,
+        mode: lineDrawOptions.showPoints,
+        pointRadius: lineDrawOptions.pointRadius,
+        width: drawWidth,
+      });
+      if (markerPoints.length > 0) {
+        drawPointsRequest = window.requestAnimationFrame(() => drawPoints(markerPoints));
       }
 
       // Draw the fill under the line before the line itself so that the line remains crisp on top.
@@ -534,6 +546,7 @@
               // If ordinal take the first value since both neigboring values will always be indentical
               drawPoint = {
                 ...mouseOverPoints[0],
+                sample: false,
                 x: xDate,
                 y: mouseOverPoints[0].y,
               };
@@ -542,6 +555,7 @@
               const interpY = (1 - percent) * (leftY as number) + percent * (rightY as number);
               drawPoint = {
                 ...mouseOverPoints[0],
+                sample: false,
                 x: xDate,
                 y: interpY,
               };
@@ -571,22 +585,32 @@
             const fill = lineColor;
             const scalar = pointRadius || 1;
 
-            // Draw the point using 3 circles
-            const circle3 = new Path2D();
-            circle3.arc(x, y, scalar + 3, 0, 2 * Math.PI);
-            interactionCtx.fillStyle = fill;
-            interactionCtx.fill(circle3);
+            if (drawPoint.sample === true) {
+              // Draw the point using 3 circles
+              const circle3 = new Path2D();
+              circle3.arc(x, y, scalar + 3, 0, 2 * Math.PI);
+              interactionCtx.fillStyle = fill;
+              interactionCtx.fill(circle3);
 
-            const circle2 = new Path2D();
-            circle2.arc(x, y, scalar + 2, 0, 2 * Math.PI);
-            interactionCtx.fillStyle = 'white';
-            interactionCtx.fill(circle2);
+              const circle2 = new Path2D();
+              circle2.arc(x, y, scalar + 2, 0, 2 * Math.PI);
+              interactionCtx.fillStyle = 'white';
+              interactionCtx.fill(circle2);
 
-            const circle = new Path2D();
-            interactionCtx.fillStyle = fill;
-            interactionCtx.lineWidth = lineWidth;
-            circle.arc(x, y, scalar + 1, 0, 2 * Math.PI);
-            interactionCtx.fill(circle);
+              const circle = new Path2D();
+              interactionCtx.fillStyle = fill;
+              interactionCtx.lineWidth = lineWidth;
+              circle.arc(x, y, scalar + 1, 0, 2 * Math.PI);
+              interactionCtx.fill(circle);
+            } else {
+              // An interpolated, hold or computed position is not a recorded sample, so it gets a hollow ring
+              // rather than the solid dot a sample gets
+              interactionCtx.beginPath();
+              interactionCtx.arc(x, y, scalar + 3, 0, 2 * Math.PI);
+              interactionCtx.lineWidth = 2;
+              interactionCtx.strokeStyle = fill;
+              interactionCtx.stroke();
+            }
 
             const maxY = scalar + 3;
 
@@ -685,6 +709,7 @@
           tempPoints.push({
             id: id++,
             name,
+            sample: value.is_sample === true,
             type: 'line',
             x,
             y,
@@ -715,6 +740,7 @@
           tempPoints.push({
             id: id++,
             name,
+            sample: value.is_sample === true,
             type: 'line',
             x,
             y,
@@ -742,6 +768,7 @@
           tempPoints.push({
             id: id++,
             name,
+            sample: value.is_sample === true,
             type: 'line',
             x,
             y,

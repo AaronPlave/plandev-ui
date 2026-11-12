@@ -76,6 +76,12 @@ export type ResourceValue = {
    * the segment's rate of change.
    */
   is_hold?: boolean;
+  /**
+   * True only when this value is an original, full-resolution recorded sample, and so may carry a point
+   * marker. Absent means "not established": summary points, hold endpoints, rate-derived segment endpoints,
+   * interpolations and stacked totals are all left unset.
+   */
+  is_sample?: boolean;
   x: number;
   y: number | string | null;
 };

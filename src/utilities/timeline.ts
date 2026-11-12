@@ -209,6 +209,28 @@ export const DEFAULT_LINE_STYLE: LineStyle = 'solid';
 export const DEFAULT_MARKER_STYLE: MarkerStyle = 'line';
 export const DEFAULT_POINT_SHAPE: PointShape = 'circle';
 export const DEFAULT_SHOW_POINTS_MODE: ShowPointsMode = 'auto';
+
+/**
+ * The points to draw persistent markers on. A marker asserts "this is a recorded sample", so only points with
+ * `sample === true` qualify, in every mode: unknown provenance is not proof. On top of that, 'auto' draws
+ * nothing once decimation has thinned the set, or when the samples are too close for markers to be told
+ * apart (fewer than a marker's width of pixels each); 'always' keeps drawing every sample.
+ */
+export function selectMarkerPoints<T extends { sample?: boolean; y: unknown }>(
+  points: T[],
+  options: { decimationReduced: boolean; mode: ShowPointsMode; pointRadius: number; width: number },
+): T[] {
+  const { decimationReduced, mode, pointRadius, width } = options;
+  if (mode === 'never') {
+    return [];
+  }
+  const samples = points.filter(point => point.sample === true && point.y !== null);
+  const spacing = Math.max(4, 2 * pointRadius + 1);
+  if (mode === 'auto' && (decimationReduced || samples.length * spacing > width)) {
+    return [];
+  }
+  return samples;
+}
 export const DEFAULT_XRANGE_LABEL_VISIBILITY: XRangeLabelVisibility = 'auto';
 
 /**

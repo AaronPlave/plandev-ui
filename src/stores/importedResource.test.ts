@@ -112,6 +112,35 @@ describe('createImportedResourceSubscription', () => {
   });
 });
 
+describe('sample provenance by target', () => {
+  it('a plan source and an analysis revision mark the same samples, and only from complete raw responses', async () => {
+    const marked = async (
+      target: { planSourceId: number } | { revisionId: number },
+      extra: Partial<SourceQueryResult>,
+    ) => {
+      const sub = createImportedResourceSubscription({
+        coverage: { end: 100_000, start: 0 },
+        interpolation: 'linear',
+        key: 'r',
+        numeric: true,
+        query: async () => result([0, 50_000_000], [0, 5], extra),
+        resourceType: { name: 'r', schema: { type: 'real' } },
+        target,
+      });
+      await flush();
+      await flush();
+      const values = get(sub.store).resource?.values.map(v => v.is_sample === true);
+      sub.unsubscribe();
+      return values;
+    };
+    const rawComplete = { approximate: false, representation: 'raw' as const };
+    expect(await marked({ planSourceId: 1 }, rawComplete)).toEqual([true, true]);
+    expect(await marked({ revisionId: 1 }, rawComplete)).toEqual([true, true]);
+    expect(await marked({ planSourceId: 1 }, {})).toEqual([false, false]);
+    expect(await marked({ revisionId: 1 }, {})).toEqual([false, false]);
+  });
+});
+
 describe('getSourceQuery', () => {
   beforeEach(() => {
     vi.useFakeTimers();

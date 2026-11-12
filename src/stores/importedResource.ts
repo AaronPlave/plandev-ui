@@ -6,6 +6,7 @@ import effects from '../utilities/effects';
 import {
   composeSeries,
   coversViewport,
+  isCompleteRaw,
   planViewportQuery,
   seriesToValues,
   toLoadedWindow,
@@ -189,7 +190,7 @@ export function createImportedResourceSubscription(options: ImportedResourceOpti
         overview = result;
         // Nothing exists outside the coverage, so the overview serves any viewport its resolution suffices for.
         overviewWindow = {
-          complete: !result.approximate && result.representation === 'raw',
+          complete: isCompleteRaw(result),
           end: Infinity,
           resolution: (coverage.end - coverage.start) / OVERVIEW_BUDGET,
           result,

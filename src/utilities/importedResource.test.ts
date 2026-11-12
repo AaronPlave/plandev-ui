@@ -3,6 +3,7 @@ import {
   composeSeries,
   coversViewport,
   GAP,
+  isCompleteRaw,
   NULL,
   planViewportQuery,
   seriesToValues,
@@ -88,11 +89,11 @@ describe('seriesToValues', () => {
       numeric: true,
     });
     expect(values).toEqual([
-      { is_gap: false, x: 5, y: 3 },
+      { is_gap: false, is_sample: true, x: 5, y: 3 },
       { is_gap: false, x: 15, y: 3 },
-      { is_gap: false, x: 15, y: 5 },
+      { is_gap: false, is_sample: true, x: 15, y: 5 },
       { is_gap: false, x: 30, y: 5 },
-      { is_gap: false, x: 30, y: 7 },
+      { is_gap: false, is_sample: true, x: 30, y: 7 },
       { is_gap: false, x: 40, y: 7 },
     ]);
   });
@@ -105,9 +106,9 @@ describe('seriesToValues', () => {
       numeric: true,
     });
     expect(values).toEqual([
-      { x: 5, y: 3 },
-      { x: 15, y: 5 },
-      { x: 30, y: 7 },
+      { is_sample: true, x: 5, y: 3 },
+      { is_sample: true, x: 15, y: 5 },
+      { is_sample: true, x: 30, y: 7 },
     ]);
   });
 
@@ -141,5 +142,79 @@ describe('seriesToValues', () => {
       [2, 'C'],
       [3, 'C'],
     ]);
+  });
+});
+
+describe('sample provenance', () => {
+  const raw = (series: SourceSeries, extra: Partial<SourceQueryResult> = {}) => result(series, extra);
+  const summary = (series: SourceSeries) => result(series, { approximate: true, representation: 'summary' });
+  const render = (series: ReturnType<typeof composeSeries>, interpolation: 'linear' | 'constant' = 'linear') =>
+    seriesToValues(series, { holdUntil: 100, interpolation, numeric: true });
+  const sampleXs = (values: { is_sample?: boolean; x: number }[]) => values.filter(v => v.is_sample).map(v => v.x);
+
+  it('a complete raw response is eligible; summary and approximate raw responses are not', () => {
+    const series = { t: [0, 10_000], v: [1, 2] };
+    expect(isCompleteRaw(raw(series))).toBe(true);
+    expect(isCompleteRaw(summary(series))).toBe(false);
+    expect(isCompleteRaw(raw(series, { approximate: true }))).toBe(false);
+    expect(sampleXs(render(composeSeries(raw(series), null, true)))).toEqual([0, 10]);
+    expect(sampleXs(render(composeSeries(summary(series), null, true)))).toEqual([]);
+    expect(sampleXs(render(composeSeries(raw(series, { approximate: true }), null, true)))).toEqual([]);
+  });
+
+  it('judges the overview and the detail independently', () => {
+    const overview = summary({ t: [0, 10_000, 20_000, 30_000, 40_000], v: [0, 1, 2, 3, 4] });
+    const detail = raw(
+      { t: [12_000, 15_000, 18_000], v: [1.2, 1.5, 1.8] },
+      { after: { t: [20_000], v: [2] }, before: { t: [10_000], v: [1] } },
+    );
+    const values = render(composeSeries(overview, detail, true));
+    // only the raw window and its boundary samples; the summary points around it stay unmarked
+    expect(sampleXs(values)).toEqual([10, 12, 15, 18, 20]);
+    expect(values.map(v => v.x)).toEqual([0, 10, 12, 15, 18, 20, 30, 40]); // line geometry unchanged
+  });
+
+  it('a summary approximate-raw detail does not vouch for anything, even over a raw overview', () => {
+    const overview = raw({ t: [0, 40_000], v: [0, 4] });
+    const detail = raw({ t: [12_000], v: [1] }, { approximate: true });
+    expect(sampleXs(render(composeSeries(overview, detail, true)))).toEqual([0, 40]);
+  });
+
+  it('zooming into a held summary makes no markers; complete raw detail then makes real ones', () => {
+    const overview = summary({ t: [0, 50_000], v: [0, 5] });
+    expect(sampleXs(render(composeSeries(overview, overview, true), 'constant'))).toEqual([]);
+    const detail = raw({ t: [20_000, 25_000, 30_000], v: [2, 2.5, 3] });
+    expect(sampleXs(render(composeSeries(overview, detail, true), 'constant'))).toEqual([20, 25, 30]);
+  });
+
+  it('never marks a hold endpoint, even where it shares a sample x', () => {
+    const values = render(composeSeries(raw({ t: [0, 10_000], v: [1, 2] }), null, true), 'constant');
+    expect(values.map(v => [v.x, v.y, v.is_sample === true])).toEqual([
+      [0, 1, true],
+      [10, 1, false],
+      [10, 2, true],
+      [100, 2, false],
+    ]);
+    expect(values.some(v => v.is_hold)).toBe(false);
+  });
+
+  it('keeps null and gap values unmarked and their geometry unchanged', () => {
+    const values = seriesToValues(
+      composeSeries(raw({ k: [0, NULL, GAP, 0], t: [0, 1000, 2000, 3000], v: [1, null, null, 2] }), null, true),
+      { holdUntil: 4, interpolation: 'linear', numeric: true },
+    );
+    expect(values.map(({ is_gap, is_sample, y }) => [y, is_gap ?? false, is_sample === true])).toEqual([
+      [1, false, true],
+      [null, false, false],
+      [null, true, false],
+      [null, true, false],
+      [2, false, true],
+    ]);
+  });
+
+  it('a series with no provenance (anything not composed) is unmarked', () => {
+    expect(
+      sampleXs(seriesToValues({ t: [0], v: [1] }, { holdUntil: 1, interpolation: 'linear', numeric: true })),
+    ).toEqual([]);
   });
 });

@@ -208,6 +208,14 @@ describe('sampleProfiles', () => {
       expect(resource.values[0]).toEqual({ is_gap: false, x: startMs, y: 50 });
     });
 
+    test('simulation values never claim to be recorded samples, including computed segment endpoints', () => {
+      const real = realProfile('00:02:00', [{ initial: 0, rate: 5, start_offset: '00:00:00' }]);
+      const discrete = discreteProfile('00:01:00', [{ start_offset: '00:00:00', value: 1 }]);
+      const values = sampleProfiles([real, discrete], START).flatMap(r => r.values);
+      expect(values.length).toBeGreaterThan(2);
+      expect(values.some(v => v.is_sample !== undefined)).toBe(false);
+    });
+
     // A rate of 0 makes a real segment's two values numerically identical to a discrete segment's,
     // so is_hold is the only thing distinguishing them. Tagging it here would let interpolation
     // collapse a flat run followed by a jump into a ramp.

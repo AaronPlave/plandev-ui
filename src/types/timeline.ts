@@ -243,6 +243,8 @@ export interface LineLayer extends Layer {
 }
 
 export interface LinePoint extends Point {
+  /** Copied from `ResourceValue.is_sample`; only a point with this set may be drawn as a marker. */
+  sample?: boolean;
   y:
     | number
     | string
