@@ -44,6 +44,7 @@
     openAnalysis,
     renameAnalysis,
     selectedAnalysisActivity,
+    showAnalysisActivityType,
   } from '../../../stores/analysis';
   import { timeCursorMs, viewTimeRange } from '../../../stores/plan';
   import { setTimelineSourcesContext } from '../../../stores/timelineSources';
@@ -125,6 +126,10 @@
   $: typeOptions = [
     ...new Set($analysisTimelineSources.sources.flatMap(source => source.intervals?.present.map(t => t.name) ?? [])),
   ].sort();
+  // Each source's own types: "Show on timeline" needs a type the selected source actually has.
+  $: sourceTypes = Object.fromEntries(
+    $analysisTimelineSources.sources.map(source => [source.id, source.intervals?.present.map(t => t.name) ?? []]),
+  );
 
   onDestroy(() => {
     stopAutosave?.();
@@ -276,7 +281,9 @@
                 <AnalysisActivityTable
                   bindings={$analysisSourceBindings}
                   selected={$selectedAnalysisActivity}
+                  {readOnly}
                   {sourceLabels}
+                  {sourceTypes}
                   {typeOptions}
                   user={$user}
                   viewTimeRange={$viewTimeRange}
@@ -289,6 +296,7 @@
                     }
                     timelinePanel?.reveal(startMs, endMs);
                   }}
+                  on:showOnTimeline={({ detail }) => showAnalysisActivityType(detail.sourceId, detail.type)}
                   on:zoom={({ detail }) => timelinePanel?.zoomTo(detail.startMs, detail.endMs)}
                 />
               </Resizable.Pane>
@@ -339,6 +347,7 @@
           <TabPanel panelId="time">
             <AnalysisAtTimePanel
               bindings={$analysisSourceBindings}
+              {readOnly}
               {sourceLabels}
               user={$user}
               on:reveal={({ detail }) => timelinePanel?.reveal(detail, detail)}

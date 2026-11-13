@@ -685,6 +685,7 @@
       {drawWidth}
       marginLeft={timeline?.marginLeft}
       {maxTimeRange}
+      {readOnly}
       {simulationDataset}
       {spans}
       verticalGuides={timeline?.verticalGuides}

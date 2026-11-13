@@ -14,25 +14,26 @@ import type {
   SourceRecovery,
 } from '../types/analysis';
 import type { User, UserId } from '../types/app';
-import type { TimeRange, Timeline } from '../types/timeline';
+import type { Row, TimeRange, Timeline } from '../types/timeline';
 import type { TimelineSourceRegistry } from '../types/timelineSource';
 import {
   bindViewToAnalysisSources,
   createAnalysisDefinition,
   createAnalysisSources,
   createSourceActivityRow,
+  findActivityTypeRow,
   findAnalysisToReopen,
   getAnalysisTimeRanges,
   getImportOutcome,
   getNextAnalysisSourceId,
   importedActivityToSpan,
   INITIAL_ACTIVITY_ROW_LIMIT,
-  isActivityTypeShown,
   isSameAnalysisSource,
   removeSourceFromTimelines,
   simulationSpanToActivity,
   withSourceIdentity,
 } from '../utilities/analysis';
+import type { WatchedResource } from '../utilities/analysisAtTime';
 import { getImportedPlanSourceIds, type ViewImportPlanSource } from '../utilities/analysisViewImport';
 import effects from '../utilities/effects';
 import gql from '../utilities/gql';
@@ -83,6 +84,13 @@ export const analysisSimulationTypeCounts: Writable<Record<number, { count: numb
 /** Everything the analysis's sources cover: how far the timeline can zoom out. */
 export const analysisMaxTimeRange: Writable<TimeRange> = writable({ end: 0, start: 0 });
 export const selectedAnalysisActivity: Writable<AnalysisActivityRef | null> = writable(null);
+/**
+ * Resources the At Time inspector was asked to watch, each of one source (by the analysis's own binding id) and its
+ * name: the same name in two sources is two entries. Page state, not saved with the analysis; it lives here because the
+ * inspector's tab unmounts when another tab is shown. Entries of a source that is removed or pointed at other data are
+ * dropped, never redirected.
+ */
+export const analysisWatchedResources: Writable<WatchedResource[]> = writable([]);
 /** 'conflict': someone else saved the analysis since it was opened; saving stops until it is reloaded. */
 export const analysisSaveStatus: Writable<'conflict' | 'error' | 'saved' | 'saving' | 'unsaved'> = writable('saved');
 
@@ -265,6 +273,7 @@ export async function openAnalysis(initial: Analysis, user: User | null) {
   analysis.set(initial);
   analysisSourceBindings.set(initial.definition.sources);
   selectedAnalysisActivity.set(null);
+  analysisWatchedResources.set([]);
   initializeView({
     created_at: initial.created_at,
     definition: migratedViewDefinition ?? initial.definition.view,
@@ -296,6 +305,7 @@ export function closeAnalysis() {
   analysisSimulationDatasets.set([]);
   analysisSimulationTypeCounts.set({});
   selectedAnalysisActivity.set(null);
+  analysisWatchedResources.set([]);
   clearAnalysisImports();
   // The time cursors are page state of whichever page is open.
   timeCursorCompareMs.set(null);
@@ -462,7 +472,13 @@ export async function rebindAnalysisSource(sourceId: string, target: AnalysisSou
   if (get(selectedAnalysisActivity)?.sourceId === sourceId) {
     selectedAnalysisActivity.set(null);
   }
+  // Layers follow the source to its new data; a watched resource was chosen from the old data, so it is dropped.
+  dropWatchedResources(sourceId);
   await loadSourceDetails(get(analysisSourceBindings), user);
+}
+
+function dropWatchedResources(sourceId: string) {
+  analysisWatchedResources.update(watched => watched.filter(resource => resource.sourceId !== sourceId));
 }
 
 /** The analysis's own name for a source (an alias); empty to go back to the source's name. */
@@ -473,13 +489,28 @@ export function setAnalysisSourceLabel(sourceId: string, label: string) {
   );
 }
 
-/** Adds a row of one source's activities of `type`, unless a row already draws them. */
-export function showAnalysisActivityType(sourceId: string, type: string) {
-  const timelines = get(view)?.definition.plan.timelines ?? [];
-  if (!isActivityTypeShown(timelines, sourceId, type)) {
-    const sourceLabel = getSource(get(analysisTimelineSources), sourceId)?.label;
+/**
+ * Adds a row of one source's activities of `type`, unless a row already draws them, and selects that row so the result
+ * is visible either way. Only the source and the type are promoted: nothing else the activity table filters on goes
+ * into the layer. Returns whether a row was added, and the row that shows the type.
+ */
+export function showAnalysisActivityType(sourceId: string, type: string): { added: boolean; row: Row | undefined } {
+  const timelines = () => get(view)?.definition.plan.timelines ?? [];
+  const sourceLabel = getSource(get(analysisTimelineSources), sourceId)?.label ?? sourceId;
+  const existing = findActivityTypeRow(timelines(), sourceId, type);
+  if (!existing) {
     viewAddFilterToRow([toIntervalType(type)], 'activity', { sourceId, sourceLabel });
   }
+  const row = existing ?? findActivityTypeRow(timelines(), sourceId, type);
+  if (row) {
+    viewSetSelectedRow(row.id);
+    showSuccessToast(
+      existing
+        ? `${type} from ${sourceLabel} is already on the timeline (row "${row.name}")`
+        : `Added ${type} from ${sourceLabel} to the timeline`,
+    );
+  }
+  return { added: !existing, row };
 }
 
 /** Adds a row of every activity of one source (see createSourceActivityRow). */
@@ -586,6 +617,7 @@ export async function removeAnalysisSource(sourceId: string, user: User | null) 
   if (get(selectedAnalysisActivity)?.sourceId === sourceId) {
     selectedAnalysisActivity.set(null);
   }
+  dropWatchedResources(sourceId);
   await loadSourceDetails(next, user);
 }
 

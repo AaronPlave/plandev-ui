@@ -25,7 +25,11 @@
 
   export let bindings: AnalysisSourceBinding[] = [];
   export let selected: AnalysisActivityRef | null = null;
+  /** The analysis can't be edited: nothing is offered that changes the timeline. */
+  export let readOnly: boolean = false;
   export let sourceLabels: Record<string, string> = {};
+  /** Each source's own activity types, by source id. */
+  export let sourceTypes: Record<string, string[]> = {};
   export let typeOptions: string[] = [];
   export let user: User | null;
   /** Changes when a live source (a plan) changes, so the table re-reads what it shows. */
@@ -35,6 +39,7 @@
 
   const dispatch = createEventDispatcher<{
     select: { endMs: number; ref: AnalysisActivityRef; startMs: number };
+    showOnTimeline: { sourceId: string; type: string };
     zoom: { endMs: number; startMs: number };
   }>();
 
@@ -61,6 +66,10 @@
   $: setScopedRange(scope === 'range' ? viewTimeRange : null);
   // A type filter applies once it names a type; anything else typed matches every type.
   $: type = typeOptions.includes(typeInput) ? typeInput : '';
+  // The action is for one source and one of its types, whatever else the table is filtered by.
+  $: canShow = !readOnly && !!sourceId && !!type && !!sourceTypes[sourceId]?.includes(type);
+  $: showLabel = `Show all ${type} activities from ${sourceLabels[sourceId] ?? sourceId} on timeline`;
+  $: tableFiltered = !!text || scope === 'range';
   $: where = getAnalysisActivityWhere(bindings, {
     sourceIds: sourceId ? [sourceId] : null,
     text,
@@ -259,6 +268,17 @@
         <option value={option} />
       {/each}
     </datalist>
+    {#if canShow}
+      <button
+        class="st-button secondary show"
+        title={tableFiltered
+          ? `${showLabel}. The text and time-range filters of this table are not applied to the timeline.`
+          : showLabel}
+        on:click={() => dispatch('showOnTimeline', { sourceId, type })}
+      >
+        {showLabel}
+      </button>
+    {/if}
     <span class="count st-typography-label" aria-live="polite">
       {total === null ? 'Loading…' : `${total.toLocaleString()} activit${total === 1 ? 'y' : 'ies'}`}
     </span>
@@ -282,6 +302,13 @@
 
   .filters .st-input:first-child {
     flex: 1;
+  }
+
+  .show {
+    max-width: 24rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .count {

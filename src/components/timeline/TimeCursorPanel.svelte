@@ -26,7 +26,7 @@
   import type { Resource, ResourceType, Span } from '../../types/simulation';
   import type { ViewGridComponent, ViewGridSection } from '../../types/view';
   import { getExternalEventRowId } from '../../utilities/externalEvents';
-  import type { AnalysisCursorData } from '../../utilities/analysisAtTime';
+  import { MAX_INSPECTED_RESOURCES, type AnalysisCursorData } from '../../utilities/analysisAtTime';
   import { createResourceSubscription, type ResourceSubscription } from '../../utilities/resourceSubscription';
   import { formatDate, getDoyTime, getUnixEpochTime } from '../../utilities/time';
   import { required } from '../../utilities/validators';
@@ -68,14 +68,23 @@
     syncCursorTimeField($timeCursorMs);
   }
 
-  $: reconcileWatchedSubscriptions(watchedNames, $simulationDataset, $plan?.start_time, $resourceTypes, user);
+  $: reconcileWatchedSubscriptions(
+    analysis ? [] : watchedNames,
+    $simulationDataset,
+    $plan?.start_time,
+    $resourceTypes,
+    user,
+  );
 
   // Resources already on the timeline cost nothing — some row is already subscribed to them.
-  $: timelineResourceRows = [...$timelineResources.entries()]
-    .map(([name, entry]) => ({ name, resource: entry.resource }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+  // An Analysis hands over everything it shows (`analysis`): the Plan's stores below are not read for it.
+  $: timelineResourceRows = analysis
+    ? []
+    : [...$timelineResources.entries()]
+        .map(([name, entry]) => ({ name, resource: entry.resource }))
+        .sort((a, b) => a.name.localeCompare(b.name));
 
-  $: watchedResourceRows = watchedNames
+  $: watchedResourceRows = (analysis ? [] : watchedNames)
     .filter(name => watchedResources[name] && !$timelineResources.has(name))
     .map(name => ({ name, resource: watchedResources[name] }))
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -90,17 +99,17 @@
   $: showStats = comparing && columnMode === 'stats';
   // Resource names a violation currently covers, so the offending row can say so itself instead of
   // making the reader cross-reference a separate list.
-  $: violatingResources = getViolatingResources($visibleConstraintResults, $timeCursorMs);
+  $: violatingResources = getViolatingResources(analysis ? [] : $visibleConstraintResults, $timeCursorMs);
   $: compareOffsetLabel =
     $timeCursorMs !== null && $timeCursorCompareMs !== null
       ? `${$timeCursorCompareMs >= $timeCursorMs ? '+' : '−'}${formatOffset(Math.abs($timeCursorCompareMs - $timeCursorMs))}`
       : '';
 
-  $: resourceOptions = getResourceOptions($allResourceTypes, $timelineResources);
+  $: resourceOptions = analysis ? [] : getResourceOptions($allResourceTypes, $timelineResources);
 
-  $: activeSpans = getActiveSpans($spans, $timeCursorMs);
-  $: activeExternalEvents = getActiveExternalEvents($selectedExternalEvents, $timeCursorMs);
-  $: activeViolations = getActiveViolations($visibleConstraintResults, $timeCursorMs);
+  $: activeSpans = getActiveSpans(analysis ? null : $spans, $timeCursorMs);
+  $: activeExternalEvents = getActiveExternalEvents(analysis ? [] : $selectedExternalEvents, $timeCursorMs);
+  $: activeViolations = getActiveViolations(analysis ? [] : $visibleConstraintResults, $timeCursorMs);
 
   async function syncCursorTimeField(timeMs: number): Promise<void> {
     const doy = getDoyTime(new Date(timeMs), false);
@@ -428,7 +437,7 @@
           {#if analysis}
             {#if !analysis.resources.length}
               <div class="pb-2 text-[11px] text-gray-500">
-                No resource is on the timeline. Only the resources the timeline's rows plot are read at a time.
+                No resources yet. Add one below to read it here, or plot one on the timeline.
               </div>
             {:else}
               <div class="column-header" class:comparing>
@@ -451,23 +460,50 @@
                   expanded={expandedName === row.key}
                   formatTime={analysis.formatTime}
                   name={row.name}
+                  placement={analysis.onShowOnTimeline && row.watched && !row.onTimeline
+                    ? { onSelect: target => analysis?.onShowOnTimeline?.(row.key, target), rows: analysis.rows }
+                    : null}
                   readingA={row.readingA}
                   readingB={row.readingB}
                   resource={row.display}
                   schema={row.schema}
                   sourceLabel={row.sourceLabel}
+                  watched={row.watched}
                   on:toggle={() => (expandedName = expandedName === row.key ? null : row.key)}
+                  on:unwatch={() => analysis?.onUnwatch(row.key)}
                 />
               {/each}
               {#if analysis.omittedResources}
                 <div class="pb-2 text-[11px] text-gray-500">
-                  {analysis.omittedResources} more resources on the timeline are not read: only the first are.
+                  {analysis.omittedResources} more resources are not read: only the first {MAX_INSPECTED_RESOURCES} are.
                 </div>
               {/if}
             {/if}
             {#if analysis.error}
               <div class="pb-2 text-[11px] text-destructive" role="alert">{analysis.error}</div>
             {/if}
+
+            <div class="pt-2">
+              <SearchableDropdown
+                allowMultiple
+                loading={analysis.resourcesLoading}
+                name="watchedResources"
+                options={analysis.resourceOptions}
+                placeholder="Add a resource…"
+                searchPlaceholder="Search resources"
+                selectedOptionLabel="Add a resource…"
+                selectedOptionValues={analysis.watchedKeys}
+                showPlaceholderOption={false}
+                on:change={({ detail }) => analysis?.onWatchedChange(detail.map(String))}
+              />
+            </div>
+            <div class="pb-2 pt-1 text-[10px] text-gray-500">
+              {analysis.resourceOptions.length.toLocaleString()} resources in this analysis's sources. Watching one reads
+              it here without a timeline row.
+            </div>
+            {#each analysis.unavailableSources as source (source.label)}
+              <div class="pb-1 text-[10px] text-gray-500">{source.label}: {source.reason}</div>
+            {/each}
           {:else if !resourceCount}
             <div class="pb-2 text-[11px] text-gray-500">
               No resources loaded. Plot a resource on the timeline, or add one below.
@@ -508,21 +544,23 @@
             {/each}
           {/if}
 
-          <div class="pt-2" class:hidden={!!analysis}>
-            <SearchableDropdown
-              allowMultiple
-              name="watchedResources"
-              options={resourceOptions}
-              placeholder="Add a resource…"
-              searchPlaceholder="Search resources"
-              selectedOptionValues={watchedNames}
-              on:change={({ detail }) => (watchedNames = detail.map(String))}
-            />
-          </div>
-          <label class="flex items-center gap-2 pb-2 pt-1 text-[11px] text-gray-500" class:hidden={!!analysis}>
-            <input type="checkbox" bind:checked={interpolateValues} />
-            Interpolate values between samples
-          </label>
+          {#if !analysis}
+            <div class="pt-2">
+              <SearchableDropdown
+                allowMultiple
+                name="watchedResources"
+                options={resourceOptions}
+                placeholder="Add a resource…"
+                searchPlaceholder="Search resources"
+                selectedOptionValues={watchedNames}
+                on:change={({ detail }) => (watchedNames = detail.map(String))}
+              />
+            </div>
+            <label class="flex items-center gap-2 pb-2 pt-1 text-[11px] text-gray-500">
+              <input type="checkbox" bind:checked={interpolateValues} />
+              Interpolate values between samples
+            </label>
+          {/if}
         </Collapse>
       </div>
 
@@ -540,6 +578,9 @@
           </svelte:fragment>
 
           {#if analysis}
+            {#if analysis.loading && !analysis.activities.length}
+              <div class="pb-2 text-[11px] text-gray-500">Reading…</div>
+            {/if}
             {#each analysis.activities as group (group.cursor ?? 'A')}
               {#each group.sources as source (source.sourceId)}
                 <div class="pt-1 text-[10px] uppercase tracking-wide text-gray-500">
@@ -577,7 +618,7 @@
           {:else if !activeSpans.length}
             <div class="pb-2 text-[11px] text-gray-500">No simulated activities at this time.</div>
           {/if}
-          {#each activeSpans as span (span.span_id)}
+          {#each analysis ? [] : activeSpans as span (span.span_id)}
             <button
               class="group -mx-1 flex w-full items-center justify-between gap-2 rounded px-1 py-1 text-left text-[12px] hover:bg-accent"
               title="Select and open this activity"
@@ -601,63 +642,65 @@
         </Collapse>
       </div>
 
-      <div class="cursor-section" class:hidden={!!analysis}>
-        <Collapse title="External Events" padContent={false}>
-          <svelte:fragment slot="right">
-            <span class="text-[11px] text-gray-500">{activeExternalEvents.length}</span>
-          </svelte:fragment>
+      {#if !analysis}
+        <div class="cursor-section">
+          <Collapse title="External Events" padContent={false}>
+            <svelte:fragment slot="right">
+              <span class="text-[11px] text-gray-500">{activeExternalEvents.length}</span>
+            </svelte:fragment>
 
-          {#if !activeExternalEvents.length}
-            <div class="pb-2 text-[11px] text-gray-500">No external events at this time.</div>
-          {/if}
-          {#each activeExternalEvents as event (getExternalEventRowId(event.pkey))}
-            <button
-              class="group -mx-1 flex w-full items-center justify-between gap-2 rounded px-1 py-1 text-left text-[12px] hover:bg-accent"
-              title="Select and open this external event"
-              on:click={() => openExternalEvent(event)}
-            >
-              <span class="flex min-w-0 flex-col">
-                <span class="truncate">{event.pkey.key}</span>
-                <span class="truncate text-[10px] text-gray-500">
-                  {event.pkey.event_type_name} · {event.pkey.derivation_group_name}
+            {#if !activeExternalEvents.length}
+              <div class="pb-2 text-[11px] text-gray-500">No external events at this time.</div>
+            {/if}
+            {#each activeExternalEvents as event (getExternalEventRowId(event.pkey))}
+              <button
+                class="group -mx-1 flex w-full items-center justify-between gap-2 rounded px-1 py-1 text-left text-[12px] hover:bg-accent"
+                title="Select and open this external event"
+                on:click={() => openExternalEvent(event)}
+              >
+                <span class="flex min-w-0 flex-col">
+                  <span class="truncate">{event.pkey.key}</span>
+                  <span class="truncate text-[10px] text-gray-500">
+                    {event.pkey.event_type_name} · {event.pkey.derivation_group_name}
+                  </span>
                 </span>
-              </span>
-              <span class="shrink-0 text-gray-400 opacity-0 group-hover:opacity-100">
-                <ChevronRight size={14} />
-              </span>
-            </button>
-          {/each}
-        </Collapse>
-      </div>
+                <span class="shrink-0 text-gray-400 opacity-0 group-hover:opacity-100">
+                  <ChevronRight size={14} />
+                </span>
+              </button>
+            {/each}
+          </Collapse>
+        </div>
 
-      <div class="cursor-section" class:hidden={!!analysis}>
-        <Collapse title="Constraint Violations" padContent={false} error={activeViolations.length > 0}>
-          <svelte:fragment slot="right">
-            <span class="text-[11px]" class:text-destructive={activeViolations.length > 0}>
-              {activeViolations.length}
-            </span>
-          </svelte:fragment>
-
-          {#if !activeViolations.length}
-            <div class="pb-2 text-[11px] text-gray-500">No violations at this time.</div>
-          {/if}
-          {#each activeViolations as violation, index (`${violation.constraintName}-${index}`)}
-            <button
-              class="group -mx-1 mb-1 flex w-full items-start gap-2 rounded border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-left text-[12px] hover:bg-destructive/10"
-              title="Open the constraints panel"
-              on:click={openConstraints}
-            >
-              <span class="mt-0.5 shrink-0 text-destructive"><TriangleAlert size={13} /></span>
-              <span class="flex min-w-0 flex-col gap-0.5">
-                <span class="st-typography-medium truncate">{violation.constraintName}</span>
-                {#if violation.message}
-                  <span class="text-[10px] leading-snug text-gray-600">{violation.message}</span>
-                {/if}
+        <div class="cursor-section">
+          <Collapse title="Constraint Violations" padContent={false} error={activeViolations.length > 0}>
+            <svelte:fragment slot="right">
+              <span class="text-[11px]" class:text-destructive={activeViolations.length > 0}>
+                {activeViolations.length}
               </span>
-            </button>
-          {/each}
-        </Collapse>
-      </div>
+            </svelte:fragment>
+
+            {#if !activeViolations.length}
+              <div class="pb-2 text-[11px] text-gray-500">No violations at this time.</div>
+            {/if}
+            {#each activeViolations as violation, index (`${violation.constraintName}-${index}`)}
+              <button
+                class="group -mx-1 mb-1 flex w-full items-start gap-2 rounded border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-left text-[12px] hover:bg-destructive/10"
+                title="Open the constraints panel"
+                on:click={openConstraints}
+              >
+                <span class="mt-0.5 shrink-0 text-destructive"><TriangleAlert size={13} /></span>
+                <span class="flex min-w-0 flex-col gap-0.5">
+                  <span class="st-typography-medium truncate">{violation.constraintName}</span>
+                  {#if violation.message}
+                    <span class="text-[10px] leading-snug text-gray-600">{violation.message}</span>
+                  {/if}
+                </span>
+              </button>
+            {/each}
+          </Collapse>
+        </div>
+      {/if}
     {/if}
   </svelte:fragment>
 </Panel>

@@ -15,7 +15,7 @@ import type {
 import type { UserId } from '../types/app';
 import type { SourceResource } from '../types/importedSource';
 import type { ResourceType, Span } from '../types/simulation';
-import type { TimeRange, Timeline } from '../types/timeline';
+import type { Row, TimeRange, Timeline } from '../types/timeline';
 import type {
   TimelineActivityRequest,
   TimelineActivitySubscription,
@@ -1024,8 +1024,14 @@ export function createSourceActivityRow(timelines: Timeline[], sourceId: Timelin
  * its activities) or one naming the type. Layers with dynamic filters are taken as not showing it.
  */
 export function isActivityTypeShown(timelines: Timeline[], sourceId: TimelineSourceId, type: string): boolean {
-  return timelines.some(timeline =>
-    timeline.rows.some(row =>
+  return !!findActivityTypeRow(timelines, sourceId, type);
+}
+
+/** The first row that draws activities of `type` from `sourceId` (see isActivityTypeShown), if any. */
+export function findActivityTypeRow(timelines: Timeline[], sourceId: TimelineSourceId, type: string): Row | undefined {
+  return timelines
+    .flatMap(timeline => timeline.rows)
+    .find(row =>
       row.layers.some(layer => {
         if (!isActivityLayer(layer) || layer.sourceId !== sourceId) {
           return false;
@@ -1036,8 +1042,7 @@ export function isActivityTypeShown(timelines: Timeline[], sourceId: TimelineSou
         }
         return !filter?.dynamic_type_filters?.length && !filter?.other_filters?.length;
       }),
-    ),
-  );
+    );
 }
 
 /* Removing a source. */

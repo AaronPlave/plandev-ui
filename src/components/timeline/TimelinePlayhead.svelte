@@ -19,6 +19,8 @@
   export let drawWidth: number = 0;
   export let marginLeft: number = 50;
   export let maxTimeRange: TimeRange = { end: 0, start: 0 };
+  /** The view can't be edited: the cursors still move and compare, but nothing is offered that changes the view. */
+  export let readOnly: boolean = false;
   export let simulationDataset: SimulationDataset | null = null;
   /** Spans to snap to. Where only their times are known (an Analysis's histogram), they snap without a type. */
   export let spans: (Pick<Span, 'durationMs' | 'startMs'> & Partial<Pick<Span, 'type'>>)[] | null = [];
@@ -252,7 +254,7 @@
 
   /** Promotes the transient cursor into a persistent vertical guide on the view. */
   function pinAsVerticalGuide(): void {
-    if ($timeCursorMs === null || !$view) {
+    if (readOnly || $timeCursorMs === null || !$view) {
       return;
     }
     const newGuide = createVerticalGuide($view.definition.plan.timelines, getDoyTime(new Date($timeCursorMs)));
@@ -581,7 +583,9 @@
     Center View on Cursor
   </ContextMenu.Item>
   <ContextMenu.Item size="sm" on:click={copyCursorTime}>Copy Cursor Time</ContextMenu.Item>
-  <ContextMenu.Item size="sm" on:click={pinAsVerticalGuide}>Pin as Vertical Guide</ContextMenu.Item>
+  {#if !readOnly}
+    <ContextMenu.Item size="sm" on:click={pinAsVerticalGuide}>Pin as Vertical Guide</ContextMenu.Item>
+  {/if}
   <ContextMenu.Separator />
   <ContextMenu.Item size="sm" on:click={clearCursors}>Clear Time Cursor</ContextMenu.Item>
 </ContextMenuInternal>

@@ -25,6 +25,7 @@ vi.mock('./subscribable', () => {
 const {
   addAnalysisSource,
   analysisSourceBindings,
+  analysisWatchedResources,
   analysisSourceRecovery,
   analysisTimelineSources,
   autosaveAnalysis,
@@ -33,6 +34,7 @@ const {
   rebindAnalysisSource,
   removeAnalysisSource,
   selectedAnalysisActivity,
+  showAnalysisActivityType,
 } = await import('./analysis');
 const { viewTimeRange } = await import('./plan');
 const { view } = await import('./views');
@@ -237,6 +239,88 @@ describe('analysis store', () => {
     expect(get(analysisSourceBindings).map(binding => binding.id)).toEqual(['source-2']);
     expect(get(selectedAnalysisActivity)).toBeNull();
   });
+  describe('watched resources', () => {
+    const watched = [
+      { name: 'BatteryStateOfCharge', sourceId: 'source-1' },
+      { name: '/fruit', sourceId: 'source-2' },
+    ];
+
+    it('are not part of what the analysis saves', async () => {
+      await openAnalysis(savedAnalysis(definitionWithRows()), user);
+      analysisWatchedResources.set(watched);
+      const stop = autosaveAnalysis(user);
+      vi.useFakeTimers();
+      analysisSourceBindings.update(bindings => bindings.slice());
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(effects.updateAnalysis).toHaveBeenCalled();
+      expect(JSON.stringify(effects.updateAnalysis.mock.calls)).not.toContain('/fruit');
+      stop();
+    });
+
+    it('go with a removed source and only with it', async () => {
+      await openAnalysis(savedAnalysis(definitionWithRows()), user);
+      analysisWatchedResources.set(watched);
+      await removeAnalysisSource('source-2', user);
+      expect(get(analysisWatchedResources)).toEqual([watched[0]]);
+    });
+
+    it('are dropped, not redirected, when their source is pointed at other data', async () => {
+      await openAnalysis(savedAnalysis(definitionWithRows()), user);
+      analysisWatchedResources.set(watched);
+      await rebindAnalysisSource(
+        'source-1',
+        { kind: 'imported', revisionId: 18, sourceId: 1, sourceName: 'TOL' },
+        user,
+      );
+      expect(get(analysisWatchedResources)).toEqual([watched[1]]);
+    });
+
+    it('start empty on each analysis', async () => {
+      await openAnalysis(savedAnalysis(definitionWithRows()), user);
+      analysisWatchedResources.set(watched);
+      closeAnalysis();
+      expect(get(analysisWatchedResources)).toEqual([]);
+      await openAnalysis(savedAnalysis(definitionWithRows()), user);
+      expect(get(analysisWatchedResources)).toEqual([]);
+    });
+  });
+
+  describe('showing an activity type on the timeline', () => {
+    const layers = () => (get(view)?.definition.plan.timelines[0].rows ?? []).flatMap(row => row.layers);
+
+    it("adds a layer of that source's type, bound to that source, with no other filter", async () => {
+      await openAnalysis(savedAnalysis(definitionWithRows()), user);
+      const before = layers().length;
+      const { added, row } = showAnalysisActivityType('source-1', 'ALLOCATION');
+      expect(added).toBe(true);
+      expect(layers()).toHaveLength(before + 1);
+      const layer = row?.layers[0];
+      expect(layer).toMatchObject({ chartType: 'activity', sourceId: 'source-1' });
+      expect(layer?.filter.activity?.static_types).toEqual(['ALLOCATION']);
+      expect(layer?.filter.activity?.other_filters ?? []).toEqual([]);
+      expect(layer?.filter.activity?.dynamic_type_filters ?? []).toEqual([]);
+    });
+
+    it('does not add another row for what is already drawn, and selects the row that draws it', async () => {
+      await openAnalysis(savedAnalysis(definitionWithRows()), user);
+      const before = layers().length;
+      const { added, row } = showAnalysisActivityType('source-1', 'DSN_Pass');
+      expect(added).toBe(false);
+      expect(row?.id).toBe(2);
+      expect(layers()).toHaveLength(before);
+      showAnalysisActivityType('source-1', 'ALLOCATION');
+      showAnalysisActivityType('source-1', 'ALLOCATION');
+      expect(layers()).toHaveLength(before + 1);
+    });
+
+    it('treats the same type of another source as another thing to show', async () => {
+      await openAnalysis(savedAnalysis(definitionWithRows()), user);
+      const before = layers().length;
+      expect(showAnalysisActivityType('source-2', 'DSN_Pass').added).toBe(true);
+      expect(layers()).toHaveLength(before + 1);
+    });
+  });
+
   describe('source identity', () => {
     const legacy = (): AnalysisDefinition => {
       const definition = definitionWithRows();

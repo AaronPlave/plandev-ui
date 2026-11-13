@@ -142,4 +142,65 @@ describe('AnalysisActivityTable', () => {
       ),
     );
   });
+
+  describe('Show on timeline', () => {
+    const sourceTypes = { 'source-1': ['DSN_Pass'], 'source-2': ['BiteBanana'] };
+    const showButton = (container: HTMLElement) =>
+      [...container.querySelectorAll('button')].find(button => button.textContent?.includes('on timeline'));
+
+    it('is offered for one source and one of its types, and says what it shows', async () => {
+      const { component, container, getByLabelText } = renderTable({ sourceTypes });
+      await waitFor(() => expect(effects.getAnalysisActivities).toHaveBeenCalled());
+      expect(showButton(container)).toBeUndefined();
+      await fireEvent.change(getByLabelText('Source'), { target: { value: 'source-1' } });
+      expect(showButton(container)).toBeUndefined();
+      await fireEvent.input(getByLabelText('Type'), { target: { value: 'DSN_Pass' } });
+      const button = showButton(container);
+      expect(button?.textContent?.trim()).toBe('Show all DSN_Pass activities from TOL r18 on timeline');
+      const shown = vi.fn();
+      component.$on('showOnTimeline', event => shown(event.detail));
+      await fireEvent.click(button!);
+      expect(shown).toHaveBeenCalledWith({ sourceId: 'source-1', type: 'DSN_Pass' });
+    });
+
+    it('is not offered for All Sources, even with a type', async () => {
+      const { container, getByLabelText } = renderTable({ sourceTypes });
+      await fireEvent.input(getByLabelText('Type'), { target: { value: 'DSN_Pass' } });
+      expect(showButton(container)).toBeUndefined();
+    });
+
+    it("is not offered for a type the selected source doesn't have", async () => {
+      const { container, getByLabelText } = renderTable({ sourceTypes });
+      await fireEvent.change(getByLabelText('Source'), { target: { value: 'source-2' } });
+      await fireEvent.input(getByLabelText('Type'), { target: { value: 'DSN_Pass' } });
+      expect(showButton(container)).toBeUndefined();
+    });
+
+    it('is not offered when the analysis cannot be edited', async () => {
+      const { container, getByLabelText } = renderTable({ readOnly: true, sourceTypes });
+      await fireEvent.change(getByLabelText('Source'), { target: { value: 'source-1' } });
+      await fireEvent.input(getByLabelText('Type'), { target: { value: 'DSN_Pass' } });
+      expect(showButton(container)).toBeUndefined();
+    });
+
+    it('promotes only the source and type, not the name search or the time range', async () => {
+      const { component, container, getByLabelText } = renderTable({
+        sourceTypes,
+        viewTimeRange: { end: 2000, start: 1000 },
+      });
+      await fireEvent.change(getByLabelText('Source'), { target: { value: 'source-1' } });
+      await fireEvent.input(getByLabelText('Type'), { target: { value: 'DSN_Pass' } });
+      await fireEvent.input(getByLabelText('Filter activities by name or type'), { target: { value: 'DSS-54' } });
+      await fireEvent.change(getByLabelText('Scope'), { target: { value: 'range' } });
+      const shown = vi.fn();
+      component.$on('showOnTimeline', event => shown(event.detail));
+      const button = showButton(container)!;
+      // It says it is all of them, and the table's own filters are named as not applied.
+      expect(button.textContent).toContain('Show all DSN_Pass activities');
+      await waitFor(() => expect(button.getAttribute('title')).toContain('not applied to the timeline'));
+      await fireEvent.click(button);
+      expect(shown).toHaveBeenCalledTimes(1);
+      expect(shown.mock.calls[0][0]).toEqual({ sourceId: 'source-1', type: 'DSN_Pass' });
+    });
+  });
 });

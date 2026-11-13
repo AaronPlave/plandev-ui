@@ -1,9 +1,11 @@
 <svelte:options immutable={true} />
 
 <script lang="ts">
+  import { Button } from '@nasa-jpl/stellar-svelte';
   import { createEventDispatcher } from 'svelte';
   import type { ValueSchema } from '../../types/schema';
   import type { Resource } from '../../types/simulation';
+  import type { Row } from '../../types/timeline';
   import { atTimeBasisLabels, explainAtTime, type AtTimeValue } from '../../utilities/analysisAtTime';
   import {
     formatResourceNumber,
@@ -15,6 +17,7 @@
     getSparklineY,
     isNumericSchema,
   } from '../../utilities/resources';
+  import LayerPicker from '../LayerPicker.svelte';
 
   export let compareTimeMs: number | null = null;
   export let cursorTimeMs: number;
@@ -40,6 +43,11 @@
   /** True when a constraint violation covers the cursor for this resource. */
   export let violating: boolean = false;
   export let watched: boolean = false;
+  /**
+   * An Analysis: lets a resource that no row plots be put on the timeline, in a row the user picks (or a new one). The
+   * picker offers the same rows and layers as the Sources browser's.
+   */
+  export let placement: { onSelect: (row?: Row) => void; rows: Row[] } | null = null;
 
   const SPARK_HEIGHT = 17;
 
@@ -54,6 +62,9 @@
   $: decimals = getResourceDecimals(schema);
 
   $: unit = schema.metadata?.unit?.value ?? '';
+  // A reading still on its way shows as such, never as a value or as "no data".
+  $: pendingA = readingA?.basis === 'loading';
+  $: pendingB = readingB?.basis === 'loading';
 
   $: valueA = readingA ? fromReading(readingA) : getResourceValueAtTime(resource, cursorTimeMs, interpolate);
   $: valueB =
@@ -100,7 +111,10 @@
     return Math.max(0, Math.min(sparkWidth, x));
   }
 
-  function display(value: number | string | null, isGap: boolean): string {
+  function display(value: number | string | null, isGap: boolean, pending: boolean = false): string {
+    if (pending) {
+      return '…';
+    }
     if (isGap) {
       return 'no data';
     }
@@ -151,9 +165,9 @@
       <span class="value font-mono">{formatResourceNumber(stats.avg, decimals)}</span>
       <span class="value muted font-mono">{formatResourceNumber(stats.max, decimals)}</span>
     {:else if comparing}
-      <span class="value font-mono" class:is-gap={valueA.isGap}>{display(valueA.value, valueA.isGap)}</span>
+      <span class="value font-mono" class:is-gap={valueA.isGap}>{display(valueA.value, valueA.isGap, pendingA)}</span>
       <span class="value value-b font-mono" class:is-gap={valueB?.isGap}
-        >{display(valueB?.value ?? null, !!valueB?.isGap)}</span
+        >{display(valueB?.value ?? null, !!valueB?.isGap, pendingB)}</span
       >
       <span class="value delta font-mono" class:up={(delta ?? 0) > 0} class:down={(delta ?? 0) < 0}>
         {delta === null ? '–' : `${delta > 0 ? '+' : ''}${formatResourceNumber(delta, decimals)}`}
@@ -161,7 +175,7 @@
     {:else}
       <span class="value-stack">
         <span class="value single font-mono" class:is-gap={valueA.isGap}>
-          {display(valueA.value, valueA.isGap)}
+          {display(valueA.value, valueA.isGap, pendingA)}
         </span>
         {#if unit}
           <span class="sub font-mono">{unit}</span>
@@ -176,12 +190,12 @@
       <div class="detail-grid">
         <div class="cell">
           <span class="cell-label">{comparing ? 'At A' : 'Value'}</span>
-          <span class="cell-value font-mono">{display(valueA.value, valueA.isGap)}</span>
+          <span class="cell-value font-mono">{display(valueA.value, valueA.isGap, pendingA)}</span>
         </div>
         {#if comparing && valueB}
           <div class="cell">
             <span class="cell-label">At B</span>
-            <span class="cell-value value-b font-mono">{display(valueB.value, valueB.isGap)}</span>
+            <span class="cell-value value-b font-mono">{display(valueB.value, valueB.isGap, pendingB)}</span>
           </div>
           <div class="cell">
             <span class="cell-label">Change</span>
@@ -233,8 +247,25 @@
           {stats.sampleCount} samples in window · range {formatResourceNumber(stats.max - stats.min, decimals)}
         </div>
       {/if}
-      {#if watched}
-        <button class="unwatch" on:click|stopPropagation={() => dispatch('unwatch')}>Stop watching</button>
+      {#if watched || placement}
+        <div class="actions">
+          {#if placement}
+            <LayerPicker
+              chartType="line"
+              layerItem={{ name, schema }}
+              rows={placement.rows}
+              on:select={({ detail }) => placement?.onSelect(detail.row)}
+              let:builders
+            >
+              <Button {builders} variant="outline" size="sm" aria-label={`Show ${name} on timeline`}>
+                Show on timeline…
+              </Button>
+            </LayerPicker>
+          {/if}
+          {#if watched}
+            <button class="unwatch" on:click|stopPropagation={() => dispatch('unwatch')}>Stop watching</button>
+          {/if}
+        </div>
       {/if}
     </div>
   {/if}
@@ -429,13 +460,19 @@
     margin-top: 8px;
   }
 
+  .actions {
+    align-items: center;
+    display: flex;
+    gap: 12px;
+    margin-top: 8px;
+  }
+
   .unwatch {
     background: none;
     border: none;
     color: var(--st-utility-blue, #2f80ed);
     cursor: pointer;
     font-size: 10px;
-    margin-top: 8px;
     padding: 0;
     text-decoration: underline;
   }
