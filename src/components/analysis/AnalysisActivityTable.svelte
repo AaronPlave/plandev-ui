@@ -35,6 +35,7 @@
 
   const dispatch = createEventDispatcher<{
     select: { endMs: number; ref: AnalysisActivityRef; startMs: number };
+    zoom: { endMs: number; startMs: number };
   }>();
 
   const PAGE_SIZE = 200;
@@ -202,6 +203,12 @@
           clicked = ref;
           const startMs = Date.parse(data.start_time);
           dispatch('select', { endMs: data.end_time ? Date.parse(data.end_time) : startMs, ref, startMs });
+        }
+      },
+      onRowDoubleClicked: ({ data }) => {
+        if (data) {
+          const startMs = Date.parse(data.start_time);
+          dispatch('zoom', { endMs: data.end_time ? Date.parse(data.end_time) : startMs, startMs });
         }
       },
       rowClassRules: {

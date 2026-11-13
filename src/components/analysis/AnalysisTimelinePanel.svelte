@@ -103,6 +103,15 @@
     timelineRef?.viewTimeRangeChanged(next);
   }
 
+  /** Fits the timeline to an interval with a quarter of it either side (at least ten minutes in all). */
+  export function zoomTo(startMs: number, endMs: number) {
+    const span = Math.max(endMs - startMs, 10 * 60_000);
+    const middle = (startMs + endMs) / 2;
+    const next: TimeRange = { end: middle + span * 0.75, start: middle - span * 0.75 };
+    $viewTimeRange = next;
+    timelineRef?.viewTimeRangeChanged(next);
+  }
+
   function onMouseDown(event: CustomEvent<MouseDown>) {
     const span = event.detail.spans?.[0];
     $selectedAnalysisActivity = span ? getActivityRefFromSpan(span) : null;

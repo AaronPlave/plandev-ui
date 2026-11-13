@@ -45,6 +45,7 @@
     renameAnalysis,
     selectedAnalysisActivity,
   } from '../../../stores/analysis';
+  import { inspectTimeMs } from '../../../stores/analysisInspection';
   import { viewTimeRange } from '../../../stores/plan';
   import { setTimelineSourcesContext } from '../../../stores/timelineSources';
   import { getUserStore } from '../../../stores/user';
@@ -289,6 +290,7 @@
                     }
                     timelinePanel?.reveal(startMs, endMs);
                   }}
+                  on:zoom={({ detail }) => timelinePanel?.zoomTo(detail.startMs, detail.endMs)}
                 />
               </Resizable.Pane>
             </Resizable.PaneGroup>
@@ -328,6 +330,11 @@
               selected={$selectedAnalysisActivity}
               {sourceLabels}
               user={$user}
+              on:inspectAt={() => {
+                openInspector('time');
+                timelinePanel?.reveal($inspectTimeMs ?? 0, $inspectTimeMs ?? 0);
+              }}
+              on:zoom={({ detail }) => timelinePanel?.zoomTo(detail.startMs, detail.endMs)}
             />
           </TabPanel>
           <TabPanel panelId="time">
@@ -335,6 +342,7 @@
               bindings={$analysisSourceBindings}
               {sourceLabels}
               user={$user}
+              on:reveal={({ detail }) => timelinePanel?.reveal(detail, detail)}
               on:selectActivity={({ detail: { endMs, ref, startMs } }) => {
                 $selectedAnalysisActivity = ref;
                 timelinePanel?.reveal(startMs, endMs);

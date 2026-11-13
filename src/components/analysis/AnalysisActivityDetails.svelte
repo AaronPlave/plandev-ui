@@ -6,7 +6,11 @@
   directive with its arguments, metadata and anchor (live: it follows edits to the plan).
 -->
 <script lang="ts">
+  import { Button } from '@nasa-jpl/stellar-svelte';
+  import { Crosshair, ZoomIn } from 'lucide-svelte';
+  import { createEventDispatcher } from 'svelte';
   import { analysisPlanDirectives, showAnalysisActivityType } from '../../stores/analysis';
+  import { inspectTimeMs } from '../../stores/analysisInspection';
   import { view } from '../../stores/views';
   import { plugins } from '../../stores/plugins';
   import type {
@@ -44,6 +48,8 @@
     startMs: number;
     type: string;
   };
+
+  const dispatch = createEventDispatcher<{ inspectAt: void; zoom: { endMs: number; startMs: number } }>();
 
   let details: Details | null = null;
   let loading: boolean = false;
@@ -175,6 +181,27 @@
     <div class="empty st-typography-label">The activity is no longer available</div>
   {:else}
     <div class="title st-typography-medium">{details.name}</div>
+    {#if details}
+      {@const { endMs, startMs } = details}
+      <div class="actions">
+        <Button
+          size="xs"
+          variant="outline"
+          on:click={() => dispatch('zoom', { endMs: endMs ?? startMs, startMs })}
+          title="Fit the timeline to this activity"><ZoomIn size={12} class="mr-1" />Zoom to</Button
+        >
+        <Button
+          size="xs"
+          variant="outline"
+          on:click={() => {
+            $inspectTimeMs = endMs === null ? startMs : (startMs + endMs) / 2;
+            dispatch('inspectAt');
+          }}
+          title="Pin the inspection time at the middle of this activity and see what the sources say then"
+          ><Crosshair size={12} class="mr-1" />Inspect during</Button
+        >
+      </div>
+    {/if}
     {#if !shownOnTimeline && !readOnly}
       {@const { ref, type } = details}
       <button class="st-button secondary show" on:click={() => showAnalysisActivityType(ref.sourceId, type)}>
@@ -235,6 +262,12 @@
     font-size: 14px;
     margin-bottom: 8px;
     word-break: break-all;
+  }
+
+  .actions {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 8px;
   }
 
   .show {

@@ -57,6 +57,7 @@
   export let user: User | null;
 
   const dispatch = createEventDispatcher<{
+    reveal: number;
     selectActivity: { endMs: number; ref: AnalysisActivityRef; startMs: number };
   }>();
 
@@ -318,6 +319,12 @@
       on:click={() => ($inspectMode = !$inspectMode)}>{$inspectTimeMs === null ? 'Pin a time' : 'Move'}</Button
     >
     {#if $inspectTimeMs !== null}
+      <Button
+        size="xs"
+        variant="outline"
+        title="Bring the pinned time into view on the timeline"
+        on:click={() => $inspectTimeMs !== null && dispatch('reveal', $inspectTimeMs)}>Show</Button
+      >
       <Button size="xs" variant="outline" on:click={() => ($inspectTimeMs = null)}>Clear</Button>
     {/if}
   </div>
