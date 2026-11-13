@@ -26,6 +26,7 @@
   import type { Resource, ResourceType, Span } from '../../types/simulation';
   import type { ViewGridComponent, ViewGridSection } from '../../types/view';
   import { getExternalEventRowId } from '../../utilities/externalEvents';
+  import type { AnalysisCursorData } from '../../utilities/analysisAtTime';
   import { createResourceSubscription, type ResourceSubscription } from '../../utilities/resourceSubscription';
   import { formatDate, getDoyTime, getUnixEpochTime } from '../../utilities/time';
   import { required } from '../../utilities/validators';
@@ -38,6 +39,11 @@
 
   export let gridSection: ViewGridSection;
   export let user: User | null = null;
+  /**
+   * Set on an Analysis, which has no plan: what its sources say at the cursors replaces the Plan's resources, spans,
+   * external events and constraints (see utilities/analysisAtTime.ts). The panel is otherwise the same.
+   */
+  export let analysis: AnalysisCursorData | null = null;
 
   type ResourceRow = { name: string; resource: Resource; schema: ValueSchema; watched: boolean };
   type ActiveViolation = { constraintName: string; message: string };
@@ -74,6 +80,7 @@
     .map(name => ({ name, resource: watchedResources[name] }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
+  $: bounds = analysis?.bounds ?? $maxTimeRange;
   $: resourceRows = [
     ...timelineResourceRows.map(row => toResourceRow(row, false, $allResourceTypes)),
     ...watchedResourceRows.map(row => toResourceRow(row, true, $allResourceTypes)),
@@ -255,9 +262,9 @@
     if ($timeCursorMs === null) {
       return;
     }
-    const span = $maxTimeRange.end - $maxTimeRange.start;
+    const span = bounds.end - bounds.start;
     const offset = span > 0 ? span * 0.05 : 3_600_000;
-    timeCursorCompareMs.set(Math.min($maxTimeRange.end, $timeCursorMs + offset));
+    timeCursorCompareMs.set(Math.min(bounds.end, $timeCursorMs + offset));
   }
 
   /**
@@ -310,7 +317,7 @@
   });
 </script>
 
-<Panel padBody={false}>
+<Panel padBody={false} showHeader={!analysis}>
   <svelte:fragment slot="header">
     <GridMenu {gridSection} title="Time Cursor" />
     {#if $timeCursorMs !== null}
@@ -329,10 +336,17 @@
       <div class="flex flex-col items-start gap-2 p-3">
         <div class="st-typography-label">No time cursor set.</div>
         <div class="text-[11px] text-gray-500">
-          Hover the timeline and click the blue marker beside the add-guide button, or start from a known time:
+          {#if analysis}
+            Press on the bar above the rows, or right-click the timeline and choose Set Time Cursor, to see what each
+            source says at that time. Or start from a known time:
+          {:else}
+            Hover the timeline and click the blue marker beside the add-guide button, or start from a known time:
+          {/if}
         </div>
         <div class="flex gap-2">
-          <button class="st-button secondary" on:click={() => timeCursorMs.set($maxTimeRange.start)}>Plan start</button>
+          <button class="st-button secondary" on:click={() => timeCursorMs.set(bounds.start)}>
+            {analysis ? 'Start of data' : 'Plan start'}
+          </button>
           {#if $simulationDataset?.simulation_start_time}
             <button
               class="st-button secondary"
@@ -352,8 +366,8 @@
           label={`Cursor Time (${$plugins.time.primary.label})`}
           layout="stacked"
           name="timeCursor"
-          maxDate={new Date($maxTimeRange.end)}
-          minDate={new Date($maxTimeRange.start)}
+          maxDate={new Date(bounds.end)}
+          minDate={new Date(bounds.start)}
           on:change={onCursorTimeChange}
           useFallback={!$plugins.time.enableDatePicker}
         />
@@ -379,9 +393,22 @@
           <button class="st-button tertiary text-[11px]" on:click={toggleCompare}>
             {comparing ? 'Exit comparison' : 'Compare with…'}
           </button>
-          {#if comparing}
+          {#if analysis}
+            <button
+              class="st-button tertiary ml-auto text-[11px]"
+              aria-label="Clear Time Cursor"
+              on:click={clearCursors}
+            >
+              Clear
+            </button>
+          {/if}
+          {#if comparing && !analysis}
             <div class="column-mode">
-              <button class="mode-button" class:active={columnMode === 'values'} on:click={() => (columnMode = 'values')}>
+              <button
+                class="mode-button"
+                class:active={columnMode === 'values'}
+                on:click={() => (columnMode = 'values')}
+              >
                 A / B / Δ
               </button>
               <button class="mode-button" class:active={columnMode === 'stats'} on:click={() => (columnMode = 'stats')}>
@@ -395,10 +422,53 @@
       <div class="cursor-section">
         <Collapse title="Resources" padContent={false}>
           <svelte:fragment slot="right">
-            <span class="text-[11px] text-gray-500">{resourceCount}</span>
+            <span class="text-[11px] text-gray-500">{analysis ? analysis.resources.length : resourceCount}</span>
           </svelte:fragment>
 
-          {#if !resourceCount}
+          {#if analysis}
+            {#if !analysis.resources.length}
+              <div class="pb-2 text-[11px] text-gray-500">
+                No resource is on the timeline. Only the resources the timeline's rows plot are read at a time.
+              </div>
+            {:else}
+              <div class="column-header" class:comparing>
+                <span />
+                <span />
+                {#if comparing}
+                  <span>A</span>
+                  <span>B</span>
+                  <span>Δ</span>
+                {:else}
+                  <span>Value</span>
+                {/if}
+              </div>
+              {#each analysis.resources as row (row.key)}
+                <TimeCursorResourceRow
+                  compareTimeMs={$timeCursorCompareMs}
+                  cursorTimeMs={$timeCursorMs}
+                  domainEndMs={bounds.end}
+                  domainStartMs={bounds.start}
+                  expanded={expandedName === row.key}
+                  formatTime={analysis.formatTime}
+                  name={row.name}
+                  readingA={row.readingA}
+                  readingB={row.readingB}
+                  resource={row.display}
+                  schema={row.schema}
+                  sourceLabel={row.sourceLabel}
+                  on:toggle={() => (expandedName = expandedName === row.key ? null : row.key)}
+                />
+              {/each}
+              {#if analysis.omittedResources}
+                <div class="pb-2 text-[11px] text-gray-500">
+                  {analysis.omittedResources} more resources on the timeline are not read: only the first are.
+                </div>
+              {/if}
+            {/if}
+            {#if analysis.error}
+              <div class="pb-2 text-[11px] text-destructive" role="alert">{analysis.error}</div>
+            {/if}
+          {:else if !resourceCount}
             <div class="pb-2 text-[11px] text-gray-500">
               No resources loaded. Plot a resource on the timeline, or add one below.
             </div>
@@ -422,8 +492,8 @@
               <TimeCursorResourceRow
                 compareTimeMs={$timeCursorCompareMs}
                 cursorTimeMs={$timeCursorMs}
-                domainEndMs={$maxTimeRange.end}
-                domainStartMs={$maxTimeRange.start}
+                domainEndMs={bounds.end}
+                domainStartMs={bounds.start}
                 expanded={expandedName === row.name}
                 interpolate={interpolateValues}
                 name={row.name}
@@ -438,7 +508,7 @@
             {/each}
           {/if}
 
-          <div class="pt-2">
+          <div class="pt-2" class:hidden={!!analysis}>
             <SearchableDropdown
               allowMultiple
               name="watchedResources"
@@ -449,21 +519,62 @@
               on:change={({ detail }) => (watchedNames = detail.map(String))}
             />
           </div>
-          <label class="flex items-center gap-2 pb-2 pt-1 text-[11px] text-gray-500">
+          <label class="flex items-center gap-2 pb-2 pt-1 text-[11px] text-gray-500" class:hidden={!!analysis}>
             <input type="checkbox" bind:checked={interpolateValues} />
             Interpolate values between samples
           </label>
         </Collapse>
-
       </div>
 
       <div class="cursor-section">
         <Collapse title="Activities in Progress" padContent={false}>
           <svelte:fragment slot="right">
-            <span class="text-[11px] text-gray-500">{activeSpans.length}</span>
+            <span class="text-[11px] text-gray-500">
+              {analysis
+                ? analysis.activities.reduce(
+                    (total, group) => total + group.sources.reduce((sum, source) => sum + source.total, 0),
+                    0,
+                  )
+                : activeSpans.length}
+            </span>
           </svelte:fragment>
 
-          {#if !activeSpans.length}
+          {#if analysis}
+            {#each analysis.activities as group (group.cursor ?? 'A')}
+              {#each group.sources as source (source.sourceId)}
+                <div class="pt-1 text-[10px] uppercase tracking-wide text-gray-500">
+                  {group.cursor ? `${group.cursor} · ` : ''}{source.label} · {source.total.toLocaleString()}
+                  {source.total > source.rows.length ? `(latest ${source.rows.length})` : ''}
+                </div>
+                {#each source.rows as row (row.activity_id)}
+                  <button
+                    class="group -mx-1 flex w-full items-center justify-between gap-2 rounded px-1 py-1 text-left text-[12px] hover:bg-accent"
+                    title="Select this activity"
+                    on:click={() => analysis?.onSelectActivity(row)}
+                  >
+                    <span class="flex min-w-0 flex-col">
+                      <span class="truncate">{row.type}</span>
+                      <span class="text-[10px] tabular-nums text-gray-500">
+                        {row.name && row.name !== row.type ? `${row.name} · ` : ''}{Math.round(
+                          (group.time - Date.parse(row.start_time)) / 1000,
+                        )}s elapsed{row.end_time
+                          ? ` · ${Math.round((Date.parse(row.end_time) - group.time) / 1000)}s left`
+                          : ' · no end'}
+                      </span>
+                    </span>
+                    <span class="shrink-0 text-gray-400 opacity-0 group-hover:opacity-100">
+                      <ChevronRight size={14} />
+                    </span>
+                  </button>
+                {/each}
+                {#if source.note}
+                  <div class="text-[10px] text-gray-500">{source.note}</div>
+                {/if}
+              {:else}
+                <div class="pb-2 text-[11px] text-gray-500">No sources.</div>
+              {/each}
+            {/each}
+          {:else if !activeSpans.length}
             <div class="pb-2 text-[11px] text-gray-500">No simulated activities at this time.</div>
           {/if}
           {#each activeSpans as span (span.span_id)}
@@ -488,10 +599,9 @@
             </button>
           {/each}
         </Collapse>
-
       </div>
 
-      <div class="cursor-section">
+      <div class="cursor-section" class:hidden={!!analysis}>
         <Collapse title="External Events" padContent={false}>
           <svelte:fragment slot="right">
             <span class="text-[11px] text-gray-500">{activeExternalEvents.length}</span>
@@ -518,10 +628,9 @@
             </button>
           {/each}
         </Collapse>
-
       </div>
 
-      <div class="cursor-section">
+      <div class="cursor-section" class:hidden={!!analysis}>
         <Collapse title="Constraint Violations" padContent={false} error={activeViolations.length > 0}>
           <svelte:fragment slot="right">
             <span class="text-[11px]" class:text-destructive={activeViolations.length > 0}>
@@ -540,7 +649,7 @@
             >
               <span class="mt-0.5 shrink-0 text-destructive"><TriangleAlert size={13} /></span>
               <span class="flex min-w-0 flex-col gap-0.5">
-                <span class="truncate st-typography-medium">{violation.constraintName}</span>
+                <span class="st-typography-medium truncate">{violation.constraintName}</span>
                 {#if violation.message}
                   <span class="text-[10px] leading-snug text-gray-600">{violation.message}</span>
                 {/if}
@@ -643,5 +752,4 @@
     color: var(--st-gray-100, #17181a);
     font-weight: 600;
   }
-
 </style>

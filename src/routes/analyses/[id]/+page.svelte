@@ -312,7 +312,7 @@
         onExpand={() => ensureDefaultSize(inspectorPane, INSPECTOR_DEFAULT_SIZE)}
         bind:pane={inspectorPane}
       >
-        <Tabs bind:this={inspectorTabs} on:select-tab={onSelectTab}>
+        <Tabs bind:this={inspectorTabs} class="analysis-inspector" on:select-tab={onSelectTab}>
           <svelte:fragment slot="tab-list">
             <Tab class="flex items-center gap-1.5 text-xs" tabId="details"><TextSearch size={14} />Activity</Tab>
             <Tab class="flex items-center gap-1.5 text-xs" tabId="time"><Crosshair size={14} />At Time</Tab>
@@ -370,6 +370,23 @@
 {/if}
 
 <style>
+  /*
+   * The panels in these tabs scroll their own body, which needs a height to scroll within: the tab panel is the
+   * pane's height (the Tabs' own auto row would grow to the content instead, and the pane would only clip it).
+   */
+  :global(div.analysis-inspector.tabs) {
+    grid-template-rows: min-content minmax(0, 1fr);
+  }
+
+  :global(.analysis-inspector .tab-panels) {
+    min-height: 0;
+  }
+
+  :global(.analysis-inspector .tab-panel) {
+    display: grid;
+    min-height: 0;
+  }
+
   .analysis-page {
     display: flex;
     flex-direction: column;

@@ -1,27 +1,26 @@
 <svelte:options immutable={true} />
 
 <!--
-  What the analysis's sources say at the time cursor (the timeline's time cursor, `timeCursorMs`; with the comparison cursor set, the values at both and their difference).
+  The Analysis's time cursor inspector: the Plan's TimeCursorPanel (cursor A, comparison cursor B, resource rows with
+  A / B / Δ), fed from the analysis's sources instead of a plan's stores. This component only reads the data.
 
-  Resources: the ones the timeline's rows draw, each read at that instant from its own source and labelled for what
-  the value is: a recorded sample, a sample still held, a line between samples, a value computed from a simulation, or
-  unavailable (with why). Imported resources are read with one exact, one-instant query per revision, not from the
-  display data the rows hold (which is thinned to the screen).
+  Resources: the ones the timeline's rows plot, each read at the cursor from its own source and labelled for what the
+  value is (recorded sample, held, interpolated, computed, unavailable). Imported resources are read with one exact,
+  one-instant query per revision, never from the display data the rows hold (thinned to the screen), which only draws
+  the row's sparkline.
 
-  Activities: those of each source that overlap the instant, asked of the database (never loaded whole): the first few
+  Activities: those of each source that overlap the cursor, asked of the database (never loaded whole): the first few
   per source and how many there are in all.
 
-  Nothing is read while the time is being dragged: the queries run once it has settled.
+  Nothing is read while a cursor is being dragged: the queries run once it has settled.
 -->
 <script lang="ts">
-  import { Button } from '@nasa-jpl/stellar-svelte';
-  import { Crosshair } from 'lucide-svelte';
   import { debounce } from 'lodash-es';
   import { createEventDispatcher, onDestroy } from 'svelte';
-  import { analysisSimulationDatasets, analysisSourceRevisions, selectedAnalysisActivity } from '../../stores/analysis';
+  import { analysisMaxTimeRange, analysisSimulationDatasets, analysisSourceRevisions } from '../../stores/analysis';
   import { timeCursorCompareMs, timeCursorMs } from '../../stores/plan';
   import { plugins } from '../../stores/plugins';
-  import { getTimelineResourceState } from '../../stores/timelineResourceStatus';
+  import { getTimelineResourceState, timelineResources } from '../../stores/timelineResourceStatus';
   import { view } from '../../stores/views';
   import type {
     AnalysisActivityRef,
@@ -31,26 +30,27 @@
     AnalysisSourceRevision,
   } from '../../types/analysis';
   import type { User } from '../../types/app';
+  import type { ValueSchema } from '../../types/schema';
+  import type { TimeRange } from '../../types/timeline';
   import type { SourceQueryResult } from '../../utilities/importedResource';
   import {
     MAX_INSPECTED_RESOURCES,
-    formatAtTimeValue,
     getImportedValueAt,
     getInspectedResources,
     getInstantQuery,
     getSimulatedValueAt,
-    type AtTimeBasis,
+    type AnalysisCursorData,
     type AtTimeValue,
     type InspectedResource,
   } from '../../utilities/analysisAtTime';
   import {
-    analysisActivityRefsEqual,
     getAnalysisActivityOrderBy,
     getAnalysisActivityRowRef,
     getAnalysisActivityWhere,
   } from '../../utilities/analysis';
   import effects from '../../utilities/effects';
-  import { convertUsToDurationString, formatDate } from '../../utilities/time';
+  import TimeCursorPanel from '../timeline/TimeCursorPanel.svelte';
+  import { formatDate } from '../../utilities/time';
 
   export let bindings: AnalysisSourceBinding[] = [];
   export let sourceLabels: Record<string, string> = {};
@@ -68,7 +68,13 @@
   /** How long the pinned time must be still before anything is read. */
   const SETTLE_MS = 250;
 
-  type ResourceReading = { reading: AtTimeValue; resource: InspectedResource; units: string | null };
+  type ResourceReading = {
+    reading: AtTimeValue;
+    resource: InspectedResource;
+    schema: ValueSchema;
+    /** Where the timeline holds its display data (for the sparkline), if anywhere. */
+    status: { datasetId: number; kind: 'importedRevision' | 'sim' } | null;
+  };
   type ActivityListing = { rows: AnalysisActivityRow[]; sourceId: string; total: number };
   /** Everything read at one instant. */
   type Snapshot = { listings: ActivityListing[]; readings: ResourceReading[]; time: number };
@@ -87,10 +93,17 @@
   $: bindingsKey = bindings.map(binding => JSON.stringify(binding)).join('|');
   $: dataKey = `${$analysisSourceRevisions.length}:${$analysisSimulationDatasets.length}`;
   $: schedule($timeCursorMs, $timeCursorCompareMs, inspectedKey, bindingsKey, dataKey);
-  $: comparing = $timeCursorCompareMs !== null;
-  $: groups = groupByRow(a?.readings ?? []);
-  $: selected = $selectedAnalysisActivity;
-  $: outsideLimit = inspected.length > MAX_INSPECTED_RESOURCES;
+  $: cursorData = getCursorData(
+    a,
+    b,
+    inspected.length,
+    $timelineResources,
+    sourceLabels,
+    $plugins.time.primary.format,
+    $analysisMaxTimeRange,
+    loading,
+    error,
+  );
 
   const run = debounce(read, SETTLE_MS);
 
@@ -113,18 +126,86 @@
     request++;
   });
 
-  function groupByRow(all: ResourceReading[]) {
-    const byRow = new Map<number, { name: string; readings: ResourceReading[] }>();
-    all.forEach(entry => {
-      const group = byRow.get(entry.resource.rowId) ?? { name: entry.resource.rowName, readings: [] };
-      group.readings.push(entry);
-      byRow.set(entry.resource.rowId, group);
-    });
-    return [...byRow.values()];
+  /** A schema with the resource's units, where the cursor panel reads them from. */
+  function withUnit(schema: ValueSchema, units: string | null): ValueSchema {
+    return units ? { ...schema, metadata: { ...schema.metadata, unit: { value: units } } } : schema;
+  }
+
+  function formatTime(ms: number, format: (date: Date) => string | null): string {
+    return formatDate(new Date(ms), format);
+  }
+
+  /** What the cursor panel shows: the resources read, with their display data for the sparkline, and the activities. */
+  function getCursorData(
+    first: Snapshot | null,
+    second: Snapshot | null,
+    inspectedCount: number,
+    _timelineResources: unknown,
+    labels: Record<string, string>,
+    timeFormat: (date: Date) => string | null,
+    bounds: TimeRange,
+    isLoading: boolean,
+    errorMessage: string,
+  ): AnalysisCursorData {
+    if (!first) {
+      // No cursor yet, or its first read is still on its way.
+      return {
+        activities: [],
+        bounds,
+        error: errorMessage,
+        formatTime: ms => formatTime(ms, timeFormat),
+        loading: isLoading,
+        omittedResources: 0,
+        onSelectActivity: select,
+        resources: [],
+      };
+    }
+    const secondReadings = new Map(
+      (second?.readings ?? []).map(entry => [`${entry.resource.sourceId}::${entry.resource.name}`, entry]),
+    );
+    return {
+      activities: [first, second]
+        .filter((snapshot): snapshot is Snapshot => !!snapshot)
+        .map(snapshot => ({
+          cursor: second ? (snapshot === first ? 'A' : 'B') : null,
+          sources: snapshot.listings.map(listing => ({
+            label: labels[listing.sourceId] ?? listing.sourceId,
+            note:
+              bindings.find(({ id }) => id === listing.sourceId)?.kind === 'plan'
+                ? "A plan's directives have no end: only those starting at this instant are listed."
+                : undefined,
+            rows: listing.rows,
+            sourceId: listing.sourceId,
+            total: listing.total,
+          })),
+          time: snapshot.time,
+        })),
+      bounds,
+      error: errorMessage,
+      formatTime: ms => formatTime(ms, timeFormat),
+      loading: isLoading,
+      omittedResources: Math.max(0, inspectedCount - MAX_INSPECTED_RESOURCES),
+      onSelectActivity: select,
+      resources: first.readings.map(entry => {
+        const key = `${entry.resource.sourceId}::${entry.resource.name}`;
+        const state = entry.status
+          ? getTimelineResourceState(entry.status.datasetId, entry.resource.name, entry.status.kind)
+          : undefined;
+        return {
+          display: state?.resource ?? { name: entry.resource.name, schema: entry.schema, values: [] },
+          key,
+          name: entry.resource.name,
+          readingA: entry.reading,
+          readingB: secondReadings.get(key)?.reading ?? null,
+          schema: entry.schema,
+          sourceLabel: labels[entry.resource.sourceId] ?? entry.resource.sourceId,
+        };
+      }),
+    };
   }
 
   function unavailable(resource: InspectedResource, note: string): ResourceReading {
-    return { reading: { basis: 'unavailable', note, value: null }, resource, units: null };
+    return { reading: { basis: 'unavailable', note, value: null }, resource, schema: { type: 'string' }, status: null };
   }
 
   async function readResources(
@@ -174,7 +255,8 @@
                       })
                     : { basis: 'unavailable', note: 'The source returned nothing for it', value: null },
                   resource: member,
-                  units: definition.units,
+                  schema: withUnit(definition.schema, definition.units),
+                  status: { datasetId: revision.id, kind: 'importedRevision' },
                 });
               });
             } catch (e) {
@@ -188,7 +270,12 @@
             out.set(
               member,
               state?.resource
-                ? { reading: getSimulatedValueAt(state.resource.values, time), resource: member, units: null }
+                ? {
+                    reading: getSimulatedValueAt(state.resource.values, time),
+                    resource: member,
+                    schema: state.resource.schema,
+                    status: dataset ? { datasetId: dataset.dataset_id, kind: 'sim' } : null,
+                  }
                 : unavailable(member, state?.error || 'Not loaded: the timeline has not read this resource yet'),
             );
           });
@@ -252,72 +339,6 @@
     }
   }
 
-  function formatTime(ms: number): string {
-    return formatDate(new Date(ms), $plugins.time.primary.format);
-  }
-
-  /** How far `ms` is from the pinned time, to its two largest units: "−2y 202d", "+55s". */
-  function offset(ms: number, from: number): string {
-    const delta = ms - from;
-    const span =
-      convertUsToDurationString(Math.abs(delta) * 1000)
-        .split(' ')
-        .slice(0, 2)
-        .join(' ') || '0s';
-    return `${delta < 0 ? '−' : '+'}${span}`;
-  }
-
-  function showValue(reading: AtTimeValue): string {
-    return reading.basis === 'unavailable' || reading.basis === 'gap' ? '—' : formatAtTimeValue(reading.value);
-  }
-
-  /** B minus A, when both are numbers. */
-  function getDelta(first: AtTimeValue, second: AtTimeValue): string {
-    if (typeof first.value === 'number' && typeof second.value === 'number') {
-      const delta = second.value - first.value;
-      return delta === 0 ? 'no change' : `Δ ${delta > 0 ? '+' : '−'}${formatAtTimeValue(Math.abs(delta))}`;
-    }
-    return first.value === second.value ? 'no change' : 'changed';
-  }
-
-  function toggleCompare() {
-    if ($timeCursorCompareMs !== null) {
-      $timeCursorCompareMs = null;
-    } else if ($timeCursorMs !== null) {
-      // As the playhead does: far enough from A to be a cursor of its own.
-      $timeCursorCompareMs = $timeCursorMs + 3_600_000;
-    }
-  }
-
-  const basisLabels: Record<AtTimeBasis, string> = {
-    computed: 'Computed',
-    gap: 'Gap',
-    held: 'Held',
-    interpolated: 'Interpolated',
-    sample: 'Sample',
-    unavailable: 'Unavailable',
-  };
-
-  /** What the value is, in words, with the times it rests on. */
-  function explain(reading: AtTimeValue, time: number): string {
-    const sample = reading.sampleMs;
-    const next = reading.nextMs;
-    switch (reading.basis) {
-      case 'sample':
-        return `Recorded at ${formatTime(sample ?? time)}${reading.approximate ? ' (approximate response)' : ''}`;
-      case 'held':
-        return `Last sample ${offset(sample!, time)} (${formatTime(sample!)}) still in effect${next ? `; next sample ${offset(next, time)}` : ''}`;
-      case 'interpolated':
-        return `A straight line between the samples at ${offset(sample!, time)} and ${offset(next!, time)}; not recorded`;
-      case 'computed':
-        return `Read off the simulation's profile${sample !== undefined ? ` (segment from ${offset(sample, time)}${next ? ` to ${offset(next, time)}` : ''})` : ''}; not a recorded sample`;
-      case 'gap':
-        return `The source records no data here${sample !== undefined ? ` (from ${formatTime(sample)})` : ''}`;
-      default:
-        return reading.note ?? '';
-    }
-  }
-
   function select(row: AnalysisActivityRow) {
     const ref = getAnalysisActivityRowRef(bindings, row);
     if (ref) {
@@ -327,355 +348,4 @@
   }
 </script>
 
-<div class="at-time">
-  <div class="time-bar">
-    <Crosshair size={14} class="shrink-0 text-muted-foreground" />
-    {#if $timeCursorMs === null}
-      <span class="text-muted-foreground">No time cursor</span>
-    {:else}
-      <span class="time-lines">
-        <span class="st-typography-medium time" aria-label="Time cursor">
-          {#if comparing}<span class="badge-ab">A</span>{/if}{formatTime($timeCursorMs)}
-          {$plugins.time.primary.label}
-        </span>
-        {#if $timeCursorCompareMs !== null}
-          <span class="st-typography-medium time" aria-label="Comparison cursor">
-            <span class="badge-ab">B</span>{formatTime($timeCursorCompareMs)}
-            {$plugins.time.primary.label}
-            <span class="text-muted-foreground">({offset($timeCursorCompareMs, $timeCursorMs)})</span>
-          </span>
-        {/if}
-      </span>
-    {/if}
-    <span class="grow" />
-    {#if $timeCursorMs !== null}
-      <Button
-        size="xs"
-        variant="outline"
-        title="Bring the time cursor into view on the timeline"
-        on:click={() => $timeCursorMs !== null && dispatch('reveal', $timeCursorMs)}>Show</Button
-      >
-      <Button
-        size="xs"
-        variant="outline"
-        aria-pressed={comparing}
-        title="Read the sources at a second time too, and compare"
-        on:click={toggleCompare}>{comparing ? 'Stop comparing' : 'Compare'}</Button
-      >
-      <Button
-        size="xs"
-        variant="outline"
-        on:click={() => {
-          $timeCursorCompareMs = null;
-          $timeCursorMs = null;
-        }}>Clear</Button
-      >
-    {/if}
-  </div>
-
-  {#if $timeCursorMs === null}
-    <div class="empty">
-      Press on the ruler above the rows, or right-click the timeline and choose <span class="st-typography-medium"
-        >Set Time Cursor</span
-      >, to see what each source says at that time. The cursor stays put while you zoom and pan, and drag it to scrub.
-    </div>
-  {:else}
-    <div class="body" class:stale={loading}>
-      {#if loading}
-        <div class="note">Updating…</div>
-      {/if}
-      {#if error}
-        <div class="note error" role="alert">{error}</div>
-      {/if}
-
-      <section aria-label="Resource values at the time cursor">
-        <h3 class="st-typography-medium">Resources</h3>
-        {#if !inspected.length}
-          <div class="note">
-            No resource is on the timeline. Only the resources the timeline's rows draw are read at a time.
-          </div>
-        {/if}
-        {#each groups as group (group.name + group.readings[0].resource.rowId)}
-          <div class="row-name st-typography-label">{group.name}</div>
-          {#each group.readings as { reading, resource, units } (resource.sourceId + resource.name)}
-            {@const other = b?.readings.find(
-              r => r.resource.sourceId === resource.sourceId && r.resource.name === resource.name,
-            )?.reading}
-            <div class="reading" class:muted={reading.basis === 'unavailable'}>
-              <div class="reading-line">
-                <span class="resource-name" title={resource.name}>{resource.name}</span>
-                <span class="value" class:none={reading.value === null}>
-                  {showValue(reading)}
-                  {#if units && reading.value !== null}<span class="units">{units}</span>{/if}
-                </span>
-                <span class="basis {reading.basis}">{basisLabels[reading.basis]}</span>
-              </div>
-              {#if comparing}
-                <div class="reading-line">
-                  <span class="resource-name text-muted-foreground">
-                    at B
-                    {#if other}<span class="delta">{getDelta(reading, other)}</span>{/if}
-                  </span>
-                  <span class="value" class:none={!other || other.value === null}>
-                    {other ? showValue(other) : '—'}
-                    {#if units && other && other.value !== null}<span class="units">{units}</span>{/if}
-                  </span>
-                  <span class="basis {other?.basis ?? 'unavailable'}">{basisLabels[other?.basis ?? 'unavailable']}</span
-                  >
-                </div>
-              {/if}
-              <div class="detail">
-                <span class="source-label">{sourceLabels[resource.sourceId] ?? resource.sourceId}</span>
-                · {explain(reading, a?.time ?? $timeCursorMs)}
-              </div>
-              {#if comparing && other}
-                <div class="detail">B: {explain(other, b?.time ?? $timeCursorMs)}</div>
-              {/if}
-            </div>
-          {/each}
-        {/each}
-        {#if outsideLimit}
-          <div class="note">
-            Showing the first {MAX_INSPECTED_RESOURCES} of {inspected.length} resources on the timeline.
-          </div>
-        {/if}
-      </section>
-
-      {#each [a, b] as snapshot, index}
-        {#if snapshot}
-          <section aria-label="Activities overlapping the time cursor">
-            <h3 class="st-typography-medium">Activities{comparing ? ` at ${index === 0 ? 'A' : 'B'}` : ''}</h3>
-            {#each snapshot.listings as listing (listing.sourceId)}
-              {@const binding = bindings.find(({ id }) => id === listing.sourceId)}
-              <div class="row-name st-typography-label">
-                {sourceLabels[listing.sourceId] ?? listing.sourceId}
-                <span class="count">
-                  {listing.total.toLocaleString()} at this time{listing.total > listing.rows.length
-                    ? `, latest ${listing.rows.length} shown`
-                    : ''}
-                </span>
-              </div>
-              {#each listing.rows as row (row.activity_id)}
-                {@const ref = getAnalysisActivityRowRef(bindings, row)}
-                <button
-                  class="activity"
-                  class:selected={analysisActivityRefsEqual(ref, selected)}
-                  on:click={() => select(row)}
-                >
-                  <span class="activity-type">{row.type}</span>
-                  {#if row.name && row.name !== row.type}<span class="activity-name">{row.name}</span>{/if}
-                  <span class="activity-time">
-                    {offset(Date.parse(row.start_time), snapshot.time)}
-                    →
-                    {row.end_time ? offset(Date.parse(row.end_time), snapshot.time) : 'no end'}
-                  </span>
-                </button>
-              {/each}
-              {#if binding?.kind === 'plan'}
-                <div class="note">A plan's directives have no end: only those starting at this instant are listed.</div>
-              {/if}
-            {:else}
-              <div class="note">This analysis has no sources.</div>
-            {/each}
-          </section>
-        {/if}
-      {/each}
-    </div>
-  {/if}
-</div>
-
-<style>
-  .at-time {
-    display: flex;
-    flex-direction: column;
-    font-size: 12px;
-    height: 100%;
-  }
-
-  .time-bar {
-    align-items: center;
-    border-bottom: 1px solid var(--st-gray-20);
-    display: flex;
-    gap: 6px;
-    padding: 6px 8px;
-  }
-
-  .time {
-    font-variant-numeric: tabular-nums;
-  }
-
-  .time-lines {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .badge-ab {
-    background: var(--st-gray-100);
-    border-radius: 3px;
-    color: white;
-    font-size: 10px;
-    margin-right: 4px;
-    padding: 0 3px;
-  }
-
-  .delta {
-    color: var(--st-gray-60);
-    margin-left: 6px;
-  }
-
-  .grow {
-    flex: 1;
-  }
-
-  .empty,
-  .note {
-    color: var(--st-gray-60);
-    padding: 8px;
-  }
-
-  .note.error {
-    color: var(--st-utility-red, #b3261e);
-  }
-
-  .body {
-    flex: 1;
-    overflow: auto;
-    padding-bottom: 8px;
-  }
-
-  .body.stale section {
-    opacity: 0.6;
-  }
-
-  h3 {
-    background: var(--st-gray-10);
-    border-bottom: 1px solid var(--st-gray-20);
-    margin: 0;
-    padding: 4px 8px;
-    position: sticky;
-    top: 0;
-    z-index: 1;
-  }
-
-  .row-name {
-    color: var(--st-gray-70);
-    padding: 6px 8px 2px;
-  }
-
-  .count {
-    color: var(--st-gray-50);
-    margin-left: 4px;
-  }
-
-  .reading {
-    padding: 2px 8px 4px;
-  }
-
-  .reading-line {
-    align-items: baseline;
-    display: flex;
-    gap: 8px;
-  }
-
-  .resource-name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .value {
-    font-variant-numeric: tabular-nums;
-    font-weight: 600;
-    max-width: 50%;
-    overflow-wrap: anywhere;
-    text-align: right;
-  }
-
-  .units {
-    color: var(--st-gray-60);
-    font-weight: 400;
-  }
-
-  .muted .resource-name,
-  .value.none {
-    color: var(--st-gray-50);
-  }
-
-  .basis {
-    border: 1px solid var(--st-gray-30);
-    border-radius: 3px;
-    color: var(--st-gray-70);
-    flex: none;
-    font-size: 10px;
-    padding: 0 4px;
-    text-transform: uppercase;
-  }
-
-  .basis.sample {
-    background: var(--st-gray-100);
-    border-color: var(--st-gray-100);
-    color: white;
-  }
-
-  .basis.interpolated {
-    border-color: #b7791f;
-    color: #8a5a12;
-  }
-
-  .basis.computed {
-    border-color: var(--st-utility-blue);
-    color: var(--st-utility-blue);
-  }
-
-  .basis.unavailable,
-  .basis.gap {
-    border-style: dashed;
-    color: var(--st-gray-50);
-  }
-
-  .detail {
-    color: var(--st-gray-60);
-    font-size: 11px;
-    overflow-wrap: anywhere;
-  }
-
-  .source-label {
-    color: var(--st-gray-80);
-  }
-
-  .activity {
-    background: none;
-    border: 0;
-    cursor: pointer;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px 8px;
-    padding: 3px 8px;
-    text-align: left;
-    width: 100%;
-  }
-
-  .activity:hover {
-    background: var(--st-gray-15);
-  }
-
-  .activity.selected {
-    background: var(--st-utility-blue-10, rgba(47, 128, 237, 0.16));
-  }
-
-  .activity-type {
-    font-weight: 600;
-  }
-
-  .activity-name {
-    color: var(--st-gray-70);
-  }
-
-  .activity-time {
-    color: var(--st-gray-60);
-    font-variant-numeric: tabular-nums;
-    margin-left: auto;
-  }
-</style>
+<TimeCursorPanel gridSection="RightTop" analysis={cursorData} {user} />

@@ -1,5 +1,7 @@
-import type { ResourceValue } from '../types/simulation';
-import type { Layer, Row, Timeline } from '../types/timeline';
+import type { AnalysisActivityRow } from '../types/analysis';
+import type { ValueSchema } from '../types/schema';
+import type { Resource, ResourceValue } from '../types/simulation';
+import type { Layer, Row, TimeRange, Timeline } from '../types/timeline';
 import type { TimelineSourceId } from '../types/timelineSource';
 import {
   GAP,
@@ -10,6 +12,7 @@ import {
   type SourceQueryResult,
   type SourceSeries,
 } from './importedResource';
+import { convertUsToDurationString } from './time';
 
 /*
  * What a source says at one instant. A value is never presented as more than it is:
@@ -213,3 +216,77 @@ export function formatAtTimeValue(value: number | string | null): string {
   }
   return value;
 }
+
+export const atTimeBasisLabels: Record<AtTimeBasis, string> = {
+  computed: 'Computed',
+  gap: 'Gap',
+  held: 'Held',
+  interpolated: 'Interpolated',
+  sample: 'Sample',
+  unavailable: 'Unavailable',
+};
+
+/** How far `ms` is from `from`, to its two largest units: "−2y 202d", "+55s". */
+export function formatTimeOffset(ms: number, from: number): string {
+  const delta = ms - from;
+  const span =
+    convertUsToDurationString(Math.abs(delta) * 1000)
+      .split(' ')
+      .slice(0, 2)
+      .join(' ') || '0s';
+  return `${delta < 0 ? '−' : '+'}${span}`;
+}
+
+/** What a reading is, in words, with the times it rests on (relative to `time`, the instant it was read at). */
+export function explainAtTime(reading: AtTimeValue, time: number, formatTime: (ms: number) => string): string {
+  const sample = reading.sampleMs;
+  const next = reading.nextMs;
+  switch (reading.basis) {
+    case 'sample':
+      return `Recorded at ${formatTime(sample ?? time)}${reading.approximate ? ' (approximate response)' : ''}`;
+    case 'held':
+      return `Last sample ${formatTimeOffset(sample!, time)} (${formatTime(sample!)}) still in effect${next ? `; next sample ${formatTimeOffset(next, time)}` : ''}`;
+    case 'interpolated':
+      return `A straight line between the samples at ${formatTimeOffset(sample!, time)} and ${formatTimeOffset(next!, time)}; not recorded`;
+    case 'computed':
+      return `Read off the simulation's profile${sample !== undefined ? ` (segment from ${formatTimeOffset(sample, time)}${next ? ` to ${formatTimeOffset(next, time)}` : ''})` : ''}; not a recorded sample`;
+    case 'gap':
+      return `The source records no data here${sample !== undefined ? ` (from ${formatTime(sample)})` : ''}`;
+    default:
+      return reading.note ?? '';
+  }
+}
+
+/* What the Analysis hands the time cursor panel, in place of the Plan's stores. */
+
+export type AnalysisCursorResource = {
+  /** Display data the timeline holds for it, for the sparkline only (never read for the value). */
+  display: Resource;
+  /** Identifies it among sources with resources of the same name. */
+  key: string;
+  name: string;
+  readingA: AtTimeValue;
+  readingB: AtTimeValue | null;
+  schema: ValueSchema;
+  sourceLabel: string;
+};
+
+export type AnalysisCursorActivityGroup = {
+  /** Which cursor, when two are set. */
+  cursor: 'A' | 'B' | null;
+  sources: { label: string; note?: string; rows: AnalysisActivityRow[]; sourceId: string; total: number }[];
+  time: number;
+};
+
+export type AnalysisCursorData = {
+  activities: AnalysisCursorActivityGroup[];
+  /** Where the cursors may go: what the analysis's sources cover. */
+  bounds: TimeRange;
+  error: string;
+  formatTime: (ms: number) => string;
+  loading: boolean;
+  /** Resources the timeline plots that were not read (beyond the limit). */
+  omittedResources: number;
+  onSelectActivity: (row: AnalysisActivityRow) => void;
+  resources: AnalysisCursorResource[];
+};

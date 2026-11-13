@@ -4,6 +4,7 @@
   import { createEventDispatcher } from 'svelte';
   import type { ValueSchema } from '../../types/schema';
   import type { Resource } from '../../types/simulation';
+  import { atTimeBasisLabels, explainAtTime, type AtTimeValue } from '../../utilities/analysisAtTime';
   import {
     formatResourceNumber,
     formatResourceValue,
@@ -22,6 +23,17 @@
   export let expanded: boolean = false;
   export let interpolate: boolean = false;
   export let name: string;
+  /**
+   * An Analysis reads each value from its source at the instant, and says what the value is (a recorded sample, one
+   * held from an earlier sample, a line between samples...). When given, they replace the value found in `resource`,
+   * which then only draws the sparkline; there are no window statistics, which would be of thinned display data.
+   */
+  export let readingA: AtTimeValue | null = null;
+  export let readingB: AtTimeValue | null = null;
+  /** The source the value is of, shown under the name (an Analysis has several, with resources of the same name). */
+  export let sourceLabel: string = '';
+  /** Formats the time a reading's explanation names. */
+  export let formatTime: (ms: number) => string = ms => new Date(ms).toISOString();
   export let resource: Resource;
   export let schema: ValueSchema;
   export let showStats: boolean = false;
@@ -43,15 +55,24 @@
 
   $: unit = schema.metadata?.unit?.value ?? '';
 
-  $: valueA = getResourceValueAtTime(resource, cursorTimeMs, interpolate);
-  $: valueB = compareTimeMs === null ? null : getResourceValueAtTime(resource, compareTimeMs, interpolate);
+  $: valueA = readingA ? fromReading(readingA) : getResourceValueAtTime(resource, cursorTimeMs, interpolate);
+  $: valueB =
+    compareTimeMs === null
+      ? null
+      : readingB
+        ? fromReading(readingB)
+        : readingA
+          ? { isGap: true, value: null }
+          : getResourceValueAtTime(resource, compareTimeMs, interpolate);
   $: delta =
     numeric && typeof valueA.value === 'number' && typeof valueB?.value === 'number'
       ? valueB.value - valueA.value
       : null;
 
   $: stats =
-    numeric && compareTimeMs !== null ? getResourceWindowStats(resource, cursorTimeMs, compareTimeMs) : null;
+    numeric && compareTimeMs !== null && !readingA
+      ? getResourceWindowStats(resource, cursorTimeMs, compareTimeMs)
+      : null;
 
   $: spark = numeric ? getResourceSparkline(resource, domainStartMs, domainEndMs, sparkWidth, SPARK_HEIGHT) : null;
   $: sparkAx = sparkX(cursorTimeMs);
@@ -59,9 +80,17 @@
 
   /** Time integral over the compared window, in the resource's own unit composed with hours. */
   $: integral =
-    stats && stats.durationMs > 0
-      ? { unit: unit ? `${unit}·h` : 'h', value: stats.area / 3_600_000 }
-      : null;
+    stats && stats.durationMs > 0 ? { unit: unit ? `${unit}·h` : 'h', value: stats.area / 3_600_000 } : null;
+
+  /** A reading as the row shows a value: nothing to show for a gap or for what could not be read. */
+  function fromReading(reading: AtTimeValue) {
+    const none = reading.basis === 'gap' || reading.basis === 'unavailable';
+    return { isGap: none, value: none ? null : reading.value };
+  }
+
+  function basisLine(reading: AtTimeValue | null): string {
+    return reading ? atTimeBasisLabels[reading.basis] : '';
+  }
 
   function sparkX(timeMs: number): number {
     if (domainEndMs <= domainStartMs) {
@@ -93,6 +122,11 @@
         {name}
         {#if watched}<span class="watched-tag">watched</span>{/if}
       </span>
+      {#if readingA}
+        <span class="sub" title={sourceLabel}>
+          {sourceLabel} · {basisLine(readingA)}{comparing && readingB ? ` / ${basisLine(readingB)}` : ''}
+        </span>
+      {/if}
       {#if unit && (comparing || showStats)}
         <span class="sub font-mono">{unit}</span>
       {/if}
@@ -118,7 +152,9 @@
       <span class="value muted font-mono">{formatResourceNumber(stats.max, decimals)}</span>
     {:else if comparing}
       <span class="value font-mono" class:is-gap={valueA.isGap}>{display(valueA.value, valueA.isGap)}</span>
-      <span class="value value-b font-mono" class:is-gap={valueB?.isGap}>{display(valueB?.value ?? null, !!valueB?.isGap)}</span>
+      <span class="value value-b font-mono" class:is-gap={valueB?.isGap}
+        >{display(valueB?.value ?? null, !!valueB?.isGap)}</span
+      >
       <span class="value delta font-mono" class:up={(delta ?? 0) > 0} class:down={(delta ?? 0) < 0}>
         {delta === null ? '–' : `${delta > 0 ? '+' : ''}${formatResourceNumber(delta, decimals)}`}
       </span>
@@ -184,6 +220,14 @@
           {/if}
         {/if}
       </div>
+      {#if readingA}
+        <div class="detail-note">
+          {comparing ? 'A: ' : ''}{explainAtTime(readingA, cursorTimeMs, formatTime)}
+        </div>
+        {#if comparing && readingB && compareTimeMs !== null}
+          <div class="detail-note">B: {explainAtTime(readingB, compareTimeMs, formatTime)}</div>
+        {/if}
+      {/if}
       {#if stats}
         <div class="detail-note">
           {stats.sampleCount} samples in window · range {formatResourceNumber(stats.max - stats.min, decimals)}
