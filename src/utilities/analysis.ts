@@ -519,6 +519,27 @@ export function getSourceUsage(
 }
 
 /**
+ * What deleting source data does to what uses it, for the confirmation: the analyses that read it show it as
+ * unavailable, and a plan that has it attached loses it (the link goes with the revision) and its timeline layers
+ * show it as unavailable. Never says "unused" of something a plan or an analysis uses.
+ */
+export function getSourceDeletionImpact(analyses: { name: string }[], plans: { name: string }[]): string {
+  const names = (list: { name: string }[]) => list.map(({ name }) => `"${name}"`).join(', ');
+  const parts: string[] = [];
+  if (analyses.length) {
+    parts.push(
+      `${analyses.length === 1 ? 'The analysis' : 'These analyses'} ${names(analyses)} will show it as unavailable.`,
+    );
+  }
+  if (plans.length) {
+    parts.push(
+      `${plans.length === 1 ? 'The plan' : 'These plans'} ${names(plans)} ${plans.length === 1 ? 'has' : 'have'} it attached and will lose it: layers that read it will show it as unavailable, and adding it again will not reconnect them.`,
+    );
+  }
+  return parts.length ? parts.join(' ') : 'No analysis or plan uses it.';
+}
+
+/**
  * Records, on each imported binding, which source its revision belongs to (and that source's name), from the
  * revisions just read. Bindings saved before that was recorded gain it, and renamed sources are followed. Returns
  * `bindings` itself when nothing changes.

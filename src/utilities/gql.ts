@@ -1842,6 +1842,19 @@ const gql = {
     }
   `,
 
+  GET_PLAN_SOURCE_USAGE: `#graphql
+    query GetPlanSourceUsage($revisionIds: [Int!]!) {
+      planSources: ${Queries.PLAN_SOURCES}(where: { source_revision_id: { _in: $revisionIds } }) {
+        id
+        plan {
+          id
+          name
+        }
+        source_revision_id
+      }
+    }
+  `,
+
   GET_PROFILE_SINCE: `#graphql
     query GetProfileSince($datasetId: Int!, $name: String!, $sinceOffset: interval!) {
       ${Queries.PROFILES}(where: { _and: { dataset_id: { _eq: $datasetId }, name: { _eq: $name } } }, limit: 1) {

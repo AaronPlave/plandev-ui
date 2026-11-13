@@ -216,6 +216,13 @@
           <span class="font-medium">{result.kept} of {layerTotal}</span>
           {layerTotal === 1 ? 'layer' : 'layers'} will be loaded.
         </div>
+        {#if result.kept === 0}
+          <div class="rounded border border-destructive/50 p-2" role="alert">
+            None of this view's layers can be shown by this analysis's sources, so loading it would only empty the
+            timeline. {currentRows ? 'The timeline is left as it is.' : ''} Add the sources it needs, or choose a source
+            above, first.
+          </div>
+        {/if}
         {#if omittedByReason.length}
           <div class="rounded border p-2" role="status">
             <div class="mb-1 font-medium">Left out ({result.omitted.length})</div>
@@ -235,7 +242,7 @@
       </div>
       <Dialog.Footer>
         <Button variant="outline" on:click={() => (loaded = null)}>Back</Button>
-        <Button variant={currentRows ? 'destructive' : 'default'} on:click={load}>
+        <Button variant={currentRows ? 'destructive' : 'default'} disabled={result.kept === 0} on:click={load}>
           {currentRows ? 'Replace Timeline' : 'Load Timeline'}
         </Button>
       </Dialog.Footer>

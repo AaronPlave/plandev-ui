@@ -47,6 +47,7 @@ import {
   getRevisionActivities,
   getSimulationDatasetSpans,
 } from './analysisActivities';
+import { resetAnalysisInspection } from './analysisInspection';
 import { createImportedResourceSubscription, getSourceQuery } from './importedResource';
 import { viewTimeRange } from './plan';
 import { createProfileSubscription } from './profile';
@@ -297,6 +298,7 @@ export function closeAnalysis() {
   analysisSimulationTypeCounts.set({});
   selectedAnalysisActivity.set(null);
   clearAnalysisImports();
+  resetAnalysisInspection();
   view.set(null);
 }
 
@@ -537,6 +539,11 @@ export async function readViewForTimelineImport(
 export function replaceAnalysisTimeline(timeline: Timeline, user: User | null): boolean {
   const current = get(analysis);
   if (!current || !featurePermissions.analysis.canUpdate(user, current)) {
+    return false;
+  }
+  // Nothing mapped to this analysis's sources: replacing the timeline would only empty it.
+  if (!timeline.rows.some(row => row.layers.length)) {
+    showFailureToast('Nothing In The View Maps To This Analysis, So The Timeline Was Not Replaced');
     return false;
   }
   view.update(currentView =>

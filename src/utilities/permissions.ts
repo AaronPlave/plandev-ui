@@ -858,6 +858,7 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
     return isUserAdmin(user) || getPermission([Queries.PLAN_SNAPSHOT_ACTIVITIES], user);
   },
   GET_PLAN_SOURCES_BY_ID: () => true,
+  GET_PLAN_SOURCE_USAGE: () => true,
   GET_PROFILE_SINCE: () => true,
   GET_RESOURCE_TYPES: () => true,
   GET_ROLE_PERMISSIONS: () => true,

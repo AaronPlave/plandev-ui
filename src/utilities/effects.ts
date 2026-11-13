@@ -266,6 +266,7 @@ import {
   bulkShiftActivityDirectivesInPlan,
   packActivityDirectivesInPlan,
 } from './activities';
+import { getSourceDeletionImpact } from './analysis';
 import type { ViewImportPlanSource } from './analysisViewImport';
 import { convertToQuery } from './generic';
 import gql, { convertToGQLArray } from './gql';
@@ -3632,9 +3633,9 @@ const effects = {
       }
       const { confirm } = await showConfirmModal(
         'Remove',
-        `Remove "${planSource.label}" from this plan? The imported source and its data are not deleted, and it can be added again. ${
+        `Remove "${planSource.label}" from this plan? The imported source and its data are not deleted, and it can be added to the plan again, but as a new link: layers that read it do not reconnect to it, and would have to be added again from Sources. ${
           layersUsing.length
-            ? `${layersUsing.length === 1 ? 'This timeline layer reads' : 'These timeline layers read'} it and will show it as unavailable until it is added again: ${layersUsing.join(', ')}. `
+            ? `${layersUsing.length === 1 ? 'This timeline layer reads' : 'These timeline layers read'} it and will show it as unavailable: ${layersUsing.join(', ')}. `
             : ''
         }Saved views that use it will do the same.`,
         'Remove Source from Plan',
@@ -3913,13 +3914,18 @@ const effects = {
       if (!queryPermissions.DELETE_SOURCE(user, source)) {
         throwPermissionError('delete this source');
       }
+      const plans = await effects.getPlanSourceUsage(
+        source.revisions.map(({ id }) => id),
+        user,
+      );
+      if (!plans) {
+        // Not knowing is not the same as unused: do not offer a deletion that may take a plan's source away.
+        showFailureToast('Could Not Check Which Plans Use This Source');
+        return false;
+      }
       const { confirm } = await showConfirmModal(
         'Delete',
-        `Delete "${source.name}" and all ${source.revisions.length} of its revisions? ${
-          usedBy.length
-            ? `${usedBy.length === 1 ? 'The analysis' : 'These analyses'} ${usedBy.map(({ name }) => `"${name}"`).join(', ')} will show it as unavailable. `
-            : 'No analysis uses it. '
-        }`,
+        `Delete "${source.name}" and all ${source.revisions.length} of its revisions? ${getSourceDeletionImpact(usedBy, plans)}`,
         'Delete Source',
       );
       if (confirm) {
@@ -3947,13 +3953,14 @@ const effects = {
       if (!queryPermissions.DELETE_SOURCE_REVISION(user, source)) {
         throwPermissionError('delete this revision');
       }
+      const plans = await effects.getPlanSourceUsage([revisionId], user);
+      if (!plans) {
+        showFailureToast('Could Not Check Which Plans Use This Revision');
+        return false;
+      }
       const { confirm } = await showConfirmModal(
         'Delete',
-        `Delete this revision of "${source.name}" and its data? ${
-          usedBy.length
-            ? `${usedBy.length === 1 ? 'The analysis' : 'These analyses'} ${usedBy.map(({ name }) => `"${name}"`).join(', ')} will show it as unavailable. `
-            : ''
-        }`,
+        `Delete this revision of "${source.name}" and its data? ${getSourceDeletionImpact(usedBy, plans)}`,
         'Delete Revision',
       );
       if (confirm) {
@@ -5377,6 +5384,29 @@ const effects = {
    * The imported revisions that plan_source ids stand for, to translate a saved view's layers. Ids that no longer
    * exist are simply absent. `null` when the read failed.
    */
+  /**
+   * The plans that use any of these source revisions, by plan; null (reported) when that can't be read, so a caller
+   * never mistakes "unknown" for "unused". Deleting a revision removes it from every plan that uses it.
+   */
+  async getPlanSourceUsage(revisionIds: number[], user: User | null): Promise<{ id: number; name: string }[] | null> {
+    if (!revisionIds.length) {
+      return [];
+    }
+    try {
+      const data = await reqHasura<{ id: number; plan: { id: number; name: string } }[]>(
+        gql.GET_PLAN_SOURCE_USAGE,
+        { revisionIds },
+        user,
+      );
+      const plans = new Map<number, { id: number; name: string }>();
+      (data.planSources ?? []).forEach(({ plan }) => plan && plans.set(plan.id, plan));
+      return [...plans.values()].sort((a, b) => a.name.localeCompare(b.name));
+    } catch (e) {
+      catchError('log', 'Unable to check which plans use the source', e as Error);
+      return null;
+    }
+  },
+
   async getPlanSourcesForImport(ids: number[], user: User | null): Promise<ViewImportPlanSource[] | null> {
     if (!ids.length) {
       return [];

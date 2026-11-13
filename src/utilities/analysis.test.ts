@@ -33,6 +33,7 @@ import {
   getImportOutcome,
   getRevisionSummary,
   getRevisionUsage,
+  getSourceDeletionImpact,
   getSourceUsage,
   splitSourceRevisions,
   withSourceIdentity,
@@ -774,5 +775,24 @@ describe('the analysis Analyze returns to', () => {
         userId: undefined,
       }),
     ).toBe(1);
+  });
+});
+
+describe('getSourceDeletionImpact', () => {
+  it('says nothing is affected only when neither an analysis nor a plan uses it', () => {
+    expect(getSourceDeletionImpact([], [])).toBe('No analysis or plan uses it.');
+  });
+
+  it('never calls a source attached to a plan unused', () => {
+    const text = getSourceDeletionImpact([], [{ name: 'Cruise plan' }]);
+    expect(text).toContain('"Cruise plan"');
+    expect(text).toContain('will lose it');
+    expect(text).not.toContain('No analysis or plan');
+  });
+
+  it('names both the analyses and the plans', () => {
+    const text = getSourceDeletionImpact([{ name: 'A1' }, { name: 'A2' }], [{ name: 'P1' }]);
+    expect(text).toContain('These analyses "A1", "A2"');
+    expect(text).toContain('The plan "P1" has it attached');
   });
 });

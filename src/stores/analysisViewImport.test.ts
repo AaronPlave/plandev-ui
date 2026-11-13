@@ -165,6 +165,16 @@ describe('loading a saved view into an open analysis', () => {
     expect(get(view)!.definition.plan.timelines[0].rows).toHaveLength(2);
   });
 
+  it('never replaces a timeline with one that has no layers', async () => {
+    const { timeline } = await loadIntoOpenAnalysis(savedAnalysis());
+    const before = get(view);
+    const layerless = { ...timeline, rows: timeline.rows.map(row => ({ ...row, layers: [] })) };
+    expect(replaceAnalysisTimeline(layerless, owner)).toBe(false);
+    expect(replaceAnalysisTimeline({ ...timeline, rows: [] }, owner)).toBe(false);
+    expect(get(view)).toBe(before);
+    expect(get(view)!.definition.plan.timelines[0].rows.map(row => row.name)).toEqual(['Existing row']);
+  });
+
   it('does nothing for someone who cannot edit the analysis', async () => {
     const { timeline } = await loadIntoOpenAnalysis(savedAnalysis(false));
     const before = get(view);
