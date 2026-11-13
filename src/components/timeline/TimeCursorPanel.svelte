@@ -475,7 +475,8 @@
               {/each}
               {#if analysis.omittedResources}
                 <div class="pb-2 text-[11px] text-gray-500">
-                  {analysis.omittedResources} more resources are not read: only the first {MAX_INSPECTED_RESOURCES} are.
+                  {analysis.omittedResources} more plotted resources are not read: at most {MAX_INSPECTED_RESOURCES} are,
+                  and resources you watch come first.
                 </div>
               {/if}
             {/if}
@@ -497,6 +498,9 @@
                 on:change={({ detail }) => analysis?.onWatchedChange(detail.map(String))}
               />
             </div>
+            {#if analysis.watchNotice}
+              <div class="pt-1 text-[11px] text-destructive" role="alert">{analysis.watchNotice}</div>
+            {/if}
             <div class="pb-2 pt-1 text-[10px] text-gray-500">
               {analysis.resourceOptions.length.toLocaleString()} resources in this analysis's sources. Watching one reads
               it here without a timeline row.

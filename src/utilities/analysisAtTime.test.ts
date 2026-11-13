@@ -8,6 +8,10 @@ import {
   getCurrentSnapshot,
   getImportedValueAt,
   getInspectedResources,
+  getResourceKey,
+  getWatchedSelection,
+  limitInspectedResources,
+  MAX_INSPECTED_RESOURCES,
   getInstantQuery,
   getResourceCatalog,
   getResourceOptions,
@@ -16,6 +20,7 @@ import {
   readImportedResources,
   resolveResource,
   type InspectedResource,
+  type ResourceCatalogEntry,
 } from './analysisAtTime';
 import { GAP, NULL, VALUE, type SourceQueryResult, type SourceSeries } from './importedResource';
 
@@ -241,6 +246,86 @@ describe('watched resources', () => {
       ['s2', 'a', false],
       ['s3', 'a', false],
     ]);
+  });
+});
+
+describe('the limit on inspected resources', () => {
+  const layer = (id: number, resource: string, sourceId: string): Layer => ({
+    chartType: 'line',
+    filter: { resource },
+    id,
+    name: resource,
+    sourceId,
+    yAxisId: null,
+  });
+  const plottedTimeline = (count: number) =>
+    ({
+      rows: [{ id: 1, layers: Array.from({ length: count }, (_, i) => layer(i, `p${i}`, 's1')), name: 'Row' }],
+    }) as unknown as Timeline;
+  const limited = (timeline: Timeline, watched: { name: string; sourceId: string }[]) =>
+    limitInspectedResources(getInspectedResources(timeline, watched));
+
+  it('reads a resource watched on top of a full timeline, and drops a plotted one for it', () => {
+    const out = limited(plottedTimeline(MAX_INSPECTED_RESOURCES), [{ name: 'w', sourceId: 's1' }]);
+    expect(out).toHaveLength(MAX_INSPECTED_RESOURCES);
+    expect(out.some(({ name, watched }) => name === 'w' && watched)).toBe(true);
+    expect(out.some(({ name }) => name === `p${MAX_INSPECTED_RESOURCES - 1}`)).toBe(false);
+    // The order is the display order: plotted in row order, then the watched.
+    expect(out[0].name).toBe('p0');
+    expect(out.at(-1)?.name).toBe('w');
+  });
+
+  it('keeps a plotted resource that is also watched, once', () => {
+    const last = `p${MAX_INSPECTED_RESOURCES - 1}`;
+    const out = limited(plottedTimeline(MAX_INSPECTED_RESOURCES + 5), [{ name: last, sourceId: 's1' }]);
+    expect(out).toHaveLength(MAX_INSPECTED_RESOURCES);
+    expect(out.filter(({ name }) => name === last)).toHaveLength(1);
+    expect(out.find(({ name }) => name === last)?.watched).toBe(true);
+  });
+
+  it('keeps one name in two sources as two resources under the limit', () => {
+    const out = limited(plottedTimeline(MAX_INSPECTED_RESOURCES), [
+      { name: 'p0', sourceId: 's2' },
+      { name: 'p0', sourceId: 's3' },
+    ]);
+    expect(out).toHaveLength(MAX_INSPECTED_RESOURCES);
+    expect(out.filter(({ name }) => name === 'p0').map(({ sourceId }) => sourceId)).toEqual(['s1', 's2', 's3']);
+  });
+
+  it('still caps what is read, and leaves a shorter list alone', () => {
+    expect(limited(plottedTimeline(MAX_INSPECTED_RESOURCES + 50), [])).toHaveLength(MAX_INSPECTED_RESOURCES);
+    expect(limited(plottedTimeline(3), [{ name: 'w', sourceId: 's1' }])).toHaveLength(4);
+  });
+});
+
+describe('choosing what to watch', () => {
+  const entry = (sourceId: string, name: string) =>
+    ({
+      item: { name },
+      key: getResourceKey(sourceId, name),
+      sourceId,
+      sourceLabel: sourceId,
+    }) as unknown as ResourceCatalogEntry;
+  const catalog = Array.from({ length: MAX_INSPECTED_RESOURCES + 3 }, (_, i) => entry('s1', `r${i}`));
+  const keysOf = (count: number) => catalog.slice(0, count).map(({ key }) => key);
+
+  it('takes every choice up to the limit', () => {
+    const selection = getWatchedSelection(keysOf(MAX_INSPECTED_RESOURCES), [], catalog);
+    expect(selection.watched).toHaveLength(MAX_INSPECTED_RESOURCES);
+    expect(selection.refused).toBe(0);
+  });
+
+  it('refuses the new choices past the limit, reports how many, and keeps the earlier ones', () => {
+    const before = getWatchedSelection(keysOf(MAX_INSPECTED_RESOURCES), [], catalog).watched;
+    const selection = getWatchedSelection([...keysOf(MAX_INSPECTED_RESOURCES), catalog.at(-1)!.key], before, catalog);
+    expect(selection.refused).toBe(1);
+    expect(selection.watched).toEqual(before);
+  });
+
+  it('keeps a watched resource its source can no longer list, and drops an unknown one', () => {
+    const gone = { name: 'gone', sourceId: 's9' };
+    const selection = getWatchedSelection([getResourceKey('s9', 'gone'), 's1::nope'], [gone], catalog);
+    expect(selection.watched).toEqual([gone]);
   });
 });
 

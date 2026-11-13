@@ -215,6 +215,26 @@ describe('AnalysisAtTimePanel', () => {
       expect(effects.querySourceResources.mock.calls[0][1]).toEqual(['/hga/az']);
     });
 
+    it('reads a watched resource when the timeline already plots the limit, and says plotted ones were left out', async () => {
+      const full = plotted('source-1');
+      full.layers = Array.from(
+        { length: 101 },
+        (_, id) =>
+          ({ chartType: 'line', filter: { resource: `/p${id}` }, id, sourceId: 'source-1', yAxisId: null }) as Layer,
+      );
+      await open([full]);
+      analysisWatchedResources.set([{ name: '/hga/az', sourceId: 'source-2' }]);
+      timeCursorMs.set(T1);
+      const { container } = renderPanel();
+      await waitFor(() => expect(container.textContent).toContain('222'));
+      expect(container.querySelectorAll('.row')).toHaveLength(100);
+      const byRevision = new Map(
+        effects.querySourceResources.mock.calls.map(([target, names]) => [target.revisionId, names]),
+      );
+      expect(byRevision.get(19)).toEqual(['/hga/az']);
+      expect(container.textContent).toContain('2 more plotted resources are not read');
+    });
+
     it('stops watching without touching the timeline’s layer', async () => {
       await open([plotted('source-1')]);
       analysisWatchedResources.set([{ name: '/hga/az', sourceId: 'source-1' }]);

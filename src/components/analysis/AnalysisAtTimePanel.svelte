@@ -46,6 +46,8 @@
     getAnalysisResourceRows,
     getCurrentSnapshot,
     getInspectedResources,
+    getWatchedSelection,
+    limitInspectedResources,
     getInstantQuery,
     getResourceCatalog,
     getResourceKey,
@@ -103,13 +105,15 @@
   let a: AtTimeSnapshot<Snapshot> | null = null;
   let b: AtTimeSnapshot<Snapshot> | null = null;
   let error: string = '';
+  /** Why a resource just picked is not being watched. */
+  let watchNotice: string = '';
   let request = 0;
   /** The simulation profiles being held for the resources inspected, by dataset and name. */
   const simulationSubscriptions = new Map<string, TimelineResourceSubscription>();
 
   $: timeline = $view?.definition.plan.timelines[0];
   $: inspected = getInspectedResources(timeline, $analysisWatchedResources);
-  $: readable = inspected.slice(0, MAX_INSPECTED_RESOURCES);
+  $: readable = limitInspectedResources(inspected);
   // The rows change often (heights, selection); only the set of resources, the sources and the time matter.
   $: inspectedKey = readable.map(({ name, sourceId }) => getResourceKey(sourceId, name)).join('|');
   $: bindingsKey = bindings.map(binding => JSON.stringify(binding)).join('|');
@@ -158,6 +162,7 @@
     second: currentB,
     specs: readable,
     timeFormat: $plugins.time.primary.format,
+    watchNotice,
     watched: $analysisWatchedResources,
   });
 
@@ -230,18 +235,16 @@
   }
 
   function watchedChanged(keys: string[], entries: ResourceCatalogEntry[]) {
-    const known = new Map(entries.map(entry => [entry.key, { name: entry.item.name, sourceId: entry.sourceId }]));
-    const watched = new Map(
-      $analysisWatchedResources.map(resource => [getResourceKey(resource.sourceId, resource.name), resource]),
-    );
-    // A resource already watched stays, whether or not its source can be listed now.
-    $analysisWatchedResources = keys.flatMap(key => {
-      const resource = watched.get(key) ?? known.get(key);
-      return resource ? [resource] : [];
-    });
+    // Every watched resource is read, so no more than the limit can be watched: the earlier ones stay, the new ones don't.
+    const selection = getWatchedSelection(keys, $analysisWatchedResources, entries);
+    watchNotice = selection.refused
+      ? `Not watched: ${selection.refused.toLocaleString()} more than the limit of ${MAX_INSPECTED_RESOURCES}. Stop watching some to add others.`
+      : '';
+    $analysisWatchedResources = selection.watched;
   }
 
   function unwatch(key: string) {
+    watchNotice = '';
     $analysisWatchedResources = $analysisWatchedResources.filter(
       resource => getResourceKey(resource.sourceId, resource.name) !== key,
     );
@@ -282,6 +285,7 @@
     second: Snapshot | null;
     specs: InspectedResource[];
     timeFormat: (date: Date) => string | null;
+    watchNotice: string;
     watched: { name: string; sourceId: string }[];
   }): AnalysisCursorData {
     const { catalog: entries, compareMs, cursorMs, first, labels, second, timeFormat } = input;
@@ -337,6 +341,7 @@
       resourcesLoading: input.registry.loading,
       rows: input.rows,
       unavailableSources: getUnavailableResourceSources(input.registry.sources),
+      watchNotice: input.watchNotice,
       watchedKeys: input.watched.map(resource => getResourceKey(resource.sourceId, resource.name)),
     };
   }

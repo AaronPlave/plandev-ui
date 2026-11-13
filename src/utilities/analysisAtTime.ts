@@ -200,6 +200,38 @@ export function getResourceKey(sourceId: TimelineSourceId, name: string): string
 export const MAX_INSPECTED_RESOURCES = 100;
 
 /**
+ * The resources to read: all of those watched, then plotted ones for the slots left, in the order given. A plotted
+ * resource is left out when the limit is reached, never a watched one (the picker stops at the limit, so they all fit).
+ */
+export function limitInspectedResources(
+  inspected: InspectedResource[],
+  max: number = MAX_INSPECTED_RESOURCES,
+): InspectedResource[] {
+  let room = max - inspected.filter(({ watched }) => watched).length;
+  return inspected.filter(({ watched }) => watched || room-- > 0);
+}
+
+/**
+ * The watched resources once the picker's `keys` are chosen: one already watched stays whether or not its source can be
+ * listed now, and one the catalog does not know is dropped. The limit keeps the earlier ones: `refused` is how many of the
+ * new ones did not fit.
+ */
+export function getWatchedSelection(
+  keys: string[],
+  watched: WatchedResource[],
+  catalog: ResourceCatalogEntry[],
+  max: number = MAX_INSPECTED_RESOURCES,
+): { refused: number; watched: WatchedResource[] } {
+  const current = new Map(watched.map(resource => [getResourceKey(resource.sourceId, resource.name), resource]));
+  const known = new Map(catalog.map(entry => [entry.key, { name: entry.item.name, sourceId: entry.sourceId }]));
+  const chosen = keys.flatMap(key => {
+    const resource = current.get(key) ?? known.get(key);
+    return resource ? [resource] : [];
+  });
+  return { refused: Math.max(0, chosen.length - max), watched: chosen.slice(0, max) };
+}
+
+/**
  * The resources being examined: those the timeline's rows draw (one entry per source and name, in row order) and then
  * those watched in the inspector that no row draws. A resource that is both appears once. Layers that name no source are
  * a Plan's legacy lookup, which an analysis does not have.
@@ -394,11 +426,7 @@ export type AnalysisResourceRowsInput = {
   /** Why the reads failed, if they did. */
   error: string;
   /** What the timeline's registry holds of a resource (the display data, and a simulation's profile). */
-  getState: (
-    datasetId: number,
-    name: string,
-    kind: 'importedRevision' | 'sim',
-  ) => TimelineResourceState | undefined;
+  getState: (datasetId: number, name: string, kind: 'importedRevision' | 'sim') => TimelineResourceState | undefined;
   labels: Record<string, string>;
   /** Imported readings for the cursors are still being read. */
   pending: boolean;
@@ -568,7 +596,7 @@ export type AnalysisCursorData = {
   error: string;
   formatTime: (ms: number) => string;
   loading: boolean;
-  /** Resources beyond the limit that were not read. */
+  /** Plotted resources beyond the limit that were not read (watched ones always are). */
   omittedResources: number;
   onSelectActivity: (row: AnalysisActivityRow) => void;
   /** Adds a resource's layer to the timeline, in `row` (a new row when none): absent when the timeline can't be edited. */
@@ -586,5 +614,8 @@ export type AnalysisCursorData = {
   rows: Row[];
   /** Bound sources whose resources cannot be offered, and why. */
   unavailableSources: { label: string; reason: string }[];
+  /** Why a resource just picked is not watched (the limit on watched resources), or ''. */
+  watchNotice: string;
+  /** The keys of the watched resources, as the picker's options name them. */
   watchedKeys: string[];
 };
