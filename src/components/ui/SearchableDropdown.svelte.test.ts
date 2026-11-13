@@ -116,6 +116,27 @@ describe('Searchable Dropdown component', () => {
     expect(getAllByRole('menuitem')).toHaveLength(3);
   });
 
+  it('Should search for text that is not a valid pattern as plain text, and keep working', async () => {
+    const { getByLabelText, getAllByRole, getByPlaceholderText } = render(SearchableDropdown, {
+      options: [
+        { display: '/spacecraft/attitude[0]', value: 'a' },
+        { display: '/spacecraft/power', value: 'b' },
+      ],
+      placeholder: 'None',
+      searchPlaceholder: 'Search options',
+    });
+
+    await fireEvent.click(getByLabelText('None'));
+    await fireEvent.input(getByPlaceholderText('Search options'), { target: { value: 'attitude[' } });
+    expect(getAllByRole('menuitem')).toHaveLength(1);
+    expect(getAllByRole('menuitem')[0].textContent).toContain('attitude[0]');
+
+    // A pattern still works as one, and the list is not left stuck by the invalid one.
+    await fireEvent.input(getByPlaceholderText('Search options'), { target: { value: 'pow.r$' } });
+    expect(getAllByRole('menuitem')).toHaveLength(1);
+    expect(getAllByRole('menuitem')[0].textContent).toContain('power');
+  });
+
   it('Should mark placeholder option (with null value) as selected when no option is selected', async () => {
     const { getByText, getAllByRole } = render(SearchableDropdown, {
       options,

@@ -305,7 +305,10 @@
   }
 
   .show {
+    display: block;
+    flex: 0 1 auto;
     max-width: 24rem;
+    min-width: 6rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

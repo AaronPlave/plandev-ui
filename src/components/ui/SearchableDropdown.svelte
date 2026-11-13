@@ -142,9 +142,7 @@
             : []),
           ...options,
         ]
-      : options.filter(option => {
-          return new RegExp(searchFilter, 'i').test(option.display);
-        });
+      : options.filter(getSearchMatcher(searchFilter));
     displayedOptions = filteredOptions;
   }
   $: if (disabled) {
@@ -163,6 +161,20 @@
       label = selectedOptions[0].display;
     } else {
       label = selectedOptions.map(selectedOption => selectedOption.display).join(', ');
+    }
+  }
+
+  /**
+   * The search is a case-insensitive pattern, as it always was, but text that is not a valid pattern (a resource name
+   * with a "(" or "[" in it) is matched as plain text instead of throwing and leaving the list stuck.
+   */
+  function getSearchMatcher(search: string): (option: DropdownOption) => boolean {
+    try {
+      const pattern = new RegExp(search, 'i');
+      return option => pattern.test(option.display);
+    } catch {
+      const text = search.toLowerCase();
+      return option => option.display.toLowerCase().includes(text);
     }
   }
 
