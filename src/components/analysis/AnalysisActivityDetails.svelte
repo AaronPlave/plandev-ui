@@ -7,7 +7,6 @@
 -->
 <script lang="ts">
   import { analysisPlanDirectives, showAnalysisActivityType } from '../../stores/analysis';
-  import { createEventDispatcher } from 'svelte';
   import { view } from '../../stores/views';
   import { plugins } from '../../stores/plugins';
   import type {
@@ -45,8 +44,6 @@
     startMs: number;
     type: string;
   };
-
-  const dispatch = createEventDispatcher<{ shown: void }>();
 
   let details: Details | null = null;
   let loading: boolean = false;
@@ -180,13 +177,7 @@
     <div class="title st-typography-medium">{details.name}</div>
     {#if !shownOnTimeline && !readOnly}
       {@const { ref, type } = details}
-      <button
-        class="st-button secondary show"
-        on:click={() => {
-          showAnalysisActivityType(ref.sourceId, type);
-          dispatch('shown');
-        }}
-      >
+      <button class="st-button secondary show" on:click={() => showAnalysisActivityType(ref.sourceId, type)}>
         Show {type} on the timeline
       </button>
     {/if}

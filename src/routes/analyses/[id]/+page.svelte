@@ -2,17 +2,33 @@
 
 <script lang="ts">
   import { base } from '$app/paths';
-  import { Resizable } from '@nasa-jpl/stellar-svelte';
-  import { onDestroy, tick } from 'svelte';
+  import { Button, DropdownMenu, Resizable } from '@nasa-jpl/stellar-svelte';
+  import {
+    ChevronUp,
+    Crosshair,
+    Ellipsis,
+    LayoutTemplate,
+    PanelBottom,
+    PanelLeft,
+    PanelRight,
+    Pencil,
+    TextSearch,
+  } from 'lucide-svelte';
+  import type { PaneAPI } from 'paneforge';
+  import { onDestroy } from 'svelte';
   import AnalysisActivityDetails from '../../../components/analysis/AnalysisActivityDetails.svelte';
-  import AnalysisAddSourceDialog from '../../../components/analysis/AnalysisAddSourceDialog.svelte';
-  import AnalysisLoadViewDialog from '../../../components/analysis/AnalysisLoadViewDialog.svelte';
   import AnalysisActivityTable from '../../../components/analysis/AnalysisActivityTable.svelte';
+  import AnalysisAddSourceDialog from '../../../components/analysis/AnalysisAddSourceDialog.svelte';
+  import AnalysisAtTimePanel from '../../../components/analysis/AnalysisAtTimePanel.svelte';
+  import AnalysisLoadViewDialog from '../../../components/analysis/AnalysisLoadViewDialog.svelte';
   import AnalysisSourcesPanel from '../../../components/analysis/AnalysisSourcesPanel.svelte';
   import AnalysisTimelinePanel from '../../../components/analysis/AnalysisTimelinePanel.svelte';
   import Nav from '../../../components/app/Nav.svelte';
   import PageTitle from '../../../components/app/PageTitle.svelte';
   import TimelineEditorPanel from '../../../components/timeline/form/TimelineEditorPanel.svelte';
+  import Tab from '../../../components/ui/Tabs/Tab.svelte';
+  import TabPanel from '../../../components/ui/Tabs/TabPanel.svelte';
+  import Tabs from '../../../components/ui/Tabs/Tabs.svelte';
   import {
     addAnalysisSource,
     analysis,
@@ -32,17 +48,32 @@
   import { viewTimeRange } from '../../../stores/plan';
   import { setTimelineSourcesContext } from '../../../stores/timelineSources';
   import { getUserStore } from '../../../stores/user';
-  import { selectedRow } from '../../../stores/views';
   import { featurePermissions } from '../../../utilities/permissions';
   import type { PageData } from './$types';
 
   export let data: PageData;
 
+  type InspectorTab = 'details' | 'editor' | 'time';
+
   const user = getUserStore();
   // The timeline, its editor and the Sources browser on this page read the analysis's sources, not a plan's.
   setTimelineSourcesContext(analysisTimelineSources);
 
-  let rightTab: 'details' | 'editor' = 'details';
+  const SOURCES_DEFAULT_SIZE = 20;
+  const INSPECTOR_DEFAULT_SIZE = 22;
+  const TABLE_DEFAULT_SIZE = 38;
+  const PANE_MIN_SIZE = 12;
+
+  // The three collapsible panes stay mounted while collapsed (a pane only shrinks to nothing), so a collapsed Sources
+  // panel keeps its search and expansion, the table its filters and selection, and the inspector its tab.
+  let sourcesPane: PaneAPI;
+  let inspectorPane: PaneAPI;
+  let tablePane: PaneAPI;
+  let sourcesOpen: boolean = true;
+  let inspectorOpen: boolean = true;
+  let tableOpen: boolean = true;
+  let inspectorTabs: Tabs;
+  let inspectorTab: InspectorTab = 'details';
   let timelinePanel: AnalysisTimelinePanel;
   let stopAutosave: (() => void) | null = null;
   let addSourceOpen: boolean = false;
@@ -54,6 +85,37 @@
     addSourceOpen = true;
   }
 
+  function togglePane(pane: PaneAPI | undefined) {
+    if (!pane) {
+      return;
+    }
+    if (pane.isCollapsed()) {
+      pane.expand();
+    } else {
+      pane.collapse();
+    }
+  }
+
+  /** Paneforge reopens a pane that has no remembered size at its minimum: give it its default instead. */
+  function ensureDefaultSize(pane: PaneAPI | undefined, defaultSize: number) {
+    if (pane && pane.getSize() <= PANE_MIN_SIZE) {
+      pane.resize(defaultSize);
+    }
+  }
+
+  function onSelectTab({ detail }: CustomEvent<{ id: unknown }>) {
+    inspectorTab = detail.id as InspectorTab;
+  }
+
+  /** Shows the inspector on a tab: only for something the user asked for, never as a side effect of selecting. */
+  function openInspector(tab: InspectorTab) {
+    if (tab === 'editor' && readOnly) {
+      return;
+    }
+    inspectorPane?.expand();
+    inspectorTabs?.selectTab(tab);
+  }
+
   $: if (data.initialAnalysis && data.initialAnalysis.id !== $analysis?.id) {
     stopAutosave?.();
     openAnalysis(data.initialAnalysis, $user).then(() => (stopAutosave = autosaveAnalysis($user)));
@@ -63,11 +125,6 @@
   $: typeOptions = [
     ...new Set($analysisTimelineSources.sources.flatMap(source => source.intervals?.present.map(t => t.name) ?? [])),
   ].sort();
-  // Adding a row from the Sources browser selects it: show it in the editor.
-  $: selectedRowId = $selectedRow?.id;
-  $: if (selectedRowId !== undefined && !readOnly) {
-    rightTab = 'editor';
-  }
 
   onDestroy(() => {
     stopAutosave?.();
@@ -109,12 +166,78 @@
           {saveStatusLabels[$analysisSaveStatus]}
         {/if}
       </span>
+      <div class="flex items-center gap-0.5" role="group" aria-label="Show or hide panels">
+        <Button
+          variant="ghost"
+          size="icon"
+          class="text-white hover:bg-white/15 hover:text-white {sourcesOpen ? 'bg-white/20' : ''}"
+          aria-label="Sources panel"
+          aria-pressed={sourcesOpen}
+          title={sourcesOpen ? 'Hide Sources' : 'Show Sources'}
+          on:click={() => togglePane(sourcesPane)}
+        >
+          <PanelLeft size={16} />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          class="text-white hover:bg-white/15 hover:text-white {tableOpen ? 'bg-white/20' : ''}"
+          aria-label="Activity table"
+          aria-pressed={tableOpen}
+          title={tableOpen ? 'Hide the activity table' : 'Show the activity table'}
+          on:click={() => togglePane(tablePane)}
+        >
+          <PanelBottom size={16} />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          class="text-white hover:bg-white/15 hover:text-white {inspectorOpen ? 'bg-white/20' : ''}"
+          aria-label="Inspector panel"
+          aria-pressed={inspectorOpen}
+          title={inspectorOpen ? 'Hide the inspector' : 'Show the inspector'}
+          on:click={() => togglePane(inspectorPane)}
+        >
+          <PanelRight size={16} />
+        </Button>
+      </div>
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild let:builder>
+          <Button
+            builders={[builder]}
+            variant="ghost"
+            size="icon"
+            class="text-white hover:bg-white/15 hover:text-white"
+            aria-label="Analysis actions"
+          >
+            <Ellipsis size={16} />
+          </Button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Content align="end">
+          <DropdownMenu.Item
+            class="flex cursor-pointer items-center gap-2 text-[13px]"
+            disabled={readOnly}
+            on:click={() => (loadViewOpen = true)}
+          >
+            <LayoutTemplate size={14} />
+            Load timeline from a view…
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Root>
     </svelte:fragment>
   </Nav>
 
   <div class="analysis-body">
     <Resizable.PaneGroup direction="horizontal" autoSaveId="analysis-columns">
-      <Resizable.Pane defaultSize={20} minSize={12}>
+      <Resizable.Pane
+        defaultSize={SOURCES_DEFAULT_SIZE}
+        minSize={PANE_MIN_SIZE}
+        collapsible
+        collapsedSize={0}
+        onResize={size => (sourcesOpen = size > 0)}
+        onExpand={() => ensureDefaultSize(sourcesPane, SOURCES_DEFAULT_SIZE)}
+        bind:pane={sourcesPane}
+      >
         <AnalysisSourcesPanel
           bindings={$analysisSourceBindings}
           registry={$analysisTimelineSources}
@@ -125,77 +248,103 @@
       </Resizable.Pane>
       <Resizable.Handle />
       <Resizable.Pane defaultSize={58} minSize={30}>
-        <Resizable.PaneGroup direction="vertical" autoSaveId="analysis-center">
-          <Resizable.Pane defaultSize={62} minSize={20}>
-            <AnalysisTimelinePanel
-              bind:this={timelinePanel}
-              {readOnly}
-              user={$user}
-              on:addSource={({ detail }) => openAddSource(detail)}
-              on:editRow={() => (rightTab = 'editor')}
-              on:loadView={() => (loadViewOpen = true)}
-              on:inspect={() => (rightTab = 'details')}
-            />
-          </Resizable.Pane>
-          <Resizable.Handle />
-          <Resizable.Pane defaultSize={38} minSize={10}>
-            <AnalysisActivityTable
+        <div class="center">
+          <div class="center-panes">
+            <Resizable.PaneGroup direction="vertical" autoSaveId="analysis-center">
+              <Resizable.Pane defaultSize={62} minSize={20}>
+                <AnalysisTimelinePanel
+                  bind:this={timelinePanel}
+                  {readOnly}
+                  user={$user}
+                  on:addSource={({ detail }) => openAddSource(detail)}
+                  on:editRow={() => openInspector('editor')}
+                  on:loadView={() => (loadViewOpen = true)}
+                  on:inspect={() => openInspector('details')}
+                  on:openAtTime={() => openInspector('time')}
+                />
+              </Resizable.Pane>
+              <Resizable.Handle />
+              <Resizable.Pane
+                defaultSize={TABLE_DEFAULT_SIZE}
+                minSize={10}
+                collapsible
+                collapsedSize={0}
+                onResize={size => (tableOpen = size > 0)}
+                onExpand={() => ensureDefaultSize(tablePane, TABLE_DEFAULT_SIZE)}
+                bind:pane={tablePane}
+              >
+                <AnalysisActivityTable
+                  bindings={$analysisSourceBindings}
+                  selected={$selectedAnalysisActivity}
+                  {sourceLabels}
+                  {typeOptions}
+                  user={$user}
+                  viewTimeRange={$viewTimeRange}
+                  refreshKey={($analysisPlans ?? []).map(plan => `${plan.id}:${plan.revision}`).join()}
+                  on:select={({ detail: { endMs, ref, startMs } }) => {
+                    $selectedAnalysisActivity = ref;
+                    // The editor says nothing about an activity; the other tabs stay where the user left them.
+                    if (inspectorOpen && inspectorTab === 'editor') {
+                      inspectorTabs?.selectTab('details');
+                    }
+                    timelinePanel?.reveal(startMs, endMs);
+                  }}
+                />
+              </Resizable.Pane>
+            </Resizable.PaneGroup>
+          </div>
+          {#if !tableOpen}
+            <button class="table-bar" aria-label="Show the activity table" on:click={() => togglePane(tablePane)}>
+              <ChevronUp size={14} />
+              <span class="st-typography-medium">Activities</span>
+            </button>
+          {/if}
+        </div>
+      </Resizable.Pane>
+      <Resizable.Handle />
+      <Resizable.Pane
+        defaultSize={INSPECTOR_DEFAULT_SIZE}
+        minSize={PANE_MIN_SIZE}
+        collapsible
+        collapsedSize={0}
+        onResize={size => (inspectorOpen = size > 0)}
+        onExpand={() => ensureDefaultSize(inspectorPane, INSPECTOR_DEFAULT_SIZE)}
+        bind:pane={inspectorPane}
+      >
+        <Tabs bind:this={inspectorTabs} on:select-tab={onSelectTab}>
+          <svelte:fragment slot="tab-list">
+            <Tab class="flex items-center gap-1.5 text-xs" tabId="details"><TextSearch size={14} />Activity</Tab>
+            <Tab class="flex items-center gap-1.5 text-xs" tabId="time"><Crosshair size={14} />At Time</Tab>
+            <Tab class="flex items-center gap-1.5 text-xs" tabId="editor" disabled={readOnly}
+              ><Pencil size={14} />Timeline Editor</Tab
+            >
+          </svelte:fragment>
+          <TabPanel panelId="details">
+            <AnalysisActivityDetails
               bindings={$analysisSourceBindings}
+              datasets={$analysisSimulationDatasets}
+              {readOnly}
+              revisions={$analysisSourceRevisions}
               selected={$selectedAnalysisActivity}
               {sourceLabels}
-              {typeOptions}
               user={$user}
-              viewTimeRange={$viewTimeRange}
-              refreshKey={($analysisPlans ?? []).map(plan => `${plan.id}:${plan.revision}`).join()}
-              on:select={({ detail: { endMs, ref, startMs } }) => {
+            />
+          </TabPanel>
+          <TabPanel panelId="time">
+            <AnalysisAtTimePanel
+              bindings={$analysisSourceBindings}
+              {sourceLabels}
+              user={$user}
+              on:selectActivity={({ detail: { endMs, ref, startMs } }) => {
                 $selectedAnalysisActivity = ref;
-                rightTab = 'details';
                 timelinePanel?.reveal(startMs, endMs);
               }}
             />
-          </Resizable.Pane>
-        </Resizable.PaneGroup>
-      </Resizable.Pane>
-      <Resizable.Handle />
-      <Resizable.Pane defaultSize={22} minSize={12}>
-        <div class="right">
-          <div class="tabs" role="tablist">
-            <button
-              role="tab"
-              aria-selected={rightTab === 'details'}
-              class:active={rightTab === 'details'}
-              on:click={() => (rightTab = 'details')}>Activity</button
-            >
-            {#if !readOnly}
-              <button
-                role="tab"
-                aria-selected={rightTab === 'editor'}
-                class:active={rightTab === 'editor'}
-                on:click={() => (rightTab = 'editor')}>Timeline Editor</button
-              >
-            {/if}
-          </div>
-          <div class="tab-body">
-            {#if rightTab === 'details' || readOnly}
-              <AnalysisActivityDetails
-                bindings={$analysisSourceBindings}
-                datasets={$analysisSimulationDatasets}
-                {readOnly}
-                revisions={$analysisSourceRevisions}
-                selected={$selectedAnalysisActivity}
-                {sourceLabels}
-                user={$user}
-                on:shown={async () => {
-                  // The new row is selected, which opens the editor: stay on the activity instead.
-                  await tick();
-                  rightTab = 'details';
-                }}
-              />
-            {:else}
-              <TimelineEditorPanel gridSection="RightTop" timeBounds={$analysisMaxTimeRange} />
-            {/if}
-          </div>
-        </div>
+          </TabPanel>
+          <TabPanel panelId="editor" disabled={readOnly}>
+            <TimelineEditorPanel gridSection="RightTop" showHeader={false} timeBounds={$analysisMaxTimeRange} />
+          </TabPanel>
+        </Tabs>
       </Resizable.Pane>
     </Resizable.PaneGroup>
   </div>
@@ -252,34 +401,45 @@
     padding-right: 8px;
   }
 
-  .right {
+  .center {
     display: flex;
     flex-direction: column;
     height: 100%;
+    min-height: 0;
+    overflow: hidden;
   }
 
-  .tabs {
-    border-bottom: 1px solid var(--st-gray-20);
-    display: flex;
-  }
-
-  .tabs button {
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
-    cursor: pointer;
-    font-size: 12px;
-    padding: 6px 10px;
-  }
-
-  .tabs button.active {
-    border-bottom-color: var(--st-utility-blue);
-  }
-
-  .tab-body {
-    display: grid;
+  .center-panes {
     flex: 1;
     min-height: 0;
-    overflow: auto;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .center-panes > :global([data-pane-group]) {
+    height: 100%;
+    position: absolute;
+    width: 100%;
+  }
+
+  /* What is left of the activity table once collapsed: a way back that is always in view. */
+  .table-bar {
+    align-items: center;
+    background: var(--st-gray-10);
+    border: 0;
+    border-top: 1px solid var(--st-gray-20);
+    color: var(--st-gray-80);
+    cursor: pointer;
+    display: flex;
+    flex: none;
+    gap: 6px;
+    height: 28px;
+    padding: 0 8px;
+    text-align: left;
+    width: 100%;
+  }
+
+  .table-bar:hover {
+    background: var(--st-gray-15);
   }
 </style>

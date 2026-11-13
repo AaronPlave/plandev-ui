@@ -7,6 +7,7 @@
 -->
 <script lang="ts">
   import { Badge, Button } from '@nasa-jpl/stellar-svelte';
+  import { CalendarRange, Database, Info, Pencil, Play, X } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
   import {
     analysisPlans,
@@ -61,6 +62,12 @@
       ),
     ]),
   );
+  // Two revisions of one source on one day have the same short name: tell them apart by their full version.
+  $: duplicated = new Set(
+    Object.values(described)
+      .map(info => info.label)
+      .filter((label, index, all) => all.indexOf(label) !== index),
+  );
   // Only the kinds of source the analysis has: an analysis of one plan shows no empty "Imported Sources".
   $: browserGroups = ['Imported Sources', 'Plans', 'Simulations'].filter(group =>
     registry.sources.some(source => source.group === group),
@@ -94,6 +101,14 @@
     };
   }
 
+  /** "Imported Oct 2, 2026, 18:58 UTC" as "Oct 2, 18:58": what tells two revisions of one day apart, in little room. */
+  function shortVersion(version: string): string {
+    return version
+      .replace(/^Imported /, '')
+      .replace(/, \d{4}/, '')
+      .replace(' UTC', '');
+  }
+
   function onRename(binding: AnalysisSourceBinding, event: Event) {
     setAnalysisSourceLabel(binding.id, (event.currentTarget as HTMLInputElement).value);
     renaming = null;
@@ -110,58 +125,69 @@
     <Button size="xs" variant="outline" disabled={readOnly} on:click={() => dispatch('addSource')}>Add Source</Button>
   </div>
 
+  <!-- What the analysis reads (kept apart from the browser below, which only looks inside them). -->
+  <div class="section-label st-typography-label">Attached to this analysis ({bindings.length})</div>
   <ul class="bound" aria-label="Analysis sources">
     {#each bindings as binding (binding.id)}
       {@const source = getSource(registry, binding.id)}
       {@const info = described[binding.id]}
       <li class="bound-source">
-        <div class="flex items-start justify-between gap-1">
-          <div class="min-w-0">
-            {#if renaming === binding.id}
-              <input
-                class="st-input w-full"
-                aria-label="Name in this analysis"
-                placeholder={info.name}
-                value={binding.label ?? ''}
-                on:change={event => onRename(binding, event)}
-                on:blur={() => (renaming = null)}
-              />
-            {:else}
-              <div class="truncate font-medium">
-                {binding.label || info.name}
-                {#if binding.kind === 'plan'}
-                  <Badge variant="secondary" class="ml-1 px-1 py-0 text-[10px]">Live</Badge>
-                {/if}
-              </div>
-            {/if}
-            <div class="truncate text-muted-foreground">
-              {binding.label ? `${info.name} · ` : ''}{info.version}
+        <div class="flex items-center gap-1" title="{info.name} · {info.version}">
+          <svelte:component
+            this={binding.kind === 'plan' ? CalendarRange : binding.kind === 'simulation' ? Play : Database}
+            size={14}
+            class="shrink-0 text-muted-foreground"
+          />
+          {#if renaming === binding.id}
+            <input
+              class="st-input min-w-0 flex-1"
+              aria-label="Name in this analysis"
+              placeholder={info.name}
+              value={binding.label ?? ''}
+              on:change={event => onRename(binding, event)}
+              on:blur={() => (renaming = null)}
+            />
+          {:else}
+            <div class="min-w-0 flex-1 truncate font-medium">
+              {duplicated.has(info.label) ? `${info.name} · ${shortVersion(info.version)}` : info.label}
+              {#if binding.kind === 'plan'}
+                <Badge variant="secondary" class="ml-1 px-1 py-0 text-[10px]">Live</Badge>
+              {/if}
             </div>
-            {#if source?.resources?.unavailableReason}
-              <div class="text-[11px] text-red-700">{source.resources.unavailableReason}</div>
-            {/if}
-          </div>
+          {/if}
           <div class="flex shrink-0">
-            <button
-              class="st-button icon"
+            <Button
+              variant="ghost"
+              size="icon-sm"
               aria-label="Details of {info.label}"
               aria-expanded={!!detailsShown[binding.id]}
-              on:click={() => (detailsShown = { ...detailsShown, [binding.id]: !detailsShown[binding.id] })}>ⓘ</button
+              on:click={() => (detailsShown = { ...detailsShown, [binding.id]: !detailsShown[binding.id] })}
             >
-            <button
-              class="st-button icon"
+              <Info size={13} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
               aria-label="Rename {info.label} in this analysis"
               disabled={readOnly}
-              on:click={() => (renaming = binding.id)}>✎</button
+              on:click={() => (renaming = binding.id)}
             >
-            <button
-              class="st-button icon"
+              <Pencil size={13} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
               aria-label="Remove {info.label}"
               disabled={readOnly}
-              on:click={() => removeAnalysisSource(binding.id, user)}>×</button
+              on:click={() => removeAnalysisSource(binding.id, user)}
             >
+              <X size={14} />
+            </Button>
           </div>
         </div>
+        {#if source?.resources?.unavailableReason}
+          <div class="text-[11px] text-red-700">{source.resources.unavailableReason}</div>
+        {/if}
 
         {#if info.newer && !readOnly}
           <div class="newer">
@@ -302,6 +328,7 @@
     {/each}
   </ul>
 
+  <div class="section-label st-typography-label">Browse contents</div>
   <div class="browser">
     {#if browserGroups.length}
       <SourceBrowser groups={browserGroups} {readOnly} showUpload={false} {user} />
@@ -326,22 +353,30 @@
     padding: 6px 8px;
   }
 
+  .section-label {
+    background: var(--st-gray-10);
+    border-bottom: 1px solid var(--st-gray-20);
+    color: var(--st-gray-60);
+    padding: 3px 8px;
+  }
+
   .bound {
+    background: var(--st-gray-10);
     border-bottom: 1px solid var(--st-gray-20);
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 2px;
     list-style: none;
     margin: 0;
-    max-height: 50%;
+    max-height: 40%;
     overflow: auto;
-    padding: 8px;
+    padding: 4px 8px 6px;
   }
 
   .bound-source {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
   }
 
   .newer {

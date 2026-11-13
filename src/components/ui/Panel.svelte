@@ -7,6 +7,8 @@
   export let overflowYBody: 'visible' | 'hidden' | 'clip' | 'scroll' | 'auto' = 'auto';
   export let padBody: boolean = true;
   export let padHeader: boolean = true;
+  /** False when the panel sits under another header (a tab bar) that already names it. */
+  export let showHeader: boolean = true;
 
   const panelClasses = classNames('grid min-h-20 min-w-20 overflow-hidden w-full', {
     'border-l': borderLeft,
@@ -17,15 +19,17 @@
 
 <div
   class={panelClasses}
-  style:grid-template-rows="var(--nav-header-height) calc(100% - var(--nav-header-height))"
+  style:grid-template-rows={showHeader ? 'var(--nav-header-height) calc(100% - var(--nav-header-height))' : '100%'}
   role="tabpanel"
 >
-  <div
-    class="flex h-[--nav-header-height] items-center justify-between gap-2 overflow-hidden border-b"
-    class:pad-header={padHeader}
-  >
-    <slot name="header" />
-  </div>
+  {#if showHeader}
+    <div
+      class="flex h-[--nav-header-height] items-center justify-between gap-2 overflow-hidden border-b"
+      class:pad-header={padHeader}
+    >
+      <slot name="header" />
+    </div>
+  {/if}
 
   <div class="body" class:pad-body={padBody} style="overflow-y: {overflowYBody};">
     <slot name="body" />

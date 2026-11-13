@@ -12,12 +12,15 @@
   import { createEventDispatcher } from 'svelte';
   import type { ChartType, Layer, Row } from '../../types/timeline';
   import type { SourceBrowserAction, SourceBrowserNode } from '../../types/timelineSource';
+  import { getSourceNodeIcon } from './sourceBrowserIcons';
   import { tooltip } from '../../utilities/tooltip';
   import LayerPicker from '../LayerPicker.svelte';
 
   export let depth: number = 0;
   export let expanded: Record<string, boolean> = {};
   export let forceExpanded: boolean = false;
+  /** The top-level group these nodes are in (set by the tree itself as it nests). */
+  export let group: string = '';
   export let nodes: SourceBrowserNode[] = [];
   /** Items can be browsed but not added to rows. */
   export let readOnly: boolean = false;
@@ -45,6 +48,8 @@
 </script>
 
 {#each nodes as node (node.id)}
+  {@const nodeGroup = depth === 0 ? node.label : group}
+  {@const NodeIcon = getSourceNodeIcon(node, nodeGroup, depth)}
   {#if node.kind === 'item' && node.action}
     {@const action = node.action}
     <div
@@ -58,6 +63,7 @@
       on:dragstart={onItemDragStart(action)}
       use:tooltip={{ content: node.tooltip ?? '', disabled: !node.tooltip, placement: 'right' }}
     >
+      {#if NodeIcon}<NodeIcon size={13} class="icon" />{/if}
       <span class="label">{node.label}</span>
       {#each node.tags ?? [] as tag}
         <span class="tag st-typography-label">{tag}</span>
@@ -94,6 +100,7 @@
         use:tooltip={{ content: node.tooltip ?? '', disabled: !node.tooltip, placement: 'right' }}
       >
         {#if open}<CaretDownIcon />{:else}<CaretRightIcon />{/if}
+        {#if NodeIcon}<NodeIcon size={13} class="icon" />{/if}
         <span class="label">{node.label}</span>
         {#each node.tags ?? [] as tag}
           <span class="tag st-typography-label">{tag}</span>
@@ -119,6 +126,7 @@
           depth={depth + 1}
           {expanded}
           {forceExpanded}
+          group={nodeGroup}
           nodes={node.children}
           {readOnly}
           {rows}
@@ -177,6 +185,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .source-browser-node :global(.icon),
+  .source-browser-item :global(.icon) {
+    color: var(--st-gray-60);
+    flex: none;
   }
 
   .tag {

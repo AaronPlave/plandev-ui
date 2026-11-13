@@ -115,6 +115,8 @@
   const timelineSources = getTimelineSourcesContext();
 
   export let gridSection: ViewGridSection;
+  /** False under a tab that already names it. */
+  export let showHeader: boolean = true;
   /** The time guides may be placed in; the Plan's when not given. */
   export let timeBounds: TimeRange | null = null;
 
@@ -655,7 +657,7 @@
   }
 </script>
 
-<Panel padBody={false}>
+<Panel padBody={false} {showHeader}>
   <svelte:fragment slot="header">
     <GridMenu {gridSection} title="Timeline Editor" />
   </svelte:fragment>

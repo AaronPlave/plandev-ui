@@ -1,4 +1,4 @@
-import { derived, writable, type Readable } from 'svelte/store';
+import { derived, get, writable, type Readable } from 'svelte/store';
 import type { Resource } from '../types/simulation';
 
 // Per-(datasetId, name) loading/error registry for any resource on the
@@ -78,6 +78,15 @@ function registryKey(datasetId: number, name: string, kind: TimelineResourceKind
 export function acquireTimelineResource(datasetId: number, name: string, kind: TimelineResourceKind): void {
   const key = registryKey(datasetId, name, kind);
   refCounts.set(key, (refCounts.get(key) ?? 0) + 1);
+}
+
+/** The state of one resource as the timeline holds it now, or undefined when no row has asked for it. */
+export function getTimelineResourceState(
+  datasetId: number,
+  name: string,
+  kind: TimelineResourceKind,
+): TimelineResourceState | undefined {
+  return get(resourceStates).get(registryKey(datasetId, name, kind));
 }
 
 export function setTimelineResourceState(

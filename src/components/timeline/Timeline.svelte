@@ -68,6 +68,7 @@
   import TimelineContextMenu from './TimelineContextMenu.svelte';
   import TimelineCursors from './TimelineCursors.svelte';
   import TimelineHistogram from './TimelineHistogram.svelte';
+  import TimelineInspectCursor from './TimelineInspectCursor.svelte';
   import TimelineSectionHeader from './TimelineSectionHeader.svelte';
   import TimelineSimulationRange from './TimelineSimulationRange.svelte';
   import TimelineTimeDisplay from './TimelineTimeDisplay.svelte';
@@ -108,9 +109,14 @@
   export let limitTooltipToLine: boolean = false;
   /** Rows, layers and guides can't be changed: the timeline is only looked at. */
   export let readOnly: boolean = false;
+  /** The pinned inspection time (ms), if any: see TimelineInspectCursor. Null draws nothing. */
+  export let inspectTimeMs: number | null = null;
+  /** While on, pressing in the rows places the inspection cursor instead of selecting or panning. */
+  export let inspectMode: boolean = false;
 
   const dispatch = createEventDispatcher<{
     duplicateSection: TimelineSection;
+    inspectTime: number | null;
     mouseDown: MouseDown;
     toggleRowExpansion: { expanded: boolean; rowId: number };
     updateRowHeight: {
@@ -600,6 +606,62 @@
     }
   }
 
+  let inspectDragging = false;
+  let paddedContentDiv: HTMLDivElement;
+
+  /** The time under a pointer, null when it is not over the rows' time area (the row headers are not time). */
+  function getInspectTime(event: MouseEvent, clampToArea: boolean = false): number | null {
+    if (!paddedContentDiv || !xScaleView) {
+      return null;
+    }
+    const x = event.clientX - paddedContentDiv.getBoundingClientRect().left - (timeline?.marginLeft ?? 0);
+    if (!clampToArea && (x < 0 || x > drawWidth)) {
+      return null;
+    }
+    return xScaleView.invert(Math.min(Math.max(x, 0), drawWidth)).getTime();
+  }
+
+  function onInspectMove(event: MouseEvent) {
+    const time = inspectDragging ? getInspectTime(event, true) : null;
+    if (time !== null) {
+      dispatch('inspectTime', time);
+    }
+  }
+
+  function onInspectUp() {
+    inspectDragging = false;
+    window.removeEventListener('mousemove', onInspectMove);
+    window.removeEventListener('mouseup', onInspectUp);
+  }
+
+  /**
+   * Inspect mode: a press in the rows places the cursor and a drag moves it. It runs in the capture phase and stops
+   * the press there, so nothing underneath (selecting an activity, panning) also happens.
+   */
+  function onInspectMouseDown(event: MouseEvent) {
+    if (!inspectMode || event.button !== 0) {
+      return;
+    }
+    const time = getInspectTime(event);
+    if (time === null) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    dispatch('inspectTime', time);
+    inspectDragging = true;
+    window.addEventListener('mousemove', onInspectMove);
+    window.addEventListener('mouseup', onInspectUp);
+  }
+
+  function onInspectSwallow(event: MouseEvent) {
+    if (inspectMode && getInspectTime(event) !== null) {
+      event.stopPropagation();
+    }
+  }
+
+  onDestroy(onInspectUp);
+
   function onBuildActivityDirective(startTime: string, activityType: string) {
     updateDirectiveBuilder({ startTime, type: activityType });
     $directiveBuilderIsVisible = true;
@@ -640,7 +702,16 @@
       />
     </div>
   </div>
-  <div class="timeline-padded-content">
+  <!-- The handlers only intercept presses while inspecting (the keyboard has its own control on the cursor chip). -->
+  <div
+    bind:this={paddedContentDiv}
+    role="presentation"
+    class="timeline-padded-content"
+    class:inspecting={inspectMode}
+    on:mousedown|capture={onInspectMouseDown}
+    on:click|capture={onInspectSwallow}
+    on:dblclick|capture={onInspectSwallow}
+  >
     <RowHeaderDragHandleWidth
       rowHeaderWidth={timeline?.marginLeft}
       on:updateRowHeaderWidth={onUpdateRowHeaderWidth}
@@ -678,6 +749,16 @@
       {readOnly}
       {xScaleView}
       on:updateVerticalGuides
+    />
+    <TimelineInspectCursor
+      {cursorHeaderHeight}
+      {drawWidth}
+      marginLeft={timeline?.marginLeft}
+      {maxTimeRange}
+      timeMs={inspectTimeMs}
+      {xScaleView}
+      on:change={({ detail }) => dispatch('inspectTime', detail)}
+      on:clear={() => dispatch('inspectTime', null)}
     />
 
     <!-- List semantics are declared here rather than inherited: svelte-dnd-action used to add
@@ -892,6 +973,10 @@
     background: white;
     border-radius: 4px;
     position: relative;
+  }
+
+  .timeline-padded-content.inspecting :global(canvas) {
+    cursor: crosshair;
   }
 
   :global(#dnd-action-dragged-el .row-root) {
