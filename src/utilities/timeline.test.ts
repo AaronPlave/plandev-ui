@@ -3700,3 +3700,35 @@ describe('selectMarkerPoints', () => {
     expect(selectMarkerPoints([sample(1)], { ...base, mode: 'never' })).toEqual([]);
   });
 });
+
+test('generateDiscreteTreeUtil groups activities by name when asked, and labels each by its name', () => {
+  const span = (id: number, name: string) =>
+    ({ durationMs: 1, name, parent_id: null, span_id: id, startMs: 0, type: 'SEQUENCE' }) as Span;
+  const spans = [span(1, 'a.seq'), span(2, 'b.seq'), span(3, 'a.seq')];
+  const maps = { directiveIdToSpanIdMap: {}, spanIdToChildIdsMap: { 1: [], 2: [], 3: [] }, spanIdToDirectiveIdMap: {} };
+  const tree = (groupBy: 'name' | 'type') =>
+    generateDiscreteTreeUtil(
+      [],
+      spans,
+      [],
+      { SEQUENCE: true, 'a.seq': true },
+      'flat',
+      'event_type_name',
+      false,
+      maps,
+      Object.fromEntries(spans.map(s => [s.span_id, s])),
+      true,
+      false,
+      { end: 10, start: 0 },
+      false,
+      true,
+      undefined,
+      groupBy,
+    );
+  expect(tree('type').map(node => [node.label, node.items.length])).toEqual([['SEQUENCE', 3]]);
+  expect(tree('type')[0].children.map(node => node.label)).toEqual(['a.seq', 'b.seq', 'a.seq']);
+  expect(tree('name').map(node => [node.label, node.items.length])).toEqual([
+    ['a.seq', 2],
+    ['b.seq', 1],
+  ]);
+});

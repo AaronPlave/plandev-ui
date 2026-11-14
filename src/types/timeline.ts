@@ -338,8 +338,16 @@ export type ActivityOptions = {
   // Whether or not to display only directives, only spans, or both in the row
   composition: 'directives' | 'spans' | 'both';
 
-  // If 'directive' the activities are grouped starting with directive types, if 'flat' activities are grouped by type regardless of hierarchy
-  hierarchyMode: 'directive' | 'flat';
+  // If 'directive' the activities are grouped starting with directive types, if 'flat' activities are grouped by type
+  // regardless of hierarchy, if 'parent' only activities whose parent is not in the row start a group, and each
+  // opens onto its children (imported records the product links by parent, a simulation's span tree).
+  hierarchyMode: 'directive' | 'flat' | 'parent';
+
+  /**
+   * What activities are grouped by in grouped mode. 'type' (absent means this) puts every SEQUENCE in one group;
+   * 'name' gives each distinct name its own group, for sources whose type is a record kind and whose name says which.
+   */
+  groupBy?: 'name' | 'type';
 };
 
 // included in Discrete, bearing exclusive properties for drawing ExternalEvents
@@ -420,6 +428,11 @@ export type Row = {
   id: number;
   layers: Layer[];
   name: string;
+  /**
+   * Kept at the top of the timeline while the other rows scroll: a reference row (a contact schedule, a mode)
+   * stays in view under the rows being inspected. Absent or false for an ordinary row.
+   */
+  pinned?: boolean;
   yAxes: Axis[];
 };
 
@@ -440,6 +453,8 @@ export type TimelineSection = {
   color: string | null;
   id: number;
   name: string;
+  /** Kept at the top of the timeline, with its rows, while the other rows scroll. */
+  pinned?: boolean;
   rowIds: number[];
 };
 

@@ -1314,7 +1314,7 @@
               <div class="flex min-w-0 items-center gap-1">
                 <label for="hierarchy-mode">Hierarchy</label>
                 <InfoTip
-                  content="By Directive groups starting from each directive. Flat groups directives and spans together regardless of how deeply nested they are."
+                  content="By Directive groups starting from each directive. Flat groups directives and spans together regardless of how deeply nested they are. By Parent lists only activities whose parent is not in the row; open one to see its children (for imported records, as the product links them)."
                 />
               </div>
               <TimelineEditorOptionButtons
@@ -1323,9 +1323,28 @@
                 options={[
                   { id: 'flat', label: 'Flat' },
                   { id: 'directive', label: 'By Directive' },
+                  { id: 'parent', label: 'By Parent' },
                 ]}
                 selectedId={discreteOptions?.activityOptions?.hierarchyMode}
                 on:change={({ detail }) => applyActivityOption('hierarchyMode', detail.id)}
+              />
+            </Input>
+            <Input layout="inline" class="editor-input">
+              <div class="flex min-w-0 items-center gap-1">
+                <label for="activity-group-by">Group By</label>
+                <InfoTip
+                  content="Type puts all activities of a type in one group. Name gives each distinct name its own group: useful where every record has the same type, such as imported sequences."
+                />
+              </div>
+              <TimelineEditorOptionButtons
+                ariaLabel="Group activities by"
+                id="activity-group-by"
+                options={[
+                  { id: 'type', label: 'Type' },
+                  { id: 'name', label: 'Name' },
+                ]}
+                selectedId={discreteOptions?.activityOptions?.groupBy ?? 'type'}
+                on:change={({ detail }) => applyActivityOption('groupBy', detail.id)}
               />
             </Input>
           {/if}

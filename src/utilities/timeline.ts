@@ -1998,11 +1998,23 @@ export function generateDiscreteTreeUtil(
    * source and type, and the group is labelled with the source, so a type two sources share stays two groups.
    */
   spanGroupSourceLabels?: Record<string, string>,
+  activityGroupBy: ActivityOptions['groupBy'] = 'type',
 ): DiscreteTree {
+  const byName = activityGroupBy === 'name';
+  const getSpanKey = (span: Span) => (byName ? span.name || span.type : span.type);
   const getSpanGroup = (span: Span) =>
-    spanGroupSourceLabels && span.sourceId ? `${span.sourceId}::${span.type}` : span.type;
-  const groupedSpans = showSpans && hierarchyMode === 'flat' ? groupBy(spans, getSpanGroup) : {};
-  const groupedDirectives = showDirectives ? groupBy(directives, 'type') : {};
+    spanGroupSourceLabels && span.sourceId ? `${span.sourceId}::${getSpanKey(span)}` : getSpanKey(span);
+  const spanIdsInRow = new Set(spans.map(span => span.span_id));
+  // By parent: a span starts a group only when its parent is not in the row; the rest are reached by opening it.
+  const topSpans =
+    hierarchyMode === 'parent'
+      ? spans.filter(span => span.parent_id === null || !spanIdsInRow.has(span.parent_id))
+      : spans;
+  const listsSpans = hierarchyMode === 'flat' || hierarchyMode === 'parent';
+  const groupedSpans = showSpans && listsSpans ? groupBy(topSpans, getSpanGroup) : {};
+  const groupedDirectives = showDirectives
+    ? groupBy(directives, directive => (byName ? directive.name || directive.type : directive.type))
+    : {};
   const groupByMethodFormatted = `pkey.${groupByMethod}`; // Both event_type_name and source_key are within the pkey field
   const groupedExternalEvents = groupBy(externalEvents, groupByMethodFormatted);
 
@@ -2020,7 +2032,7 @@ export function generateDiscreteTreeUtil(
         const groupSource = spanGroup?.[0]?.sourceId;
         const label =
           spanGroupSourceLabels && groupSource
-            ? `${spanGroup[0].type} · ${spanGroupSourceLabels[groupSource] ?? groupSource}`
+            ? `${getSpanKey(spanGroup[0])} · ${spanGroupSourceLabels[groupSource] ?? groupSource}`
             : type;
         const children: DiscreteTreeNode['children'] = [];
         const items: DiscreteTreeNode['items'] = [];
@@ -2031,7 +2043,7 @@ export function generateDiscreteTreeUtil(
             if (showSpans) {
               const childSpanId = spanUtilityMaps.directiveIdToSpanIdMap[directive.id];
               childSpan = spansMap[childSpanId];
-              if (childSpan && hierarchyMode === 'flat') {
+              if (childSpan && listsSpans) {
                 seenSpans[childSpan.span_id] = true;
               }
             }
@@ -2052,7 +2064,7 @@ export function generateDiscreteTreeUtil(
             items.push({ directive, ...(childSpan ? { span: childSpan } : null) });
           });
         }
-        if (spanGroup && hierarchyMode === 'flat') {
+        if (spanGroup && listsSpans) {
           spanGroup.forEach(span => {
             if (!seenSpans[span.span_id]) {
               if (expanded) {
@@ -2325,7 +2337,8 @@ export function getSpanSubtrees(
       id,
       isLeaf: count < 1,
       items: [{ span }],
-      label: span.type,
+      // A span's own name where it has one: many spans of one type read as one label repeated otherwise.
+      label: span.name || span.type,
       type: 'Activity',
     });
   }

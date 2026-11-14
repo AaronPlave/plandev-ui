@@ -834,6 +834,7 @@
       hasExternalEventsLayer,
       hasActivityLayer,
       activityGroupSourceLabels,
+      discreteOptions?.activityOptions?.groupBy,
     );
   }
 

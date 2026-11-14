@@ -70,6 +70,8 @@
     pasteActivityDirectivesAtTime: Date | null;
     setAllExpanded: { expanded: boolean };
     toggleActivityComposition: { composition: ActivityOptions['composition']; row: Row };
+    togglePinRow: Row;
+    togglePinSection: TimelineSection;
     updateVerticalGuides: VerticalGuide[];
     viewTimeRangeChanged: TimeRange;
     viewTimeRangeReset: void;
@@ -339,6 +341,9 @@
     <ContextMenu.Item size="sm" on:click={onEditSection}>Edit Section</ContextMenu.Item>
     <ContextMenu.Item size="sm" on:click={onAddRowToSection}>Add Row to Section</ContextMenu.Item>
     <ContextMenu.Item size="sm" on:click={onDuplicateSection}>Duplicate Section</ContextMenu.Item>
+    <ContextMenu.Item size="sm" on:click={() => timelineSection && dispatch('togglePinSection', timelineSection)}>
+      {timelineSection?.pinned ? 'Unpin Section' : 'Pin Section to Top'}
+    </ContextMenu.Item>
     <ContextMenu.Separator />
     <ContextMenu.Item size="sm" on:click={() => onMoveSection('up')}>Move Section Up</ContextMenu.Item>
     <ContextMenu.Item size="sm" on:click={() => onMoveSection('down')}>Move Section Down</ContextMenu.Item>
@@ -638,6 +643,9 @@
       <ContextMenu.Item size="sm" on:click={onMoveRowDown}>Move Row Down</ContextMenu.Item>
       <ContextMenu.Item size="sm" on:click={onInsertRow}>Insert Row</ContextMenu.Item>
       <ContextMenu.Item size="sm" on:click={onDuplicateRow}>Duplicate Row</ContextMenu.Item>
+      <ContextMenu.Item size="sm" on:click={() => row && dispatch('togglePinRow', row)}>
+        {row?.pinned ? 'Unpin Row' : 'Pin Row to Top'}
+      </ContextMenu.Item>
       <ContextMenu.Item size="sm" on:click={onDeleteRow}>Delete Row</ContextMenu.Item>
     {/if}
     {#if hasActivityLayer}

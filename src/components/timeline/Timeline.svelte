@@ -23,6 +23,7 @@
     viewSetSelectedSection,
     viewTogglePanel,
     viewUpdateSection,
+    viewUpdateRow,
     viewUpdateTimeline,
   } from '../../stores/views';
   import type { ActivityDirectiveId, ActivityDirectivesMap } from '../../types/activity';
@@ -63,6 +64,7 @@
     toTimelineDropEdge,
   } from '../../utilities/timeline';
   import { createTimelineDragActions, type TimelineDragData } from '../../utilities/timelineDragDrop';
+  import TimelineNotes, { NOTES_LANE_HEIGHT, type TimelineNote } from './TimelineNotes.svelte';
   import TimelineRowItem, { type TimelineRowSharedProps } from './TimelineRowItem.svelte';
   import RowHeaderDragHandleWidth from './RowHeaderDragHandleWidth.svelte';
   import TimelineContextMenu from './TimelineContextMenu.svelte';
@@ -109,6 +111,9 @@
   export let limitTooltipToLine: boolean = false;
   /** Rows, layers and guides can't be changed: the timeline is only looked at. */
   export let readOnly: boolean = false;
+  /** Notes drawn over the timeline (an Analysis's); none on a Plan. */
+  export let notes: TimelineNote[] = [];
+  export let selectedNoteId: number | null = null;
 
   const dispatch = createEventDispatcher<{
     duplicateSection: TimelineSection;
@@ -141,6 +146,9 @@
   let rowHeaderDragHandleWidthPx: number = 2;
   let rows: Row[] = [];
   let rowsMaxHeight: number = 600;
+  let pinnedHeight: number = 0;
+  /** At most half the rows' height is pinned; past that, the pinned rows scroll on their own. */
+  let pinnedMaxHeight: number = 300;
   let sectionDragDisabled = true;
   let sections: TimelineSection[] = [];
   let tickCount: number = 10;
@@ -227,7 +235,30 @@
     recomputeZoomTransform(viewTimeRange, drawWidth, xScaleMax);
   }
 
-  $: setRowsMaxHeight(timelineDiv, xAxisDiv, timelineHistogramDiv);
+  $: setRowsMaxHeight(timelineDiv, xAxisDiv, timelineHistogramDiv, pinnedHeight, notes.length);
+  // Pinned rows stay above the scrolling rows, out of the order they otherwise have.
+  // Pinned rows and sections stay above the scrolling ones, in the order they otherwise have. A pinned row inside a
+  // section that is not pinned is shown on its own; a pinned section brings all its rows.
+  $: pinnedItems = items.flatMap((item): TimelineItemRef[] => {
+    if (item.type === 'row') {
+      return rowsById.get(item.id)?.pinned ? [item] : [];
+    }
+    const section = sectionsById.get(item.id);
+    if (section?.pinned) {
+      return [item];
+    }
+    return (section?.rowIds ?? []).flatMap(id => (rowsById.get(id)?.pinned ? [{ id, type: 'row' as const }] : []));
+  });
+  $: scrollingItems = items.filter(
+    item => !pinnedItems.some(pinned => pinned.type === item.type && pinned.id === item.id),
+  );
+  $: regions = [
+    ...(pinnedItems.length ? [{ items: pinnedItems, pinned: true }] : []),
+    { items: scrollingItems, pinned: false },
+  ];
+  $: if (!pinnedItems.length) {
+    pinnedHeight = 0;
+  }
   $: xDomainMax = [new Date(maxTimeRange.start), new Date(maxTimeRange.end)];
   $: viewTimeRangeStartDate = new Date(viewTimeRange.start);
   $: viewTimeRangeEndDate = new Date(viewTimeRange.end);
@@ -538,14 +569,27 @@
     timelineDiv: HTMLDivElement,
     xAxisDiv: HTMLDivElement,
     timelineHistogramDiv: HTMLDivElement,
+    ..._alsoDependsOn: unknown[]
   ) {
     await tick();
     if (timelineDiv && xAxisDiv && timelineDiv.parentElement) {
       const { clientHeight: parentHeight } = timelineDiv.parentElement;
       const offsetTop = xAxisDiv.clientHeight + timelineHistogramDiv.clientHeight;
-      const maxHeight = parentHeight - offsetTop - cursorHeaderHeight;
+      const area = parentHeight - offsetTop - cursorHeaderHeight - (notes.length ? NOTES_LANE_HEIGHT : 0);
+      pinnedMaxHeight = Math.round(area / 2);
+      const maxHeight = area - pinnedHeight;
       rowsMaxHeight = maxHeight;
     }
+  }
+
+  /** Keeps `pinnedHeight` at the pinned region's height, so the scrolling rows get the rest. */
+  function measurePinned(node: HTMLElement, pinned: boolean) {
+    if (!pinned) {
+      return {};
+    }
+    const observer = new ResizeObserver(() => (pinnedHeight = node.clientHeight));
+    observer.observe(node);
+    return { destroy: () => observer.disconnect() };
   }
 
   /** TimelineRowItem attaches the row, so this is wired once and reused at both placements. */
@@ -695,13 +739,33 @@
       on:updateVerticalGuides
       on:viewTimeRangeChanged={event => viewTimeRangeChanged(event.detail)}
     />
+    {#if notes.length}
+      <TimelineNotes
+        {drawWidth}
+        height={pinnedHeight + rowsMaxHeight}
+        marginLeft={timeline?.marginLeft}
+        {notes}
+        selectedId={selectedNoteId}
+        {xScaleView}
+        on:selectNote
+      />
+    {/if}
 
     <!-- List semantics are declared here rather than inherited: svelte-dnd-action used to add
          role="list" and role="listitem" itself, and they went away with it. Rendered
          unconditionally: an empty timeline still needs its "New Row +" button, which used to sit
          inside a guard on items.length and vanished once the last row was deleted. -->
-    <div class="rows" style="max-height: {rowsMaxHeight}px" role="list" on:wheel={handleScroll}>
-      {#each items as item, i (`${item.type}-${item.id}`)}
+    {#each regions as region (region.pinned)}
+    <!-- Pinned rows are not scrolled: a heavier rule under them says the rows below scroll and these do not. -->
+    <div
+      class={region.pinned ? 'pinned-rows' : 'rows'}
+      style="max-height: {region.pinned ? pinnedMaxHeight : rowsMaxHeight}px"
+      role="list"
+      aria-label={region.pinned ? 'Pinned rows' : undefined}
+      use:measurePinned={region.pinned}
+      on:wheel={handleScroll}
+    >
+      {#each region.items as item, i (`${item.type}-${item.id}`)}
         {#if item.type === 'section'}
           {@const section = sectionsById.get(item.id)}
           {#if section}
@@ -757,7 +821,7 @@
               {#if !section.collapsed}
                 {#each section.rowIds as rowId, rowIndex (`section-${section.id}-row-${rowId}`)}
                   {@const row = rowsById.get(rowId)}
-                  {#if row}
+                  {#if row && (section.pinned || !row.pinned)}
                     <!-- No listitem role: these rows are content of the section's listitem, and a
                          second listitem level would need a nested list to own it. -->
                     <div
@@ -826,12 +890,15 @@
           {/if}
         {/if}
       {/each}
-      <div class="new-row">
-        <button on:click={_ => viewAddTimelineRow(timeline?.id, true)} class="st-button tertiary w-full">
-          New Row +
-        </button>
-      </div>
+      {#if !region.pinned}
+        <div class="new-row">
+          <button on:click={_ => viewAddTimelineRow(timeline?.id, true)} class="st-button tertiary w-full">
+            New Row +
+          </button>
+        </div>
+      {/if}
     </div>
+    {/each}
   </div>
 
   <!-- Timeline Tooltip. -->
@@ -865,6 +932,9 @@
     on:editRow
     on:deleteRow
     on:moveRow={onMoveRow}
+    on:togglePinRow={({ detail: row }) => viewUpdateRow('pinned', row.pinned ? undefined : true, timeline?.id, row.id)}
+    on:togglePinSection={({ detail: section }) =>
+      viewUpdateSection('pinned', section.pinned ? undefined : true, section.id, timeline?.id)}
     on:duplicateRow
     on:insertRow
     on:insertSection={onInsertSection}
@@ -878,6 +948,13 @@
 </div>
 
 <style>
+  /* Reference rows kept in view: a heavier rule says the rows below scroll and these do not. */
+  .pinned-rows {
+    border-bottom: 2px solid var(--st-gray-30);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
   .rows {
     box-sizing: content-box;
     outline: none !important;

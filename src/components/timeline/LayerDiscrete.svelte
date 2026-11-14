@@ -442,8 +442,10 @@
     // Display an arrow to the left of a span label if the span is sticky
     // The label should be sticky if the start of the span is clipped and the span is still in view
     const sticky = span.startMs < viewTimeRange.start && span.startMs + span.durationMs >= viewTimeRange.start;
-    // A plan's directive read as a source is labelled by its name, as the plan's own directives are.
-    const label = span.endUnknown ? span.name : span.type;
+    // An activity read from a source (an Analysis's) is labelled by its own name where it has one: a plan's
+    // directive, as the plan's own directives are, and imported records whose type is only a record kind
+    // (every SEQUENCE). A plan's simulated spans keep their type.
+    const label = (span.endUnknown || span.sourceId) && span.name ? span.name : span.type;
     return `${sticky ? '← ' : ''}${label}${span.duration === null ? ' (Unfinished)' : ''}`;
   }
 

@@ -290,6 +290,10 @@
           "description": "Name of the section",
           "type": "string"
         },
+        "pinned": {
+          "description": "If true the section stays at the top of the timeline while the other rows scroll",
+          "type": "boolean"
+        },
         "rowIds": {
           "description": "Ids of the rows contained by this section, in display order",
           "items": {
@@ -489,9 +493,13 @@
                               "description": "Whether or not to display only directives, only spans, or both in the row",
                               "enum": ["directives", "spans", "both"]
                             },
+                            "groupBy": {
+                              "description": "Group activities by their type (the default) or by their name",
+                              "enum": ["name", "type"]
+                            },
                             "hierarchyMode": {
                               "description": "If 'directive' the activities are grouped starting with directive types, if 'flat' activities are grouped by type regardless of hierarchy",
-                              "enum": ["directive", "flat"]
+                              "enum": ["directive", "flat", "parent"]
                             }
                           },
                           "type": "object"
@@ -806,6 +814,10 @@
                     "name": {
                       "description": "Name of the row",
                       "type": "string"
+                    },
+                    "pinned": {
+                      "description": "If true the row stays at the top of the timeline while the other rows scroll",
+                      "type": "boolean"
                     },
                     "yAxes": {
                       "description": "Row y-axes definitions",
