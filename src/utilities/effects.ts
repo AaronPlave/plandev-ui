@@ -103,6 +103,7 @@ import type {
   AnalysisSourceRevision,
   AnalysisSourceUsage,
   SourceActivity,
+  SourceActivityLink,
   SourceAdapterDescriptor,
   SourceLibraryEntry,
   SourceRecovery,
@@ -5704,8 +5705,13 @@ const effects = {
     revisionId: number,
     types: string[] | null,
     user: User | null,
-  ): Promise<Pick<SourceActivity, 'category' | 'end_time' | 'id' | 'name' | 'parameters' | 'start_time' | 'type'>[]> {
-    const data = await reqHasura<SourceActivity[]>(
+  ): Promise<
+    (Pick<SourceActivity, 'category' | 'end_time' | 'id' | 'name' | 'parameters' | 'source_key' | 'start_time' | 'type'> & {
+      /** `metadata.parent`: the source key of another record of the revision, when the product named one. */
+      parent: unknown;
+    })[]
+  > {
+    const data = await reqHasura<(SourceActivity & { parent: unknown })[]>(
       gql.GET_SOURCE_ACTIVITIES,
       { where: { revision_id: { _eq: revisionId }, ...(types ? { type: { _in: types } } : {}) } },
       user,
@@ -5720,6 +5726,29 @@ const effects = {
     } catch (e) {
       catchError('log', 'Unable to retrieve activity', e as Error);
       return null;
+    }
+  },
+
+  /**
+   * Records of one revision by what they are linked through: their own source key (`keys`), or the key they name as
+   * their parent (`parent`). Bounded by `limit`; ordered by start.
+   */
+  async getSourceActivityLinks(
+    revisionId: number,
+    by: { keys: string[] } | { parent: string },
+    limit: number,
+    user: User | null,
+  ): Promise<SourceActivityLink[]> {
+    try {
+      const where = {
+        revision_id: { _eq: revisionId },
+        ...('keys' in by ? { source_key: { _in: by.keys } } : { metadata: { _contains: { parent: by.parent } } }),
+      };
+      const data = await reqHasura<SourceActivityLink[]>(gql.GET_SOURCE_ACTIVITY_LINKS, { limit, where }, user);
+      return data.activities ?? [];
+    } catch (e) {
+      catchError('log', 'Unable to retrieve related records', e as Error);
+      return [];
     }
   },
 

@@ -4,6 +4,7 @@ import { derived, get, writable, type Readable, type Writable } from 'svelte/sto
 import type {
   Analysis,
   AnalysisActivityRef,
+  AnalysisAnnotation,
   AnalysisPlan,
   AnalysisPlanDirective,
   AnalysisSlim,
@@ -23,9 +24,11 @@ import {
   createSourceActivityRow,
   findActivityTypeRow,
   findAnalysisToReopen,
+  getAnalysisSourceNames,
   getAnalysisTimeRanges,
   getImportOutcome,
   getNextAnalysisSourceId,
+  getSourceIdentity,
   importedActivityToSpan,
   INITIAL_ACTIVITY_ROW_LIMIT,
   isSameAnalysisSource,
@@ -34,6 +37,7 @@ import {
   withSourceIdentity,
 } from '../utilities/analysis';
 import type { WatchedResource } from '../utilities/analysisAtTime';
+import { getSourceCatalog, type SourceCatalog } from '../utilities/analysisPresentation';
 import { getImportedPlanSourceIds, type ViewImportPlanSource } from '../utilities/analysisViewImport';
 import effects from '../utilities/effects';
 import gql from '../utilities/gql';
@@ -91,6 +95,15 @@ export const selectedAnalysisActivity: Writable<AnalysisActivityRef | null> = wr
  * dropped, never redirected.
  */
 export const analysisWatchedResources: Writable<WatchedResource[]> = writable([]);
+/**
+ * The activity the next selected one is compared with. Picked by the person; page state, not saved. Dropped when its
+ * source is removed or pointed at other data.
+ */
+export const analysisCompareReference: Writable<AnalysisActivityRef | null> = writable(null);
+/** The analysis's notes: findings about its data, saved with it. */
+export const analysisAnnotations: Writable<AnalysisAnnotation[]> = writable([]);
+/** The note the Notes panel should show (set by clicking its marker on the timeline). */
+export const focusedAnnotationId: Writable<number | null> = writable(null);
 /** 'conflict': someone else saved the analysis since it was opened; saving stops until it is reloaded. */
 export const analysisSaveStatus: Writable<'conflict' | 'error' | 'saved' | 'saving' | 'unsaved'> = writable('saved');
 
@@ -267,12 +280,68 @@ async function loadSourceDetails(bindings: AnalysisSourceBinding[], user: User |
   return ranges;
 }
 
-export async function openAnalysis(initial: Analysis, user: User | null) {
+/**
+ * Where to look when an analysis opens, from a shared link or from where this person last was. Never saved with the
+ * analysis: one person's navigation does not change what the others open.
+ */
+export type AnalysisOpenContext = {
+  /** A linked activity, with the data it was in (see getSourceIdentity): selected only if its source still reads that data. */
+  activity?: AnalysisActivityRef & { data: string };
+  compareCursorMs?: number;
+  cursorMs?: number;
+  noteId?: number;
+  range?: TimeRange;
+};
+
+/** Reads an open context from link parameters; anything malformed is ignored. */
+export function parseAnalysisOpenContext(params: URLSearchParams): AnalysisOpenContext {
+  const number = (name: string) => {
+    const value = Number(params.get(name) ?? NaN);
+    return Number.isFinite(value) ? value : undefined;
+  };
+  const start = number('start');
+  const end = number('end');
+  const activity = /^([^|]+)\|([^|]+)\|(\d+)$/.exec(params.get('activity') ?? '');
+  return {
+    activity: activity ? { activityId: Number(activity[3]), data: activity[2], sourceId: activity[1] } : undefined,
+    compareCursorMs: number('cursorB'),
+    cursorMs: number('cursor'),
+    noteId: number('note'),
+    range: start !== undefined && end !== undefined && end > start ? { end, start } : undefined,
+  };
+}
+
+/** Link parameters for what is on screen now: the window, the cursors and the selected activity. */
+export function getAnalysisLinkParams(): URLSearchParams {
+  const params = new URLSearchParams();
+  const { end, start } = get(viewTimeRange);
+  params.set('start', `${Math.round(start)}`);
+  params.set('end', `${Math.round(end)}`);
+  const cursor = get(timeCursorMs);
+  const compare = get(timeCursorCompareMs);
+  if (cursor !== null) {
+    params.set('cursor', `${Math.round(cursor)}`);
+  }
+  if (compare !== null) {
+    params.set('cursorB', `${Math.round(compare)}`);
+  }
+  const selected = get(selectedAnalysisActivity);
+  const binding = selected && get(analysisSourceBindings).find(({ id }) => id === selected.sourceId);
+  if (selected && binding) {
+    params.set('activity', `${selected.sourceId}|${getSourceIdentity(binding)}|${selected.activityId}`);
+  }
+  return params;
+}
+
+export async function openAnalysis(initial: Analysis, user: User | null, context: AnalysisOpenContext = {}) {
   clearAnalysisImports();
   const { migratedViewDefinition } = applyViewDefinitionMigrations(initial.definition.view);
   analysis.set(initial);
   analysisSourceBindings.set(initial.definition.sources);
   selectedAnalysisActivity.set(null);
+  analysisCompareReference.set(null);
+  analysisAnnotations.set(initial.definition.annotations ?? []);
+  focusedAnnotationId.set(context.noteId ?? null);
   analysisWatchedResources.set([]);
   initializeView({
     created_at: initial.created_at,
@@ -287,12 +356,27 @@ export async function openAnalysis(initial: Analysis, user: User | null) {
   if (ranges === undefined) {
     return;
   }
-  // The time window is not saved: an analysis opens on its sources' range, or, with none yet, the last day.
+  // The time window is not saved with the analysis: it opens where a link or this person's last visit says, else on
+  // its sources' range, or, with none yet, the last day.
   const lastDay = { end: Date.now(), start: Date.now() - 864e5 };
   if (!ranges) {
     analysisMaxTimeRange.set(lastDay);
   }
-  viewTimeRange.set(ranges?.initial ?? lastDay);
+  viewTimeRange.set(context.range ?? ranges?.initial ?? lastDay);
+  if (context.cursorMs !== undefined) {
+    timeCursorMs.set(context.cursorMs);
+    timeCursorCompareMs.set(context.compareCursorMs ?? null);
+  }
+  if (context.activity) {
+    const { data, ...ref } = context.activity;
+    const binding = initial.definition.sources.find(({ id }) => id === ref.sourceId);
+    if (binding && getSourceIdentity(binding) === data) {
+      selectedAnalysisActivity.set(ref);
+    } else {
+      // Never redirected to whatever the source reads now.
+      showFailureToast('The Linked Activity Is In Data This Analysis No Longer Reads');
+    }
+  }
 }
 
 export function closeAnalysis() {
@@ -305,6 +389,9 @@ export function closeAnalysis() {
   analysisSimulationDatasets.set([]);
   analysisSimulationTypeCounts.set({});
   selectedAnalysisActivity.set(null);
+  analysisCompareReference.set(null);
+  analysisAnnotations.set([]);
+  focusedAnnotationId.set(null);
   analysisWatchedResources.set([]);
   clearAnalysisImports();
   // The time cursors are page state of whichever page is open.
@@ -472,6 +559,9 @@ export async function rebindAnalysisSource(sourceId: string, target: AnalysisSou
   if (get(selectedAnalysisActivity)?.sourceId === sourceId) {
     selectedAnalysisActivity.set(null);
   }
+  if (get(analysisCompareReference)?.sourceId === sourceId) {
+    analysisCompareReference.set(null);
+  }
   // Layers follow the source to its new data; a watched resource was chosen from the old data, so it is dropped.
   dropWatchedResources(sourceId);
   await loadSourceDetails(get(analysisSourceBindings), user);
@@ -596,6 +686,103 @@ export function replaceAnalysisTimeline(timeline: Timeline, user: User | null): 
   return true;
 }
 
+/* Notes. */
+
+/** Adds a note and returns its id. `about.data` is filled in from the source as it is bound now. */
+export function addAnalysisAnnotation(
+  note: Pick<AnalysisAnnotation, 'end' | 'start' | 'text'> & {
+    about?: Omit<NonNullable<AnalysisAnnotation['about']>, 'data' | 'sourceLabel'>;
+  },
+  user: User | null,
+): number {
+  const all = get(analysisAnnotations);
+  const id = Math.max(0, ...all.map(annotation => annotation.id)) + 1;
+  const binding = note.about && get(analysisSourceBindings).find(({ id }) => id === note.about?.sourceId);
+  const about =
+    note.about && binding
+      ? {
+          ...note.about,
+          data: getSourceIdentity(binding),
+          sourceLabel: getSource(get(analysisTimelineSources), binding.id)?.label ?? binding.id,
+        }
+      : undefined;
+  analysisAnnotations.set([
+    ...all,
+    { ...note, about, createdAt: new Date().toISOString(), createdBy: user?.id ?? undefined, id },
+  ]);
+  focusedAnnotationId.set(id);
+  return id;
+}
+
+export function updateAnalysisAnnotation(id: number, changes: Partial<Pick<AnalysisAnnotation, 'color' | 'text'>>) {
+  analysisAnnotations.update(all => all.map(note => (note.id === id ? { ...note, ...changes } : note)));
+}
+
+export function removeAnalysisAnnotation(id: number) {
+  analysisAnnotations.update(all => all.filter(note => note.id !== id));
+}
+
+/* Applying another analysis's presentation (see utilities/analysisPresentation). */
+
+export type AnalysisPresentation = {
+  bindings: AnalysisSourceBinding[];
+  /** What each of its sources offers, by binding id, to check what the target can show. */
+  catalogs: Record<string, SourceCatalog>;
+  id: number;
+  name: string;
+  /** Each source's name, by binding id. */
+  names: Record<string, string>;
+  noteCount: number;
+  timeline: Timeline;
+};
+
+/** Reads another analysis's presentation. That analysis is only read. Null (reported) when it can't be. */
+export async function readAnalysisPresentation(id: number, user: User | null): Promise<AnalysisPresentation | null> {
+  const other = await effects.getAnalysis(id, user);
+  const migrated = other && applyViewDefinitionMigrations(other.definition.view);
+  const timeline = (migrated?.migratedViewDefinition ?? other?.definition.view)?.plan.timelines[0];
+  if (!other || !timeline || migrated?.error) {
+    showFailureToast('The Analysis Could Not Be Read');
+    return null;
+  }
+  const bindings = other.definition.sources;
+  const [revisions, datasets, plans] = await Promise.all([
+    effects.getAnalysisSourceRevisions(
+      bindings.flatMap(binding => (binding.kind === 'imported' ? [binding.revisionId] : [])),
+      user,
+    ),
+    effects.getAnalysisSimulationDatasets(
+      bindings.flatMap(binding => (binding.kind === 'simulation' ? [binding.simulationDatasetId] : [])),
+      user,
+    ),
+    effects.getAnalysisPlans(
+      bindings.flatMap(binding => (binding.kind === 'plan' ? [binding.planId] : [])),
+      user,
+    ),
+  ]);
+  const names = Object.fromEntries(
+    bindings.map(binding => {
+      const { name, version } = getAnalysisSourceNames(binding, {
+        dataset: datasets.find(dataset => binding.kind === 'simulation' && dataset.id === binding.simulationDatasetId),
+        plan: plans.find(plan => binding.kind === 'plan' && plan.id === binding.planId),
+        revision: (revisions ?? []).find(revision => binding.kind === 'imported' && revision.id === binding.revisionId),
+      });
+      return [binding.id, `${binding.label ? `${binding.label}: ` : ''}${name}, ${version}`];
+    }),
+  );
+  return {
+    bindings,
+    catalogs: Object.fromEntries(
+      bindings.map(binding => [binding.id, getSourceCatalog(binding, revisions ?? [], datasets)]),
+    ),
+    id: other.id,
+    name: other.name,
+    names,
+    noteCount: other.definition.annotations?.length ?? 0,
+    timeline,
+  };
+}
+
 /** Removes a source and every layer bound to it; rows that only showed it go too. */
 export async function removeAnalysisSource(sourceId: string, user: User | null) {
   const next = get(analysisSourceBindings).filter(binding => binding.id !== sourceId);
@@ -617,6 +804,9 @@ export async function removeAnalysisSource(sourceId: string, user: User | null) 
   if (get(selectedAnalysisActivity)?.sourceId === sourceId) {
     selectedAnalysisActivity.set(null);
   }
+  if (get(analysisCompareReference)?.sourceId === sourceId) {
+    analysisCompareReference.set(null);
+  }
   dropWatchedResources(sourceId);
   await loadSourceDetails(next, user);
 }
@@ -633,6 +823,7 @@ async function save() {
   }
   analysisSaveStatus.set('saving');
   const definition = {
+    annotations: get(analysisAnnotations),
     sources: get(analysisSourceBindings),
     version: 1 as const,
     view: currentView.definition,
@@ -661,7 +852,7 @@ export function autosaveAnalysis(user: User | null): () => void {
   }
   saveUser = user;
   let first = true;
-  const unsubscribe = derived([analysisSourceBindings, view], values => values).subscribe(() => {
+  const unsubscribe = derived([analysisSourceBindings, view, analysisAnnotations], values => values).subscribe(() => {
     if (first) {
       first = false;
       return;

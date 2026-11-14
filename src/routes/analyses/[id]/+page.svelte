@@ -2,16 +2,21 @@
 
 <script lang="ts">
   import { base } from '$app/paths';
+  import { page } from '$app/stores';
+  import { debounce } from 'lodash-es';
   import { Button, DropdownMenu, Resizable } from '@nasa-jpl/stellar-svelte';
   import {
     ChevronUp,
     Crosshair,
     Ellipsis,
+    Link,
     LayoutTemplate,
     PanelBottom,
     PanelLeft,
     PanelRight,
     Pencil,
+    Presentation,
+    StickyNote,
     TextSearch,
   } from 'lucide-svelte';
   import type { PaneAPI } from 'paneforge';
@@ -19,8 +24,10 @@
   import AnalysisActivityDetails from '../../../components/analysis/AnalysisActivityDetails.svelte';
   import AnalysisActivityTable from '../../../components/analysis/AnalysisActivityTable.svelte';
   import AnalysisAddSourceDialog from '../../../components/analysis/AnalysisAddSourceDialog.svelte';
+  import AnalysisApplyPresentationDialog from '../../../components/analysis/AnalysisApplyPresentationDialog.svelte';
   import AnalysisAtTimePanel from '../../../components/analysis/AnalysisAtTimePanel.svelte';
   import AnalysisLoadViewDialog from '../../../components/analysis/AnalysisLoadViewDialog.svelte';
+  import AnalysisNotesPanel from '../../../components/analysis/AnalysisNotesPanel.svelte';
   import AnalysisSourcesPanel from '../../../components/analysis/AnalysisSourcesPanel.svelte';
   import AnalysisTimelinePanel from '../../../components/analysis/AnalysisTimelinePanel.svelte';
   import Nav from '../../../components/app/Nav.svelte';
@@ -41,7 +48,10 @@
     analysisTimelineSources,
     autosaveAnalysis,
     closeAnalysis,
+    getAnalysisLinkParams,
     openAnalysis,
+    parseAnalysisOpenContext,
+    type AnalysisOpenContext,
     renameAnalysis,
     selectedAnalysisActivity,
     showAnalysisActivityType,
@@ -50,11 +60,12 @@
   import { setTimelineSourcesContext } from '../../../stores/timelineSources';
   import { getUserStore } from '../../../stores/user';
   import { featurePermissions } from '../../../utilities/permissions';
+  import { showFailureToast, showSuccessToast } from '../../../utilities/toast';
   import type { PageData } from './$types';
 
   export let data: PageData;
 
-  type InspectorTab = 'details' | 'editor' | 'time';
+  type InspectorTab = 'details' | 'editor' | 'notes' | 'time';
 
   const user = getUserStore();
   // The timeline, its editor and the Sources browser on this page read the analysis's sources, not a plan's.
@@ -80,6 +91,40 @@
   let addSourceOpen: boolean = false;
   let addSourceTab: 'imported' | 'plans' | 'import' = 'imported';
   let loadViewOpen: boolean = false;
+  let applyPresentationOpen: boolean = false;
+
+  /*
+   * Where this person last looked in each analysis, kept in their browser only: reopening it returns there, and it
+   * never changes what anyone else opens. A shared link's own range wins over it.
+   */
+  const lastVisitKey = (id: number) => `analysis-last-visit:${id}`;
+  function readLastVisit(id: number): AnalysisOpenContext {
+    try {
+      return parseAnalysisOpenContext(new URLSearchParams(localStorage.getItem(lastVisitKey(id)) ?? ''));
+    } catch {
+      return {};
+    }
+  }
+  const rememberVisit = debounce((id: number, ..._changedWith: unknown[]) => {
+    try {
+      const params = getAnalysisLinkParams();
+      params.delete('activity');
+      localStorage.setItem(lastVisitKey(id), params.toString());
+    } catch {
+      // Storage unavailable: reopening starts on the sources' range, as before.
+    }
+  }, 1000);
+
+  async function copyLink() {
+    const url = new URL(`${base}/analyses/${$analysis?.id}`, location.origin);
+    url.search = getAnalysisLinkParams().toString();
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      showSuccessToast('Copied a link to this time range, cursor and selected activity');
+    } catch {
+      showFailureToast('Could Not Copy The Link');
+    }
+  }
 
   function openAddSource(tab: typeof addSourceTab = 'imported') {
     addSourceTab = tab;
@@ -119,9 +164,25 @@
 
   $: if (data.initialAnalysis && data.initialAnalysis.id !== $analysis?.id) {
     stopAutosave?.();
-    openAnalysis(data.initialAnalysis, $user).then(() => (stopAutosave = autosaveAnalysis($user)));
+    const fromLink = parseAnalysisOpenContext($page.url.searchParams);
+    const context = fromLink.range ? fromLink : { ...readLastVisit(data.initialAnalysis.id), ...fromLink };
+    openAnalysis(data.initialAnalysis, $user, context).then(() => {
+      stopAutosave = autosaveAnalysis($user);
+      if (context.noteId !== undefined) {
+        openInspector('notes');
+      } else if (context.activity) {
+        openInspector('details');
+      }
+    });
+  }
+  $: if ($analysis) {
+    rememberVisit($analysis.id, $viewTimeRange, $timeCursorMs);
   }
   $: readOnly = !$analysis || $user === null || !featurePermissions.analysis.canUpdate($user, $analysis);
+  // Said wherever an edit is not offered, so a disabled control is not a mystery.
+  $: readOnlyReason = $analysis
+    ? `Read only: only ${$analysis.owner === $user?.id ? 'you' : $analysis.owner}, the owner, or an admin can change this analysis (its rows, notes and sources).`
+    : '';
   $: sourceLabels = Object.fromEntries($analysisTimelineSources.sources.map(source => [source.id, source.label]));
   $: typeOptions = [
     ...new Set($analysisTimelineSources.sources.flatMap(source => source.intervals?.present.map(t => t.name) ?? [])),
@@ -163,7 +224,7 @@
     <svelte:fragment slot="right">
       <span class="st-typography-label save-status" aria-live="polite">
         {#if readOnly}
-          Read only
+          <span title={readOnlyReason}>Read only</span>
         {:else if $analysisSaveStatus === 'conflict'}
           Changed elsewhere, not saving.
           <button class="st-button secondary" on:click={() => location.reload()}>Reload</button>
@@ -227,6 +288,18 @@
             <LayoutTemplate size={14} />
             Load timeline from a view…
           </DropdownMenu.Item>
+          <DropdownMenu.Item
+            class="flex cursor-pointer items-center gap-2 text-[13px]"
+            disabled={readOnly}
+            on:click={() => (applyPresentationOpen = true)}
+          >
+            <Presentation size={14} />
+            Use another analysis's layout…
+          </DropdownMenu.Item>
+          <DropdownMenu.Item class="flex cursor-pointer items-center gap-2 text-[13px]" on:click={copyLink}>
+            <Link size={14} />
+            Copy link to this view
+          </DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Root>
     </svelte:fragment>
@@ -266,6 +339,7 @@
                   on:loadView={() => (loadViewOpen = true)}
                   on:inspect={() => openInspector('details')}
                   on:openAtTime={() => openInspector('time')}
+                  on:openNotes={() => openInspector('notes')}
                 />
               </Resizable.Pane>
               <Resizable.Handle />
@@ -324,6 +398,7 @@
           <svelte:fragment slot="tab-list">
             <Tab class="flex items-center gap-1.5 text-xs" tabId="details"><TextSearch size={14} />Activity</Tab>
             <Tab class="flex items-center gap-1.5 text-xs" tabId="time"><Crosshair size={14} />At Time</Tab>
+            <Tab class="flex items-center gap-1.5 text-xs" tabId="notes"><StickyNote size={14} />Notes</Tab>
             <Tab class="flex items-center gap-1.5 text-xs" tabId="editor" disabled={readOnly}
               ><Pencil size={14} />Timeline Editor</Tab
             >
@@ -341,6 +416,10 @@
                 openInspector('time');
                 timelinePanel?.reveal($timeCursorMs ?? 0, $timeCursorMs ?? 0);
               }}
+              on:select={({ detail: { endMs, ref, startMs } }) => {
+                $selectedAnalysisActivity = ref;
+                timelinePanel?.reveal(startMs, endMs);
+              }}
               on:zoom={({ detail }) => timelinePanel?.zoomTo(detail.startMs, detail.endMs)}
             />
           </TabPanel>
@@ -354,6 +433,21 @@
               on:selectActivity={({ detail: { endMs, ref, startMs } }) => {
                 $selectedAnalysisActivity = ref;
                 timelinePanel?.reveal(startMs, endMs);
+              }}
+            />
+          </TabPanel>
+          <TabPanel panelId="notes">
+            <AnalysisNotesPanel
+              bindings={$analysisSourceBindings}
+              {readOnly}
+              {readOnlyReason}
+              {sourceLabels}
+              user={$user}
+              on:goTo={({ detail: { endMs, ref, startMs } }) => {
+                if (ref) {
+                  $selectedAnalysisActivity = ref;
+                }
+                timelinePanel?.zoomTo(startMs, endMs);
               }}
             />
           </TabPanel>
@@ -376,6 +470,7 @@
 
 {#if !readOnly}
   <AnalysisLoadViewDialog bind:open={loadViewOpen} {sourceLabels} user={$user} />
+  <AnalysisApplyPresentationDialog bind:open={applyPresentationOpen} {sourceLabels} user={$user} />
 {/if}
 
 <style>

@@ -90,6 +90,8 @@ export type ImportedActivityRecord = {
   id: number;
   name: string;
   parameters: Record<string, unknown>;
+  /** The id of the record the product names as its parent, when that resolves to a record of the same revision. */
+  parentId?: number;
   start_time: string;
   type: string;
 };
@@ -105,7 +107,7 @@ export function importedActivityToSpan(sourceId: TimelineSourceId, activity: Imp
     durationMs: endMs - startMs,
     endMs,
     name: activity.name,
-    parent_id: null,
+    parent_id: activity.parentId === undefined ? null : getActivityDrawingId({ activityId: activity.parentId, sourceId }),
     sourceActivityId: activity.id,
     sourceId,
     span_id: getActivityDrawingId({ activityId: activity.id, sourceId }),
@@ -281,6 +283,12 @@ export function getAnalysisActivitySource(binding: AnalysisSourceTarget): {
     case 'plan':
       return { source_kind: 'plan', source_ref: binding.planId };
   }
+}
+
+/** The data a binding reads, e.g. "revision:110": the same for two bindings of the same data, and it changes when a binding is pointed at other data. */
+export function getSourceIdentity(target: AnalysisSourceTarget): string {
+  const { source_kind, source_ref } = getAnalysisActivitySource(target);
+  return `${source_kind}:${source_ref}`;
 }
 
 /** The binding a row of merlin.analysis_activity comes from. */

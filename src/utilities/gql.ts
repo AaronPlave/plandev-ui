@@ -1957,6 +1957,8 @@ const gql = {
         id
         name
         parameters
+        parent: metadata(path: "parent")
+        source_key
         start_time
         type
       }
@@ -1974,6 +1976,19 @@ const gql = {
         name
         parameters
         revision_id
+        source_key
+        start_time
+        type
+      }
+    }
+  `,
+
+  GET_SOURCE_ACTIVITY_LINKS: `#graphql
+    query GetSourceActivityLinks($where: source_activity_bool_exp!, $limit: Int!) {
+      activities: ${Queries.SOURCE_ACTIVITIES}(where: $where, order_by: [{ start_time: asc }, { id: asc }], limit: $limit) {
+        end_time
+        id
+        name
         source_key
         start_time
         type

@@ -32,7 +32,44 @@ export type AnalysisSourceTarget =
  */
 export type AnalysisSourceBinding = AnalysisSourceTarget & { id: TimelineSourceId; label?: string };
 
+/**
+ * A note on an analysis: a time or interval, the explanation, and optionally the record or resource it is about.
+ * Notes are findings about the data the analysis reads. They are saved with the analysis and are not part of its
+ * presentation: applying the presentation to another analysis never carries them.
+ */
+export type AnalysisAnnotation = {
+  /** What the note is about, beyond its time. Absent for a note about a time or interval alone. */
+  about?: {
+    /** An activity's id within `data`. */
+    activityId?: number;
+    /**
+     * The data the note was written against (see getSourceIdentity), so a note stays attributable, and is
+     * recognisably about other data, after its source is pointed at another revision.
+     */
+    data: string;
+    /** An activity's identity in its source (a source key, a span id, a directive id). */
+    key?: string;
+    kind: 'activity' | 'resource';
+    /** The activity's name, or the resource's. */
+    name: string;
+    sourceId: TimelineSourceId;
+    /** The source's name in the analysis when the note was written. */
+    sourceLabel: string;
+  };
+  color?: string;
+  createdAt: string;
+  createdBy?: string;
+  /** ISO time; present for an interval. */
+  end?: string;
+  id: number;
+  /** ISO time. */
+  start: string;
+  text: string;
+};
+
 export type AnalysisDefinition = {
+  /** Absent in analyses saved before notes. */
+  annotations?: AnalysisAnnotation[];
   sources: AnalysisSourceBinding[];
   version: 1;
   /** The existing view definition shape; an analysis uses its timeline, not its plan tables or grid. */
@@ -243,3 +280,6 @@ export type SourceActivity = {
   start_time: string;
   type: string;
 };
+
+/** A record another record is linked to, as far as listing and going to it needs. */
+export type SourceActivityLink = Pick<SourceActivity, 'end_time' | 'id' | 'name' | 'source_key' | 'start_time' | 'type'>;

@@ -1,5 +1,6 @@
 import { derived, writable } from 'svelte/store';
 import type { AnalysisPlanDirective, AnalysisSimulationDataset, AnalysisSourceBinding } from '../types/analysis';
+import type { ImportedActivityRecord } from '../utilities/analysis';
 import type { User } from '../types/app';
 import type { Span } from '../types/simulation';
 import type { GqlSubscribable } from '../types/subscribable';
@@ -57,7 +58,26 @@ export function createPlanActivitySubscription(
 
 const simulationSpans = new WeakMap<User, Map<number, Promise<Span[]>>>();
 type SourceActivity = Awaited<ReturnType<typeof effects.getSourceActivities>>[number];
-const revisionActivities = new WeakMap<User, Map<string, Promise<SourceActivity[]>>>();
+type LoadedSourceActivity = SourceActivity & ImportedActivityRecord;
+
+const revisionActivities = new WeakMap<User, Map<string, Promise<LoadedSourceActivity[]>>>();
+
+/**
+ * Resolves each record's named parent (a source key) to that record's id, looking up only the keys named, so the
+ * link holds whichever types a row loaded. A key no record of the revision has stays unresolved: no parent.
+ */
+async function withParentIds(revisionId: number, records: LoadedSourceActivity[], user: User | null) {
+  const keys = [...new Set(records.flatMap(({ parent }) => (typeof parent === 'string' ? [parent] : [])))];
+  if (!keys.length) {
+    return records;
+  }
+  const found = await effects.getSourceActivityLinks(revisionId, { keys }, keys.length, user);
+  const idByKey = new Map(found.map(({ id, source_key }) => [source_key, id]));
+  return records.map(record => {
+    const parentId = typeof record.parent === 'string' ? idByKey.get(record.parent) : undefined;
+    return parentId === undefined || parentId === record.id ? record : { ...record, parentId };
+  });
+}
 
 /**
  * Every activity of one imported revision of the given types (all, for null), fetched once per session and shared
@@ -72,18 +92,20 @@ const revisionActivities = new WeakMap<User, Map<string, Promise<SourceActivity[
 export function getRevisionActivities(
   revisionId: number,
   types: string[] | null,
-  toSpan: (activity: SourceActivity) => Span,
+  toSpan: (activity: LoadedSourceActivity) => Span,
   user: User | null,
 ): Promise<Span[]> {
   if (!user) {
     return Promise.resolve([]);
   }
-  const byKey = revisionActivities.get(user) ?? new Map<string, Promise<SourceActivity[]>>();
+  const byKey = revisionActivities.get(user) ?? new Map<string, Promise<LoadedSourceActivity[]>>();
   revisionActivities.set(user, byKey);
   const key = `${revisionId}:${types ? [...types].sort().join(',') : '*'}`;
   let activities = byKey.get(key);
   if (!activities) {
-    activities = effects.getSourceActivities(revisionId, types, user);
+    activities = effects
+      .getSourceActivities(revisionId, types, user)
+      .then(records => withParentIds(revisionId, records, user));
     // A failed load is not kept, so the next read retries.
     activities.catch(() => byKey.delete(key));
     byKey.set(key, activities);

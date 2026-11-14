@@ -10,13 +10,16 @@
   import { createEventDispatcher } from 'svelte';
   import {
     addSourceActivityRow,
+    analysisAnnotations,
     analysisMaxTimeRange,
     analysisPlanDirectives,
     analysisSimulationDatasets,
     analysisSourceBindings,
     analysisTimelineSources,
+    focusedAnnotationId,
     selectedAnalysisActivity,
   } from '../../stores/analysis';
+  import { toTimelineNotes } from '../../utilities/analysisAnnotations';
   import { getAnalysisActivityTimes } from '../../stores/analysisActivities';
   import { viewTimeRange } from '../../stores/plan';
   import {
@@ -47,6 +50,7 @@
     inspect: void;
     loadView: void;
     openAtTime: void;
+    openNotes: void;
   }>();
   const noSpanMaps: SpanUtilityMaps = {
     directiveIdToSpanIdMap: {},
@@ -159,6 +163,8 @@
           planEndTimeDoy=""
           planStartTimeYmd=""
           {readOnly}
+          notes={toTimelineNotes($analysisAnnotations)}
+          selectedNoteId={$focusedAnnotationId}
           {timeline}
           timelineInteractionMode={$timelineInteractionMode}
           selectedActivityDirectiveId={null}
@@ -173,6 +179,10 @@
           viewTimeRange={$viewTimeRange}
           on:openInspector={() => dispatch('openAtTime')}
           on:dblClick={() => dispatch('inspect')}
+          on:selectNote={({ detail }) => {
+            $focusedAnnotationId = detail;
+            dispatch('openNotes');
+          }}
           on:mouseDown={onMouseDown}
           on:toggleRowExpansion={({ detail: { expanded, rowId } }) =>
             viewUpdateRow('expanded', expanded, timeline?.id, rowId)}

@@ -869,6 +869,7 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
   GET_SIMULATION_DATASET_ID: () => true,
   GET_SOURCE_ACTIVITIES: () => true,
   GET_SOURCE_ACTIVITY: () => true,
+  GET_SOURCE_ACTIVITY_LINKS: () => true,
   GET_SOURCE_ACTIVITY_TIMES: () => true,
   GET_SOURCE_ADAPTERS: () => true,
   GET_SPAN: () => true,

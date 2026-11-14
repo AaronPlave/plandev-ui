@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { User } from '../types/app';
 import { getActivityDrawingId, importedActivityToSpan } from '../utilities/analysis';
 
-const effects = vi.hoisted(() => ({ getSourceActivities: vi.fn() }));
+const effects = vi.hoisted(() => ({ getSourceActivities: vi.fn(), getSourceActivityLinks: vi.fn() }));
 vi.mock('$env/dynamic/public', () => ({ env: {} }));
 vi.mock('$app/environment', () => ({ browser: true }));
 vi.mock('../utilities/effects', () => ({ default: effects }));
@@ -53,5 +53,23 @@ describe('getRevisionActivities', () => {
     await expect(getRevisionActivities(10, null, toSpan, user)).rejects.toThrow('down');
     await Promise.resolve();
     expect(await getRevisionActivities(10, null, toSpan, user)).toHaveLength(1);
+  });
+
+  it('links each record to the parent it names, even when the parent is of a type not loaded', async () => {
+    effects.getSourceActivities.mockReset();
+    const command = (id: number, parent: string) => ({ ...record(id, 'COMMAND'), parent, source_key: `cmd-${id}` });
+    effects.getSourceActivities.mockResolvedValue([command(7, 'seq-A'), command(8, 'seq-gone'), command(9, 'cmd-7')]);
+    // seq-A is a SEQUENCE (id 2) not in this load; seq-gone names no record.
+    effects.getSourceActivityLinks.mockResolvedValue([
+      { id: 2, source_key: 'seq-A' },
+      { id: 7, source_key: 'cmd-7' },
+    ]);
+    const spans = await getRevisionActivities(11, ['COMMAND'], a => importedActivityToSpan('source-1', a), user);
+    expect(effects.getSourceActivityLinks).toHaveBeenCalledWith(11, { keys: ['seq-A', 'seq-gone', 'cmd-7'] }, 3, user);
+    expect(spans.map(span => span.parent_id)).toEqual([
+      getActivityDrawingId({ activityId: 2, sourceId: 'source-1' }),
+      null,
+      getActivityDrawingId({ activityId: 7, sourceId: 'source-1' }),
+    ]);
   });
 });
