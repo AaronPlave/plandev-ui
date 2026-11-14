@@ -23,7 +23,6 @@
     AnalysisSimulationDataset,
     AnalysisSourceBinding,
     AnalysisSourceRevision,
-    SourceActivityLink,
   } from '../../types/analysis';
   import type { User } from '../../types/app';
   import { analysisActivityRefsEqual, getAnalysisActivitySource, isActivityTypeShown } from '../../utilities/analysis';
@@ -35,6 +34,7 @@
   import effects from '../../utilities/effects';
   import { convertUsToDurationString, formatDate } from '../../utilities/time';
   import AnalysisActivityComparison from './AnalysisActivityComparison.svelte';
+  import AnalysisRecordStructure from './AnalysisRecordStructure.svelte';
 
   export let bindings: AnalysisSourceBinding[] = [];
   export let datasets: AnalysisSimulationDataset[] = [];
@@ -43,15 +43,6 @@
   export let selected: AnalysisActivityRef | null = null;
   export let sourceLabels: Record<string, string> = {};
   export let user: User | null;
-
-  /** Children listed at once; the count says when there are more. */
-  const CHILD_LIMIT = 200;
-
-  type Related = {
-    children: SourceActivityLink[];
-    /** A key the record names, and the record it resolves to (null: no record of this revision has that key). */
-    named: { key: string; label: string; record: SourceActivityLink | null }[];
-  };
 
   const dispatch = createEventDispatcher<{
     inspectAt: void;
@@ -62,7 +53,6 @@
   let details: AnalysisActivityDetails | null = null;
   let loading: boolean = false;
   let reference: AnalysisActivityDetails | null = null;
-  let related: Related | null = null;
   let edge: string = '';
 
   $: context = { bindings, datasets, planDirectives: $analysisPlanDirectives, revisions, user };
@@ -78,7 +68,6 @@
     load(selected);
   }
   $: loadReference($analysisCompareReference);
-  $: loadRelated(details);
   $: isReference = analysisActivityRefsEqual($analysisCompareReference, selected);
 
   async function load(ref: AnalysisActivityRef | null) {
@@ -103,31 +92,6 @@
     }
   }
 
-  /** The records this one names, and those that name it as their parent, looked up by key in the same revision. */
-  async function loadRelated(of: AnalysisActivityDetails | null) {
-    related = null;
-    const links = of?.related;
-    if (!of || !links) {
-      return;
-    }
-    const named = [
-      { key: links.parent, label: 'Parent' },
-      { key: links.related, label: 'Raised by' },
-    ].flatMap(({ key, label }) => (key ? [{ key, label }] : []));
-    const [records, children] = await Promise.all([
-      named.length
-        ? effects.getSourceActivityLinks(links.revisionId, { keys: named.map(({ key }) => key) }, named.length, user)
-        : [],
-      effects.getSourceActivityLinks(links.revisionId, { parent: of.key }, CHILD_LIMIT + 1, user),
-    ]);
-    if (details === of) {
-      related = {
-        children,
-        named: named.map(link => ({ ...link, record: records.find(record => record.source_key === link.key) ?? null })),
-      };
-    }
-  }
-
   function select(sourceId: string, record: { end_time: string | null; id: number; start_time: string }) {
     const startMs = Date.parse(record.start_time);
     dispatch('select', {
@@ -147,24 +111,26 @@
     const start = new Date(startMs).toISOString();
     const [beyond, order] = direction === 'next' ? (['_gt', 'asc'] as const) : (['_lt', 'desc'] as const);
     const { source_kind, source_ref } = getAnalysisActivitySource(binding);
-    const [found] = await effects.getAnalysisActivities(
-      {
-        _or: [
-          { start_time: { [beyond]: start } },
-          { activity_id: { [beyond]: ref.activityId }, start_time: { _eq: start } },
-        ],
-        source_kind: { _eq: source_kind },
-        source_ref: { _eq: source_ref },
-        type: { _eq: type },
-      },
-      [{ start_time: order }, { activity_id: order }],
-      0,
-      1,
-      user,
-    ).catch(() => {
-      edge = `Could not read the ${direction} ${type}`;
-      return [];
-    });
+    const [found] = await effects
+      .getAnalysisActivities(
+        {
+          _or: [
+            { start_time: { [beyond]: start } },
+            { activity_id: { [beyond]: ref.activityId }, start_time: { _eq: start } },
+          ],
+          source_kind: { _eq: source_kind },
+          source_ref: { _eq: source_ref },
+          type: { _eq: type },
+        },
+        [{ start_time: order }, { activity_id: order }],
+        0,
+        1,
+        user,
+      )
+      .catch(() => {
+        edge = `Could not read the ${direction} ${type}`;
+        return [];
+      });
     if (found) {
       select(ref.sourceId, { end_time: found.end_time, id: found.activity_id, start_time: found.start_time });
     } else {
@@ -175,8 +141,15 @@
   function addNote(of: AnalysisActivityDetails, text: string) {
     addAnalysisAnnotation(
       {
-        about: { activityId: of.ref.activityId, key: of.key, kind: 'activity', name: of.name, sourceId: of.ref.sourceId },
-        end: of.endMs !== null && of.endMs > of.startMs ? new Date(of.endMs).toISOString() : undefined,
+        about: {
+          activityId: of.ref.activityId,
+          key: of.key,
+          kind: 'activity',
+          name: of.name,
+          sourceId: of.ref.sourceId,
+        },
+        // About the record, at its start: not a claim about every moment of its duration. To mark the interval
+        // itself, mark it with a guide.
         start: new Date(of.startMs).toISOString(),
         text,
       },
@@ -198,6 +171,9 @@
       {sourceLabels}
       on:clear={() => ($analysisCompareReference = null)}
       on:saveNote={({ detail }) => details && addNote(details, detail)}
+      on:selectSelected={() =>
+        details &&
+        dispatch('select', { endMs: details.endMs ?? details.startMs, ref: details.ref, startMs: details.startMs })}
       on:selectReference={() =>
         reference &&
         dispatch('select', {
@@ -264,8 +240,11 @@
       {/if}
     </div>
     <div class="actions">
-      <Button size="xs" variant="ghost" title="The previous {current.type} in this source" on:click={() => step('previous')}
-        ><ChevronLeft size={12} />Previous {current.type}</Button
+      <Button
+        size="xs"
+        variant="ghost"
+        title="The previous {current.type} in this source"
+        on:click={() => step('previous')}><ChevronLeft size={12} />Previous {current.type}</Button
       >
       <Button size="xs" variant="ghost" title="The next {current.type} in this source" on:click={() => step('next')}
         >Next {current.type}<ChevronRight size={12} /></Button
@@ -288,9 +267,16 @@
       <dd>{current.type}</dd>
       <dt>Source</dt>
       <dd>{sourceLabels[current.ref.sourceId] ?? current.ref.sourceId}</dd>
-      <dt>{current.endMs === null ? 'Start (approximate)' : 'Start'}</dt>
+      <dt>{current.endMs === null && !current.endInvalid ? 'Start (approximate)' : 'Start'}</dt>
       <dd>{formatDate(new Date(current.startMs), $plugins.time.primary.format)}</dd>
-      {#if current.endMs === null}
+      {#if current.endInvalid}
+        <dt>End</dt>
+        <dd>
+          <span class="text-muted-foreground">Unavailable: the product's end</span>
+          {current.endInvalid}
+          <span class="text-muted-foreground">is before the start. Duration unknown.</span>
+        </dd>
+      {:else if current.endMs === null}
         <dt>End</dt>
         <dd class="text-muted-foreground">None: a directive has no end until it is simulated</dd>
       {:else}
@@ -304,45 +290,13 @@
         <dd>{value}</dd>
       {/each}
     </dl>
-    {#if related && (related.named.length || related.children.length)}
-      <details open>
-        <summary class="st-typography-medium">
-          Related records, as the product links them
-        </summary>
-        <dl>
-          {#each related.named as { key, label, record } (label)}
-            <dt>{label}</dt>
-            <dd>
-              {#if record}
-                <button class="link" on:click={() => select(current.ref.sourceId, record)}>
-                  {record.name} <span class="text-muted-foreground">({record.type})</span>
-                </button>
-              {:else}
-                {key}
-                <span class="text-muted-foreground">: named by this record, but no record of this revision has that key</span>
-              {/if}
-            </dd>
-          {/each}
-        </dl>
-        {#if related.children.length}
-          <div class="text-muted-foreground">
-            {related.children.length > CHILD_LIMIT ? `First ${CHILD_LIMIT} of more` : related.children.length}
-            record{related.children.length === 1 ? '' : 's'} naming this one as parent, by start:
-          </div>
-          <ul class="children">
-            {#each related.children.slice(0, CHILD_LIMIT) as child (child.id)}
-              <li>
-                <button class="link" on:click={() => select(current.ref.sourceId, child)}>
-                  {child.name}
-                </button>
-                <span class="text-muted-foreground">
-                  {child.type} · {formatDate(new Date(child.start_time), $plugins.time.primary.format)}
-                </span>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </details>
+    {#if current.related}
+      <AnalysisRecordStructure
+        details={current}
+        {readOnly}
+        {user}
+        on:select={({ detail }) => select(current.ref.sourceId, detail)}
+      />
     {/if}
     {#each current.sections as [label, values]}
       <details open>
@@ -405,29 +359,6 @@
     border-left: 2px solid var(--st-warning-yellow, #e6b300);
     margin-bottom: 8px;
     padding-left: 6px;
-  }
-
-  .link {
-    background: none;
-    border: 0;
-    color: var(--st-utility-blue);
-    cursor: pointer;
-    font: inherit;
-    padding: 0;
-    text-align: left;
-    word-break: break-all;
-  }
-
-  .children {
-    list-style: none;
-    margin: 2px 0 8px;
-    max-height: 240px;
-    overflow: auto;
-    padding: 0;
-  }
-
-  .children li {
-    padding: 1px 0;
   }
 
   .show {

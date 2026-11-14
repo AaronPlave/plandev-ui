@@ -92,7 +92,7 @@ describe('Load Timeline from View', () => {
     expect(screen.getByText(/Source "external-events" is not available in an Analysis/)).toBeTruthy();
     // The one plan is preselected for the Plan's activity layers.
     expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('source-1');
-    expect(screen.queryByText(/This replaces the timeline/)).toBeNull();
+    expect(screen.queryByText(/This replaces the rows/)).toBeNull();
     await fireEvent.click(screen.getByRole('button', { name: 'Load Timeline' }));
     const [timeline] = state.replaceAnalysisTimeline.mock.calls[0];
     expect(timeline.rows.map((row: { name: string }) => row.name)).toEqual(['Plan activities']);
@@ -102,8 +102,10 @@ describe('Load Timeline from View', () => {
   it('says it replaces the current timeline, and nothing else, when the analysis already has rows', async () => {
     view.set({ definition: { plan: { timelines: [{ id: 0, rows: [{ id: 1 }, { id: 2 }, { id: 3 }] }] } } });
     await chooseView();
-    expect(screen.getByRole('alert').textContent).toMatch(/replaces the timeline this analysis has now \(3 rows\)/);
-    expect(screen.getByRole('alert').textContent).toMatch(/sources, name and sharing stay as they are/);
+    expect(screen.getByRole('alert').textContent).toMatch(
+      /replaces the rows this analysis has now \(3\); you can undo it/,
+    );
+    expect(screen.getByRole('alert').textContent).toMatch(/notes, time\s+guides, name and sharing stay as they are/);
     await fireEvent.click(screen.getByRole('button', { name: 'Replace Timeline' }));
     expect(state.replaceAnalysisTimeline).toHaveBeenCalledTimes(1);
   });

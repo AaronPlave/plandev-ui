@@ -55,7 +55,10 @@
     renameAnalysis,
     selectedAnalysisActivity,
     showAnalysisActivityType,
+    flushAnalysisSave,
+    syncAnalysisGuideNotes,
   } from '../../../stores/analysis';
+  import { view } from '../../../stores/views';
   import { timeCursorMs, viewTimeRange } from '../../../stores/plan';
   import { setTimelineSourcesContext } from '../../../stores/timelineSources';
   import { getUserStore } from '../../../stores/user';
@@ -91,13 +94,16 @@
   let addSourceOpen: boolean = false;
   let addSourceTab: 'imported' | 'plans' | 'import' = 'imported';
   let loadViewOpen: boolean = false;
-  let applyPresentationOpen: boolean = false;
+  let loadViewId: number | null = null;
+  let layoutOpen: boolean = false;
+  let layoutMode: 'save' | 'use' = 'use';
 
   /*
    * Where this person last looked in each analysis, kept in their browser only: reopening it returns there, and it
    * never changes what anyone else opens. A shared link's own range wins over it.
    */
-  const lastVisitKey = (id: number) => `analysis-last-visit:${id}`;
+  // Per signed-in user: two people sharing a browser each return to where they were.
+  const lastVisitKey = (id: number) => `analysis-last-visit:${$user?.id ?? ''}:${id}`;
   function readLastVisit(id: number): AnalysisOpenContext {
     try {
       return parseAnalysisOpenContext(new URLSearchParams(localStorage.getItem(lastVisitKey(id)) ?? ''));
@@ -124,6 +130,11 @@
     } catch {
       showFailureToast('Could Not Copy The Link');
     }
+  }
+
+  function openLayout(mode: 'save' | 'use') {
+    layoutMode = mode;
+    layoutOpen = true;
   }
 
   function openAddSource(tab: typeof addSourceTab = 'imported') {
@@ -177,6 +188,10 @@
   }
   $: if ($analysis) {
     rememberVisit($analysis.id, $viewTimeRange, $timeCursorMs);
+  }
+  // Notes on guides follow the guides as they are dragged, renamed or deleted.
+  $: if ($view) {
+    syncAnalysisGuideNotes();
   }
   $: readOnly = !$analysis || $user === null || !featurePermissions.analysis.canUpdate($user, $analysis);
   // Said wherever an edit is not offered, so a disabled control is not a mystery.
@@ -283,18 +298,17 @@
           <DropdownMenu.Item
             class="flex cursor-pointer items-center gap-2 text-[13px]"
             disabled={readOnly}
-            on:click={() => (loadViewOpen = true)}
+            on:click={() => openLayout('use')}
           >
             <LayoutTemplate size={14} />
-            Load timeline from a view…
+            Use a layout…
           </DropdownMenu.Item>
           <DropdownMenu.Item
             class="flex cursor-pointer items-center gap-2 text-[13px]"
-            disabled={readOnly}
-            on:click={() => (applyPresentationOpen = true)}
+            on:click={() => openLayout('save')}
           >
             <Presentation size={14} />
-            Use another analysis's layout…
+            Save layout as a view…
           </DropdownMenu.Item>
           <DropdownMenu.Item class="flex cursor-pointer items-center gap-2 text-[13px]" on:click={copyLink}>
             <Link size={14} />
@@ -336,7 +350,7 @@
                   user={$user}
                   on:addSource={({ detail }) => openAddSource(detail)}
                   on:editRow={() => openInspector('editor')}
-                  on:loadView={() => (loadViewOpen = true)}
+                  on:loadView={() => openLayout('use')}
                   on:inspect={() => openInspector('details')}
                   on:openAtTime={() => openInspector('time')}
                   on:openNotes={() => openInspector('notes')}
@@ -469,9 +483,28 @@
 />
 
 {#if !readOnly}
-  <AnalysisLoadViewDialog bind:open={loadViewOpen} {sourceLabels} user={$user} />
-  <AnalysisApplyPresentationDialog bind:open={applyPresentationOpen} {sourceLabels} user={$user} />
+  <AnalysisLoadViewDialog bind:open={loadViewOpen} bind:viewId={loadViewId} {sourceLabels} user={$user} />
 {/if}
+<AnalysisApplyPresentationDialog
+  bind:open={layoutOpen}
+  mode={layoutMode}
+  {sourceLabels}
+  user={$user}
+  on:planView={({ detail }) => {
+    loadViewId = detail;
+    loadViewOpen = true;
+  }}
+/>
+
+<svelte:window
+  on:beforeunload={event => {
+    // Leaving with a save pending: ask the browser to hold the page while it is sent.
+    if ($analysisSaveStatus === 'unsaved' || $analysisSaveStatus === 'saving') {
+      flushAnalysisSave();
+      event.preventDefault();
+    }
+  }}
+/>
 
 <style>
   /*

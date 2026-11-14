@@ -100,4 +100,7 @@ export type View = {
   updated_at: string;
 };
 
-export type ViewSlim = Omit<View, 'definition'>;
+export type ViewSlim = Omit<View, 'definition'> & {
+  /** Saved from an Analysis: its layers name the data they read, so it is used from an Analysis, not on a Plan. */
+  analysis_layout?: boolean;
+};

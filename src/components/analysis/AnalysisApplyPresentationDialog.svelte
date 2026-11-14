@@ -1,15 +1,18 @@
 <svelte:options immutable={true} />
 
 <!--
-  Using another analysis's layout (its rows, sections, layers, axes, styles, value guides) on this analysis's data.
-  Applying another analysis's presentation (its timeline: rows, sections, layers, axes, styles, value guides) to this
-  analysis's data. Each source the presentation's layers read is a role, mapped here to one of this analysis's
-  sources; only the very same data is mapped for the person. Then review: what is kept, what is left out and why, what
-  to check. The other analysis is only read; this analysis's sources are not changed. Its notes never come across:
-  they are findings about its own data.
+  Use a Layout: the one way to bring a prepared presentation (rows, sections, layers, axes, styles, value guides) to
+  this analysis's data. A layout comes from a saved view (one saved from an analysis, or a Plan's view) or from another
+  analysis. Choose it, confirm which of this analysis's sources each of its sources becomes (the same data and another
+  revision of the same source are filled in, and said to be what they are), and use it. Problems are summed up in a
+  line and listed only on request. The layout it came from is only read; this analysis keeps its sources, notes and
+  time guides, and the replacement can be undone.
+
+  A Plan's view is handed to the Plan-view loader (`planView`), which maps the Plan's own layers instead.
 -->
 <script lang="ts">
   import { Button, Dialog } from '@nasa-jpl/stellar-svelte';
+  import { createEventDispatcher } from 'svelte';
   import {
     analyses,
     analysis,
@@ -18,18 +21,20 @@
     analysisSourceBindings,
     analysisSourceRevisions,
     readAnalysisPresentation,
+    readViewPresentation,
     replaceAnalysisTimeline,
+    saveAnalysisLayoutAsView,
     type AnalysisPresentation,
   } from '../../stores/analysis';
-  import { view } from '../../stores/views';
+  import { initialViewsLoading, view, views } from '../../stores/views';
   import type { User } from '../../types/app';
   import type { DataGridColumnDef, RowId } from '../../types/data-grid';
-  import type { AnalysisSlim } from '../../types/analysis';
   import {
     applyPresentation,
     getInitialRoleMapping,
     getPresentationRoles,
     getResourceRenameKey,
+    getRoleMatch,
     getSourceCatalog,
     type PresentationIssue,
     type RoleMapping,
@@ -37,21 +42,48 @@
   import { showSuccessToast } from '../../utilities/toast';
   import DataGrid from '../ui/DataGrid/DataGrid.svelte';
 
+  /** 'save': open on saving this analysis's layout as a view. */
+  export let mode: 'save' | 'use' = 'use';
   export let open: boolean = false;
   /** Names of this analysis's sources, by binding id. */
   export let sourceLabels: Record<string, string> = {};
   export let user: User | null;
 
-  const columnDefs: DataGridColumnDef<AnalysisSlim>[] = [
-    { field: 'name', filter: 'text', headerName: 'Analysis', resizable: true, sortable: true },
+  const dispatch = createEventDispatcher<{ planView: number }>();
+
+  type Choice = {
+    id: number;
+    kind: 'analysis' | 'layout' | 'view';
+    name: string;
+    owner: string | null;
+    updated_at: string;
+  };
+
+  const KIND_LABELS: Record<Choice['kind'], string> = {
+    analysis: 'Analysis',
+    layout: 'Saved layout',
+    view: 'Plan view',
+  };
+
+  const columnDefs: DataGridColumnDef<Choice>[] = [
+    { field: 'name', filter: 'text', headerName: 'Name', resizable: true, sortable: true },
+    {
+      field: 'kind',
+      headerName: 'Kind',
+      resizable: true,
+      sortable: true,
+      valueFormatter: ({ value }: { value: Choice['kind'] }) => KIND_LABELS[value],
+      width: 110,
+    },
     { field: 'owner', filter: 'text', headerName: 'Owner', resizable: true, sortable: true, width: 110 },
     {
       field: 'updated_at',
       headerName: 'Last Edited',
       resizable: true,
+      sort: 'desc',
       sortable: true,
-      valueFormatter: ({ value }: { value: string | null }) => (value ? value.slice(0, 16).replace('T', ' ') : ''),
-      width: 140,
+      valueFormatter: ({ value }: { value: string | null }) => (value ? value.slice(0, 10) : ''),
+      width: 110,
     },
   ];
 
@@ -61,10 +93,15 @@
   let loading: boolean = false;
   let mapping: RoleMapping = {};
   let resourceRenames: Record<string, string> = {};
+  let saveName: string = '';
+  let saving: boolean | null = null;
   let selectedId: RowId | null = null;
+  let showDetails: boolean = false;
 
   $: if (!open) {
     reset();
+  } else if (mode === 'save' && saving === null && !loaded) {
+    saving = false;
   }
   $: targets = $analysisSourceBindings;
   $: targetCatalogs = Object.fromEntries(
@@ -83,52 +120,64 @@
           resourceRenames,
         })
       : null;
-  $: omitted = result?.issues.filter(issue => issue.effect === 'omitted') ?? [];
-  $: missingResources = uniqueMissing(omitted);
+  $: replaceable = uniqueMissing(result?.issues ?? []);
   $: rowStatuses = loaded && result ? getRowStatuses(loaded, result.issues) : [];
-  $: rows = ($analyses ?? []).filter(({ id }) => id !== $analysis?.id);
+  $: counts = {
+    attention: rowStatuses.filter(row => row.status === 'attention').length,
+    ready: rowStatuses.filter(row => row.status === 'ready').length,
+    unavailable: rowStatuses.filter(row => row.status === 'unavailable').length,
+  };
+  $: choices = [
+    ...$views.map(
+      ({ analysis_layout, id, name, owner, updated_at }): Choice => ({
+        id,
+        kind: analysis_layout ? 'layout' : 'view',
+        name,
+        owner,
+        updated_at,
+      }),
+    ),
+    ...($analyses ?? [])
+      .filter(({ id }) => id !== $analysis?.id)
+      .map(({ id, name, owner, updated_at }): Choice => ({ id, kind: 'analysis', name, owner, updated_at })),
+  ];
   $: timeGuideCount = loaded?.timeline.verticalGuides.length ?? 0;
+  $: currentRows = current?.rows.length ?? 0;
 
-  type RowStatus = { id: number; name: string; notes: string[]; status: 'check' | 'hidden' | 'partial' | 'shown' };
+  type RowStatus = { id: number; name: string; notes: string[]; status: 'attention' | 'ready' | 'unavailable' };
 
-  /** Each row of the layout, and whether it will show here: fully, in part, with something to check, or not at all. */
+  /** Each row of the layout: ready, shown with something to look at, or not shown at all. */
   function getRowStatuses(from: AnalysisPresentation, issues: PresentationIssue[]): RowStatus[] {
-    return from.timeline.rows.map(row => {
-      const own = issues.filter(issue => issue.rowId === row.id);
-      const left = own.filter(issue => issue.effect === 'omitted').length;
-      const status =
-        row.layers.length && left === row.layers.length
-          ? 'hidden'
-          : left
-            ? 'partial'
-            : own.length
-              ? 'check'
-              : 'shown';
-      return {
-        id: row.id,
-        name: row.name,
-        notes: [...new Set(own.map(issue => (row.layers.length > 1 ? `${issue.layer}: ${issue.reason}` : issue.reason)))],
-        status,
-      };
-    });
+    return from.timeline.rows
+      .filter(row => row.layers.length)
+      .map(row => {
+        const own = issues.filter(issue => issue.rowId === row.id);
+        const left = own.filter(issue => issue.effect === 'omitted').length;
+        return {
+          id: row.id,
+          name: row.name,
+          notes: [
+            ...new Set(own.map(issue => (row.layers.length > 1 ? `${issue.layer}: ${issue.reason}` : issue.reason))),
+          ],
+          status: left === row.layers.length ? 'unavailable' : own.length ? 'attention' : 'ready',
+        };
+      });
   }
 
-  const statusLabels: Record<RowStatus['status'], string> = {
-    check: 'Shown, check',
-    hidden: 'Not shown',
-    partial: 'Partly shown',
-    shown: 'Shown',
-  };
-
-  function reset() {    filter = '';
+  function reset() {
+    filter = '';
     includeTimeGuides = false;
     loaded = null;
     loading = false;
     mapping = {};
     resourceRenames = {};
+    saveName = '';
+    saving = null;
     selectedId = null;
+    showDetails = false;
   }
 
+  /** Resources the person can replace: missing ones, and ones of another type, each once. */
   function uniqueMissing(issues: PresentationIssue[]) {
     const seen = new Map<string, NonNullable<PresentationIssue['missingResource']>>();
     issues.forEach(({ missingResource }) => {
@@ -144,29 +193,66 @@
     const target = mapping[roleId];
     const resources = target ? targetCatalogs[target]?.resources : null;
     return resources
-      ? [...resources.entries()].filter(([, r]) => type === null || r.type === type).map(([name]) => name).sort()
+      ? [...resources.entries()]
+          .filter(([, r]) => type === null || r.type === type)
+          .map(([name]) => name)
+          .sort()
       : [];
+  }
+
+  /** What the chosen source is to the layout's: said, so another revision is never silently taken as the same data. */
+  function matchNote(roleId: string): string {
+    const targetId = mapping[roleId];
+    const role = roles.find(({ sourceId }) => sourceId === roleId);
+    const target = targets.find(({ id }) => id === targetId);
+    if (!role || !target) {
+      return 'not shown';
+    }
+    const match = getRoleMatch(role, target);
+    if (match === 'same') {
+      return 'same data';
+    }
+    if (match === 'revision' && role.binding?.kind === 'imported' && target.kind === 'imported') {
+      return `another revision (${target.revisionId > role.binding.revisionId ? 'newer' : 'older'})`;
+    }
+    return 'your choice';
   }
 
   async function choose(id: RowId | null) {
     if (id === null || loading) {
       return;
     }
+    const [kind, number] = `${id}`.split(':');
     loading = true;
-    const read = await readAnalysisPresentation(Number(id), user);
+    const read =
+      kind === 'view'
+        ? await readViewPresentation(Number(number), user)
+        : await readAnalysisPresentation(Number(number), user);
     loading = false;
-    if (read) {
+    if (read === 'plan-view') {
+      open = false;
+      dispatch('planView', Number(number));
+    } else if (read) {
       loaded = read;
       mapping = getInitialRoleMapping(getPresentationRoles(read.timeline, read.bindings), targets);
       resourceRenames = {};
     }
   }
 
+  async function save() {
+    saving = true;
+    const id = await saveAnalysisLayoutAsView(saveName.trim(), user);
+    saving = null;
+    if (id !== null) {
+      open = false;
+    }
+  }
+
   function apply() {
-    if (loaded && result && replaceAnalysisTimeline(result.timeline, user)) {
+    if (loaded && result && replaceAnalysisTimeline(result.timeline, user, loaded.name)) {
+      const left = result.total - result.kept;
       showSuccessToast(
-        `Used the layout of "${loaded.name}": ${result.kept} of ${result.total} layers` +
-          (omitted.length ? `, ${omitted.length} left out` : ''),
+        `Using the layout of "${loaded.name}"${left ? `; ${left} layer${left === 1 ? '' : 's'} left out` : ''}`,
       );
       open = false;
     }
@@ -174,119 +260,173 @@
 </script>
 
 <Dialog.Root bind:open>
-  <Dialog.Content class="flex max-h-[88vh] max-w-[760px] flex-col gap-3">
-    <Dialog.Header>
-      <Dialog.Title>Use Another Analysis's Layout</Dialog.Title>
-      <Dialog.Description>
-        Copy another analysis's rows, sections, axes and styles here, showing this analysis's data. The other
-        analysis is not changed.
-      </Dialog.Description>
-    </Dialog.Header>
-
-    {#if !loaded}
-      <input bind:value={filter} class="st-input w-full" placeholder="Filter analyses" aria-label="Filter analyses" />
-      <div class="h-[320px]">
+  <Dialog.Content class="flex max-h-[88vh] max-w-[680px] flex-col gap-3">
+    {#if saving !== null}
+      <Dialog.Header>
+        <Dialog.Title>Save This Layout as a View</Dialog.Title>
+        <Dialog.Description>
+          Its rows, sections, axes, styles and guides, to use in any analysis. Notes stay with this analysis.
+        </Dialog.Description>
+      </Dialog.Header>
+      <input
+        class="st-input w-full"
+        placeholder="View name, e.g. DSN contact review"
+        aria-label="View name"
+        bind:value={saveName}
+        on:keydown={event => event.key === 'Enter' && saveName.trim() && save()}
+      />
+      <Dialog.Footer>
+        <Button variant="outline" on:click={() => (saving = null)}>Back</Button>
+        <Button disabled={!saveName.trim() || saving} on:click={save}>{saving ? 'Saving…' : 'Save View'}</Button>
+      </Dialog.Footer>
+    {:else if !loaded}
+      <Dialog.Header>
+        <Dialog.Title>Use a Layout</Dialog.Title>
+        <Dialog.Description
+          >Show this analysis's data with a saved view or another analysis's layout.</Dialog.Description
+        >
+      </Dialog.Header>
+      <input
+        bind:value={filter}
+        class="st-input w-full"
+        placeholder="Filter by name or owner"
+        aria-label="Filter layouts"
+      />
+      <div class="h-[300px]">
         <DataGrid
           bind:currentSelectedRowId={selectedId}
           {columnDefs}
           filterExpression={filter}
-          rowData={rows}
+          loading={$initialViewsLoading}
+          getRowId={choice => `${choice.kind === 'analysis' ? 'analysis' : 'view'}:${choice.id}`}
+          rowData={choices}
           rowSelection="single"
-          noRowsOverlayText="No other analyses"
+          noRowsOverlayText="No saved views or other analyses"
           on:rowDoubleClicked={({ detail: { data } }) => choose(data.id)}
         />
       </div>
-      <Dialog.Footer>
-        <Button variant="outline" on:click={() => (open = false)}>Cancel</Button>
-        <Button disabled={selectedId === null || loading} on:click={() => choose(selectedId)}>
-          {loading ? 'Reading…' : 'Next'}
+      <Dialog.Footer class="sm:justify-between">
+        <Button variant="ghost" disabled={!currentRows} on:click={() => (saving = false)}>
+          Save this layout as a view…
         </Button>
+        <div class="flex gap-2">
+          <Button variant="outline" on:click={() => (open = false)}>Cancel</Button>
+          <Button disabled={selectedId === null || loading} on:click={() => choose(selectedId)}>
+            {loading ? 'Reading…' : 'Next'}
+          </Button>
+        </div>
       </Dialog.Footer>
     {:else if result}
-      <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto text-xs">
-        <section>
-          <div class="mb-1 font-medium">1. Which data to show</div>
-          <div class="mb-2 text-muted-foreground">
-            "{loaded.name}" shows data from the sources on the left. Pick what to show from this analysis instead.
-          </div>
+      <Dialog.Header>
+        <Dialog.Title>Use “{loaded.name}”</Dialog.Title>
+        <Dialog.Description>
+          {loaded.kind === 'view' ? 'A saved view' : 'Another analysis'}'s layout, showing this analysis's data. It is
+          not changed.
+        </Dialog.Description>
+      </Dialog.Header>
+      <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-auto text-xs">
+        <section aria-label="Data to show">
           {#each roles as role (role.sourceId)}
-            <label class="grid grid-cols-[1fr_auto_1fr] items-center gap-2 py-0.5">
+            {@const note = matchNote(role.sourceId)}
+            <label class="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 py-0.5">
               <span class="truncate" title={loaded.names[role.sourceId]}>
-                {loaded.names[role.sourceId] ?? (role.binding ? role.sourceId : 'a source it no longer has')}
+                {loaded.names[role.sourceId] ?? 'A source no longer available'}
               </span>
               <span class="text-muted-foreground">→</span>
-              <select
-                class="st-select w-full"
-                value={mapping[role.sourceId] ?? ''}
-                on:change={event => (mapping = { ...mapping, [role.sourceId]: event.currentTarget.value || null })}
-              >
-                <option value="">Don't show</option>
-                {#each targets as target (target.id)}
-                  <option value={target.id}>{sourceLabels[target.id] ?? target.id}</option>
-                {/each}
-              </select>
-            </label>
-          {/each}
-          {#each missingResources as missing (missing.key)}
-            <label class="grid grid-cols-[1fr_auto_1fr] items-center gap-2 py-0.5">
-              <span class="truncate text-muted-foreground" title={missing.name}>Resource {missing.name} is not there</span>
-              <span class="text-muted-foreground">→</span>
-              <select
-                class="st-select w-full"
-                value={resourceRenames[missing.key] ?? ''}
-                on:change={event => {
-                  const { [missing.key]: _, ...rest } = resourceRenames;
-                  resourceRenames = event.currentTarget.value ? { ...rest, [missing.key]: event.currentTarget.value } : rest;
-                }}
-              >
-                <option value="">Don't show</option>
-                {#each renameOptions(missing.roleId, missing.type) as name}
-                  <option value={name}>Use {name}</option>
-                {/each}
-              </select>
+              <span class="flex min-w-0 flex-col">
+                <select
+                  class="st-select w-full"
+                  value={mapping[role.sourceId] ?? ''}
+                  on:change={event => (mapping = { ...mapping, [role.sourceId]: event.currentTarget.value || null })}
+                >
+                  <option value="">Don't show</option>
+                  {#each targets as target (target.id)}
+                    <option value={target.id}>{sourceLabels[target.id] ?? target.id}</option>
+                  {/each}
+                </select>
+                <span class:text-amber-700={note.startsWith('another')} class="text-muted-foreground">{note}</span>
+              </span>
             </label>
           {/each}
         </section>
 
-        <section>
-          <div class="mb-1 font-medium">2. What you will get ({result.kept} of {result.total} layers)</div>
-          <ul class="flex flex-col">
-            {#each rowStatuses as row (row.id)}
-              <li class="border-t py-1">
-                <div class="flex justify-between gap-2">
-                  <span class:text-muted-foreground={row.status === 'hidden'}>{row.name}</span>
-                  <span
-                    class:text-muted-foreground={row.status === 'hidden'}
-                    class:text-amber-700={row.status === 'check' || row.status === 'partial'}
-                  >
-                    {statusLabels[row.status]}
-                  </span>
-                </div>
-                {#each row.notes as note}
-                  <div class="text-muted-foreground">{note}</div>
-                {/each}
-              </li>
-            {/each}
-          </ul>
-        </section>
-
-        <section class="flex flex-col gap-1 text-muted-foreground">
-          {#if timeGuideCount}
-            <label class="flex items-center gap-2">
-              <input type="checkbox" bind:checked={includeTimeGuides} />
-              Also bring its {timeGuideCount} time guide{timeGuideCount === 1 ? '' : 's'} (they mark times in its data)
-            </label>
-          {/if}
-          <div>
-            Notes{loaded.noteCount ? ` (${loaded.noteCount})` : ''} stay with "{loaded.name}". This analysis keeps its
-            sources and notes{current?.rows.length ? `; its ${current.rows.length} current rows are replaced` : ''}.
+        <section aria-label="What will show" class="rounded border p-2">
+          <div class="flex items-center gap-2">
+            <span class="font-medium">
+              {counts.ready} row{counts.ready === 1 ? '' : 's'} ready{' '}{#if counts.attention}
+                <span class="text-amber-700">
+                  · {counts.attention} need{counts.attention === 1 ? 's' : ''} attention</span
+                >
+              {/if}{#if counts.unavailable}
+                <span class="text-muted-foreground"> · {counts.unavailable} unavailable</span>
+              {/if}
+            </span>
+            <span class="grow" />
+            {#if counts.attention || counts.unavailable}
+              <button class="text-[var(--st-utility-blue)]" on:click={() => (showDetails = !showDetails)}>
+                {showDetails ? 'Hide' : 'Show'} details
+              </button>
+            {/if}
           </div>
+          {#if showDetails}
+            <ul class="mt-1 flex flex-col">
+              {#each rowStatuses.filter(row => row.status !== 'ready') as row (row.id)}
+                <li class="border-t py-1">
+                  <span class:text-muted-foreground={row.status === 'unavailable'} class="font-medium">{row.name}</span>
+                  <span class="text-muted-foreground">{row.status === 'unavailable' ? ' · not shown' : ''}</span>
+                  {#each row.notes as note}
+                    <div class="text-muted-foreground">{note}</div>
+                  {/each}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          {#each replaceable as missing (missing.key)}
+            {@const options = renameOptions(missing.roleId, missing.type)}
+            {#if options.length}
+              <label class="mt-1 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
+                <span class="truncate" title={missing.name}>{missing.name} isn't available</span>
+                <span class="text-muted-foreground">→</span>
+                <select
+                  class="st-select w-full"
+                  value={resourceRenames[missing.key] ?? ''}
+                  on:change={event => {
+                    const { [missing.key]: _, ...rest } = resourceRenames;
+                    resourceRenames = event.currentTarget.value
+                      ? { ...rest, [missing.key]: event.currentTarget.value }
+                      : rest;
+                  }}
+                >
+                  <option value="">Leave it out</option>
+                  {#each options as name}
+                    <option value={name}>Use {name}</option>
+                  {/each}
+                </select>
+              </label>
+            {/if}
+          {/each}
         </section>
+
+        {#if timeGuideCount}
+          <label class="flex items-center gap-2 text-muted-foreground">
+            <input type="checkbox" bind:checked={includeTimeGuides} />
+            Also bring its {timeGuideCount} time guide{timeGuideCount === 1 ? '' : 's'}: they mark times in its data,
+            without their notes
+          </label>
+        {/if}
+      </div>
+      <div class="text-xs text-muted-foreground" role="note">
+        {#if currentRows}
+          Replaces this analysis's {currentRows} row{currentRows === 1 ? '' : 's'}; you can undo it.
+        {/if}
+        This analysis keeps its sources, notes and time guides.{loaded.noteCount
+          ? ` The ${loaded.noteCount} note${loaded.noteCount === 1 ? '' : 's'} of "${loaded.name}" stay there.`
+          : ''}
       </div>
       <Dialog.Footer>
         <Button variant="outline" on:click={() => (loaded = null)}>Back</Button>
         <Button disabled={result.kept === 0} on:click={apply}>
-          {current?.rows.length ? 'Replace Rows' : 'Use Layout'}
+          {currentRows ? `Replace Layout (${counts.ready + counts.attention} rows)` : 'Use Layout'}
         </Button>
       </Dialog.Footer>
     {/if}

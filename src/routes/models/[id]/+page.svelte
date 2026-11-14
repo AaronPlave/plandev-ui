@@ -104,7 +104,7 @@
     schedulingGoalsMap,
   } from '../../../stores/scheduling';
   import { getUserStore, initialUsersLoading, users } from '../../../stores/user';
-  import { initialViewsLoading, views } from '../../../stores/views';
+  import { initialViewsLoading, planViews as views } from '../../../stores/views';
   import type { User, UserId } from '../../../types/app';
   import type {
     ConstraintMetadata,

@@ -11,6 +11,7 @@
   import {
     addSourceActivityRow,
     analysisAnnotations,
+    analysisLayoutUndo,
     analysisMaxTimeRange,
     analysisPlanDirectives,
     analysisSimulationDatasets,
@@ -18,6 +19,7 @@
     analysisTimelineSources,
     focusedAnnotationId,
     selectedAnalysisActivity,
+    undoAnalysisLayout,
   } from '../../stores/analysis';
   import { toTimelineNotes } from '../../utilities/analysisAnnotations';
   import { getAnalysisActivityTimes } from '../../stores/analysisActivities';
@@ -151,6 +153,13 @@
     </svelte:fragment>
 
     <svelte:fragment slot="body">
+      {#if $analysisLayoutUndo}
+        <div class="undo-bar" role="status">
+          <span>Showing the layout of “{$analysisLayoutUndo.name}”.</span>
+          <Button size="xs" variant="outline" on:click={undoAnalysisLayout}>Undo</Button>
+          <Button size="xs" variant="ghost" on:click={() => ($analysisLayoutUndo = null)}>Keep it</Button>
+        </div>
+      {/if}
       {#if timeline}
         <Timeline
           bind:this={timelineRef}
@@ -236,9 +245,7 @@
                   Show all activities of {source.label}
                 </Button>
               {/each}
-              <Button size="sm" variant="outline" on:click={() => dispatch('loadView')}
-                >Load timeline from a view</Button
-              >
+              <Button size="sm" variant="outline" on:click={() => dispatch('loadView')}>Use a saved layout</Button>
             </div>
           {/if}
         </div>
@@ -270,6 +277,23 @@
     transform: translate(-50%, -50%);
     width: calc(100% - 32px);
     z-index: 5;
+  }
+
+  .undo-bar {
+    align-items: center;
+    background: var(--st-gray-10);
+    border: 1px solid var(--st-gray-20);
+    border-radius: 4px;
+    display: flex;
+    font-size: 12px;
+    gap: 8px;
+    padding: 4px 8px;
+    bottom: 12px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+    left: 50%;
+    position: absolute;
+    transform: translateX(-50%);
+    z-index: 9;
   }
 
   .timeline-title {

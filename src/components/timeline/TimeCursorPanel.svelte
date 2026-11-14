@@ -58,12 +58,22 @@
   let columnMode: 'values' | 'stats' = 'values';
   let watchedNames: string[] = [];
   let watchedResources: Record<string, Resource> = {};
+  /** Narrows a long list of analysis resources by name or source. */
+  let resourceFilter: string = '';
   let watchedSubscriptions: Record<string, ResourceSubscription> = {};
   const cursorTimeField = field<string>('', [required, $plugins.time.primary.validate]);
 
   // Keeps the input in step with the cursor as it is dragged. Goes through validateAndSet so the
   // field's own validity is recomputed — a plain set would leave the initial "required" error
   // showing over a perfectly valid time.
+  // Grouped by source (same names in two sources stay two rows), filtered by name or source.
+  $: analysisRows = (analysis?.resources ?? [])
+    .filter(row => {
+      const text = resourceFilter.trim().toLowerCase();
+      return !text || row.name.toLowerCase().includes(text) || row.sourceLabel.toLowerCase().includes(text);
+    })
+    .sort((a, b) => a.sourceLabel.localeCompare(b.sourceLabel) || a.name.localeCompare(b.name));
+  $: analysisSourceCount = new Set((analysis?.resources ?? []).map(row => row.sourceLabel)).size;
   $: if ($timeCursorMs !== null) {
     syncCursorTimeField($timeCursorMs);
   }
@@ -440,6 +450,14 @@
                 No resources yet. Add one below to read it here, or plot one on the timeline.
               </div>
             {:else}
+              {#if analysis.resources.length > 8}
+                <input
+                  class="st-input mb-1 w-full"
+                  placeholder="Filter {analysis.resources.length} resources by name or source"
+                  aria-label="Filter resources"
+                  bind:value={resourceFilter}
+                />
+              {/if}
               <div class="column-header" class:comparing>
                 <span />
                 <span />
@@ -451,7 +469,10 @@
                   <span>Value</span>
                 {/if}
               </div>
-              {#each analysis.resources as row (row.key)}
+              {#each analysisRows as row, index (row.key)}
+                {#if analysisSourceCount > 1 && row.sourceLabel !== analysisRows[index - 1]?.sourceLabel}
+                  <div class="source-heading" title={row.sourceLabel}>{row.sourceLabel}</div>
+                {/if}
                 <TimeCursorResourceRow
                   compareTimeMs={$timeCursorCompareMs}
                   cursorTimeMs={$timeCursorMs}
@@ -473,6 +494,9 @@
                   on:unwatch={() => analysis?.onUnwatch(row.key)}
                 />
               {/each}
+              {#if resourceFilter && !analysisRows.length}
+                <div class="pb-2 text-[11px] text-gray-500">No resource matches “{resourceFilter}”.</div>
+              {/if}
               {#if analysis.omittedResources}
                 <div class="pb-2 text-[11px] text-gray-500">
                   {analysis.omittedResources} more plotted resources are not read: at most {MAX_INSPECTED_RESOURCES} are,
@@ -720,6 +744,16 @@
   }
 
   /* Column captions, aligned to the same grid the rows use. */
+  .source-heading {
+    color: rgb(107 114 128);
+    font-size: 10px;
+    font-weight: 600;
+    overflow: hidden;
+    padding: 6px 0 2px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .column-header {
     color: var(--st-gray-50, #8b8f96);
     display: grid;

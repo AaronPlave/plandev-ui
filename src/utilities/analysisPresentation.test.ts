@@ -5,6 +5,7 @@ import {
   applyPresentation,
   getInitialRoleMapping,
   getPresentationRoles,
+  getRoleMatch,
   getResourceRenameKey,
   type SourceCatalog,
 } from './analysisPresentation';
@@ -86,15 +87,29 @@ const targetCatalogs = {
 };
 const labels = { 'source-7': 'Tour B predicted', 'source-8': 'Tour B executed', 'source-9': 'DSN schedule' };
 
-test('roles are the sources the layers read; only the very same data is preselected', () => {
+test('roles are the sources the layers read; the same data is mapped, another revision of it suggested', () => {
   const roles = getPresentationRoles(tourA(), sourceBindings);
-  expect(roles.map(({ activityLayers, resourceLayers, sourceId }) => [sourceId, resourceLayers, activityLayers])).toEqual([
+  expect(
+    roles.map(({ activityLayers, resourceLayers, sourceId }) => [sourceId, resourceLayers, activityLayers]),
+  ).toEqual([
     ['source-1', 2, 0],
     ['source-2', 1, 0],
     ['source-3', 0, 1],
   ]);
-  // Same logical source at another revision is not preselected; the same revision is.
-  expect(getInitialRoleMapping(roles, targets)).toEqual({ 'source-1': null, 'source-2': null, 'source-3': 'source-9' });
+  expect(getInitialRoleMapping(roles, targets)).toEqual({
+    'source-1': 'source-7',
+    'source-2': 'source-8',
+    'source-3': 'source-9',
+  });
+  // Said to be what it is: the same data, or another revision of the same source.
+  expect(targets.map(target => getRoleMatch(roles[0], target))).toEqual(['revision', 'other', 'other']);
+  expect(getRoleMatch(roles[2], targets[2])).toBe('same');
+  // Two revisions of the same source in the target: ambiguous, so nothing is suggested.
+  const two = [
+    ...targets,
+    { id: 'source-10', kind: 'imported', revisionId: 13, sourceId: 10 } as AnalysisSourceBinding,
+  ];
+  expect(getInitialRoleMapping(roles, two)['source-1']).toBeNull();
 });
 
 test('a mixed-source overlay maps each layer through its own role, and reports what does not fit', () => {
@@ -111,12 +126,19 @@ test('a mixed-source overlay maps each layer through its own role, and reports w
   expect(contacts.layers[0].sourceId).toBe('source-9');
   // SOC was renamed in Tour B: left out with a mappable missing resource, and its axis goes with it.
   expect(power.yAxes.map(({ id }) => id)).toEqual([0]);
-  expect(power.horizontalGuides).toHaveLength(1);
-  const missing = result.issues.find(issue => issue.missingResource);
+  const missing = result.issues.find(issue => issue.layer === 'SOC');
   expect(missing?.missingResource).toEqual({ name: 'BatterySOC', roleId: 'source-1', type: 'real' });
-  expect(result.issues.find(issue => issue.layer === 'Executed')?.reason).toMatch(/string/);
-  // Units differ: kept, not converted, and said so.
+  // Another type is left out, and can be replaced by a resource of the type it drew.
+  expect(result.issues.find(issue => issue.layer === 'Executed')).toMatchObject({
+    effect: 'omitted',
+    missingResource: { name: 'Power', roleId: 'source-2', type: 'real' },
+  });
+  // W in Tour A, kW in Tour B: kept, not converted. The axis is refreshed (its W range and label would mislabel kW)
+  // and the 900 W limit is dropped rather than read as 900 kW.
   expect(result.issues.find(issue => issue.layer === 'Predicted')).toMatchObject({ effect: 'warning' });
+  expect(power.horizontalGuides).toEqual([]);
+  expect(power.yAxes[0].scaleDomain).toBeUndefined();
+  expect(power.yAxes[0].label.text).toBe('Power (kW) · Tour B predicted');
   // Time guides are findings about Tour A's data: not carried unless asked.
   expect(result.timeline.verticalGuides).toEqual([]);
   expect(result.timeline.id).toBe(5);
@@ -133,4 +155,58 @@ test('a chosen rename is read instead, and an unmapped role leaves its layers ou
   expect(result.timeline.rows[0].layers.map(layer => layer.filter.resource)).toEqual(['Power', 'Battery_SOC']);
   expect(result.timeline.items).toEqual([{ id: 0, type: 'row' }]);
   expect(result.timeline.verticalGuides).toHaveLength(1);
+});
+
+test("the target keeps its own time guides; the original's come only when asked for, without clashing ids", () => {
+  const current = createTimeline([], {
+    verticalGuides: [{ id: 0, label: { text: 'Tour B contact start' }, timestamp: '2030-200T00:00:00' }],
+  });
+  const options = { mapping: { 'source-3': 'source-9' }, resourceRenames: {} };
+  const without = applyPresentation(tourA(), current, sourceCatalogs, targetCatalogs, labels, {
+    ...options,
+    includeTimeGuides: false,
+  });
+  expect(without.timeline.verticalGuides.map(({ label }) => label.text)).toEqual(['Tour B contact start']);
+  const withGuides = applyPresentation(tourA(), current, sourceCatalogs, targetCatalogs, labels, {
+    ...options,
+    includeTimeGuides: true,
+  });
+  expect(withGuides.timeline.verticalGuides.map(({ id, label }) => [id, label.text])).toEqual([
+    [0, 'Tour B contact start'],
+    [1, 'Power drop at 14:03'],
+  ]);
+});
+
+test('an activity layer none of whose types the target has is left out, not kept empty', () => {
+  const result = applyPresentation(
+    tourA(),
+    createTimeline([]),
+    sourceCatalogs,
+    { ...targetCatalogs, 'source-9': catalog({}, ['STATION_VIEW']) },
+    labels,
+    { includeTimeGuides: false, mapping: { 'source-3': 'source-9' }, resourceRenames: {} },
+  );
+  expect(result.timeline.rows.find(row => row.name === 'Contacts')).toBeUndefined();
+  expect(result.issues.find(issue => issue.layer === 'Contacts')).toMatchObject({
+    effect: 'omitted',
+    reason: 'DSN schedule has no ALLOCATION',
+  });
+});
+
+test('a source whose catalog could not be read is not checked, and says so rather than claiming it fits', () => {
+  const unknown = { activityTypes: null, resources: null };
+  const result = applyPresentation(
+    tourA(),
+    createTimeline([]),
+    sourceCatalogs,
+    { 'source-7': unknown, 'source-9': unknown },
+    labels,
+    { includeTimeGuides: false, mapping: { 'source-1': 'source-7', 'source-3': 'source-9' }, resourceRenames: {} },
+  );
+  expect(result.issues.filter(issue => issue.effect === 'unverified').map(({ layer }) => layer)).toEqual([
+    'Predicted',
+    'SOC',
+    'Contacts',
+  ]);
+  expect(result.kept).toBe(3);
 });

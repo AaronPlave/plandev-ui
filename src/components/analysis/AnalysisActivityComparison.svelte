@@ -18,7 +18,12 @@
   export let selected: AnalysisActivityDetails;
   export let sourceLabels: Record<string, string> = {};
 
-  const dispatch = createEventDispatcher<{ clear: void; saveNote: string; selectReference: void }>();
+  const dispatch = createEventDispatcher<{
+    clear: void;
+    saveNote: string;
+    selectReference: void;
+    selectSelected: void;
+  }>();
 
   let showSame: boolean = false;
 
@@ -30,6 +35,14 @@
 
   function time(ms: number | null): string {
     return ms === null ? '—' : formatDate(new Date(ms), $plugins.time.primary.format);
+  }
+
+  function end(of: AnalysisActivityDetails): string {
+    return of.endInvalid ? `invalid (${of.endInvalid})` : time(of.endMs);
+  }
+
+  function duration(of: AnalysisActivityDetails): string {
+    return of.endMs === null ? 'unavailable' : formatDelta(of.endMs - of.startMs).slice(1) || '0s';
   }
 
   function value(v: unknown): string {
@@ -52,11 +65,7 @@
         on:click={() =>
           dispatch(
             'saveNote',
-            describeComparison(
-              { ...reference, sourceLabel: labelA },
-              { ...selected, sourceLabel: labelB },
-              comparison,
-            ),
+            describeComparison({ ...reference, sourceLabel: labelA }, { ...selected, sourceLabel: labelB }, comparison),
           )}>Save as note</Button
       >
     {/if}
@@ -67,36 +76,45 @@
       <tr>
         <th />
         <th>
-          <button class="link" title="Select the reference" on:click={() => dispatch('selectReference')}>A · reference</button>
+          <button class="link" title="Select the reference" on:click={() => dispatch('selectReference')}
+            >A · reference</button
+          >
         </th>
-        <th>B · selected</th>
+        <th>
+          <button class="link" title="Select B" on:click={() => dispatch('selectSelected')}>B · selected</button>
+        </th>
         <th>B − A</th>
       </tr>
     </thead>
     <tbody>
-      <tr><th>Source</th><td>{labelA}</td><td>{labelB}</td><td>{comparison.sameSource ? 'same data' : 'different data'}</td></tr>
-      <tr><th>Name</th><td>{reference.name}</td><td>{selected.name}</td><td /></tr>
-      <tr><th>Type</th><td>{reference.type}</td><td>{selected.type}</td><td>{comparison.sameType ? 'same' : 'different'}</td></tr>
-      <tr><th>Record</th><td>{reference.key}</td><td>{selected.key}</td><td>{comparison.sameKey ? 'same key' : 'different key'}</td></tr>
       <tr>
         <th>Start</th><td>{time(reference.startMs)}</td><td>{time(selected.startMs)}</td>
         <td class="delta">{formatDelta(comparison.startDeltaMs)}</td>
       </tr>
       <tr>
-        <th>End</th><td>{time(reference.endMs)}</td><td>{time(selected.endMs)}</td>
-        <td class="delta">{comparison.endDeltaMs === null ? '—' : formatDelta(comparison.endDeltaMs)}</td>
+        <th>End</th><td class:unavailable={reference.endInvalid}>{end(reference)}</td>
+        <td class:unavailable={selected.endInvalid}>{end(selected)}</td>
+        <td class="delta" class:unavailable={comparison.endDeltaMs === null}
+          >{comparison.endDeltaMs === null ? 'unavailable' : formatDelta(comparison.endDeltaMs)}</td
+        >
       </tr>
       <tr>
         <th>Duration</th>
-        <td>{reference.endMs === null ? '—' : formatDelta(reference.endMs - reference.startMs).slice(1) || '0s'}</td>
-        <td>{selected.endMs === null ? '—' : formatDelta(selected.endMs - selected.startMs).slice(1) || '0s'}</td>
-        <td class="delta">{comparison.durationDeltaMs === null ? '—' : formatDelta(comparison.durationDeltaMs)}</td>
+        <td class:unavailable={reference.endMs === null}>{duration(reference)}</td>
+        <td class:unavailable={selected.endMs === null}>{duration(selected)}</td>
+        <td class="delta" class:unavailable={comparison.durationDeltaMs === null}
+          >{comparison.durationDeltaMs === null ? 'unavailable' : formatDelta(comparison.durationDeltaMs)}</td
+        >
       </tr>
       <tr>
         <th>In time</th>
-        <td colspan="3">
-          {comparison.interval.kind === 'overlap' ? 'Overlap for' : 'Apart by'}
-          {formatDelta(comparison.interval.ms).slice(1) || '0s'}
+        <td colspan="3" class:unavailable={!comparison.interval}>
+          {#if comparison.interval}
+            {comparison.interval.kind === 'overlap' ? 'Overlap for' : 'Apart by'}
+            {formatDelta(comparison.interval.ms).slice(1) || '0s'}
+          {:else}
+            Unavailable without both ends
+          {/if}
         </td>
       </tr>
       {#each differing as parameter (parameter.name)}
@@ -115,6 +133,22 @@
           </td>
         </tr>
       {/each}
+      <tr class="identity"
+        ><th>Source</th><td>{labelA}</td><td>{labelB}</td><td
+          >{comparison.sameSource ? 'same data' : 'different data'}</td
+        ></tr
+      >
+      <tr class="identity"><th>Name</th><td>{reference.name}</td><td>{selected.name}</td><td /></tr>
+      <tr class="identity"
+        ><th>Type</th><td>{reference.type}</td><td>{selected.type}</td><td
+          >{comparison.sameType ? 'same' : 'different'}</td
+        ></tr
+      >
+      <tr class="identity"
+        ><th>Record</th><td>{reference.key}</td><td>{selected.key}</td><td
+          >{comparison.sameKey ? 'same key' : 'different key'}</td
+        ></tr
+      >
       {#if showSame}
         {#each same as parameter (parameter.name)}
           <tr><th>{parameter.name}</th><td>{value(parameter.a)}</td><td>{value(parameter.b)}</td><td>same</td></tr>
@@ -130,9 +164,7 @@
   {#each comparison.notes as note}
     <div class="note" role="note">{note}</div>
   {/each}
-  <div class="hint">
-    Chosen by you: nothing here establishes that the two records describe the same event.
-  </div>
+  <div class="hint">Chosen by you: nothing here establishes that the two records describe the same event.</div>
 </section>
 
 <style>
@@ -191,6 +223,16 @@
     font-variant-numeric: tabular-nums;
     font-weight: 500;
     white-space: nowrap;
+  }
+
+  .unavailable {
+    color: var(--st-gray-60);
+    font-style: italic;
+  }
+
+  .identity th,
+  .identity td {
+    color: var(--st-gray-60);
   }
 
   .conflict td {

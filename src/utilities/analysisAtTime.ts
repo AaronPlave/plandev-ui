@@ -40,12 +40,14 @@ export type AtTimeValue = {
   /** The response was not a complete, raw one: the value may not be the source's own. */
   approximate?: boolean;
   basis: AtTimeBasis;
-  /** The sample after the instant, when the value depends on it (ms). */
+  /** The sample after the instant, when the value depends on it (ms), and its value. */
   nextMs?: number;
+  nextValue?: number | string | null;
   /** Why nothing can be said, or what else to know. */
   note?: string;
-  /** The sample the value comes from, or the one before the instant (ms). */
+  /** The sample the value comes from, or the one before the instant (ms), and its value. */
   sampleMs?: number;
+  sampleValue?: number | string | null;
   value: number | string | null;
 };
 
@@ -108,7 +110,9 @@ export function getImportedValueAt(
       ...approximate,
       basis: 'interpolated',
       nextMs: after.ms,
+      nextValue: after.value,
       sampleMs: before.ms,
+      sampleValue: before.value,
       value: Number(before.value) + (Number(after.value) - Number(before.value)) * fraction,
     };
   }
@@ -533,6 +537,21 @@ export const atTimeBasisLabels: Record<AtTimeBasis, string> = {
   unavailable: 'Unavailable',
 };
 
+/**
+ * The basis of a reading in a few words, with how far the samples it rests on are: "Interpolated · samples 2h apart",
+ * "Held · sample 1h 52m before". A value inferred across a long gap must not read like an observation.
+ */
+export function summarizeAtTimeBasis(reading: AtTimeValue, time: number): string {
+  const label = atTimeBasisLabels[reading.basis];
+  if (reading.basis === 'interpolated' && reading.sampleMs !== undefined && reading.nextMs !== undefined) {
+    return `${label} · samples ${formatTimeOffset(reading.nextMs, reading.sampleMs).slice(1)} apart`;
+  }
+  if (reading.basis === 'held' && reading.sampleMs !== undefined && reading.sampleMs < time) {
+    return `${label} · sample ${formatTimeOffset(time, reading.sampleMs).slice(1)} before`;
+  }
+  return label;
+}
+
 /** How far `ms` is from `from`, to its two largest units: "−2y 202d", "+55s". */
 export function formatTimeOffset(ms: number, from: number): string {
   const delta = ms - from;
@@ -554,7 +573,11 @@ export function explainAtTime(reading: AtTimeValue, time: number, formatTime: (m
     case 'held':
       return `Last sample ${formatTimeOffset(sample!, time)} (${formatTime(sample!)}) still in effect${next ? `; next sample ${formatTimeOffset(next, time)}` : ''}`;
     case 'interpolated':
-      return `A straight line between the samples at ${formatTimeOffset(sample!, time)} and ${formatTimeOffset(next!, time)}; not recorded`;
+      return (
+        `Not recorded at this time: a straight line between the samples at ${formatTime(sample!)}` +
+        `${reading.sampleValue !== undefined ? ` (${formatAtTimeValue(reading.sampleValue)})` : ''} and ${formatTime(next!)}` +
+        `${reading.nextValue !== undefined ? ` (${formatAtTimeValue(reading.nextValue)})` : ''}, ${formatTimeOffset(next!, sample!).slice(1)} apart`
+      );
     case 'computed':
       return `Read off the simulation's profile${sample !== undefined ? ` (segment from ${formatTimeOffset(sample, time)}${next ? ` to ${formatTimeOffset(next, time)}` : ''})` : ''}; not a recorded sample`;
     case 'gap':

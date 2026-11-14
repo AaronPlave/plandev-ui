@@ -1,9 +1,10 @@
 <svelte:options immutable={true} />
 
 <!--
-  Notes on the timeline: a lane of flags under the time axis, each at its note's time (a bar across an interval), with
-  a line, or a shaded interval, down through the rows. Only a flag takes the pointer; the rows stay clickable under the
-  marks. The flag shows the start of the note's text, the whole text on hover, and opens the note on click.
+  Notes on the timeline: a lane of flags under the time axis, each at its note's time, with a thin bar in the lane for
+  a note on an interval. Nothing is drawn down through the rows: marks across the rows are guides, which draw
+  themselves, so a note never hides the data. The flag shows the start of the note's text, the whole text on hover,
+  and opens the note on click.
 -->
 <script lang="ts" context="module">
   export type TimelineNote = { color: string; endMs?: number; id: number; startMs: number; text: string };
@@ -16,8 +17,6 @@
   import { hexToRgba } from '../../utilities/color';
 
   export let drawWidth: number = 0;
-  /** How far down through the rows the marks reach. */
-  export let height: number = 0;
   export let marginLeft: number = 0;
   export let notes: TimelineNote[] = [];
   export let selectedId: number | null = null;
@@ -50,16 +49,12 @@
   {#each placed as { band, left, note, offscreenStart, width } (note.id)}
     {#if band}
       <div
-        class="mark band"
+        class="band"
         style:left="{marginLeft + left}px"
         style:width="{width}px"
-        style:height="{height}px"
-        style:background-color={hexToRgba(note.color, 0.08)}
-        style:border-color={note.color}
+        style:background-color={hexToRgba(note.color, 0.35)}
         class:open-start={offscreenStart}
       />
-    {:else}
-      <div class="mark line" style:left="{marginLeft + left}px" style:height="{height}px" style:background={note.color} />
     {/if}
     <button
       class="flag"
@@ -84,25 +79,15 @@
     width: 100%;
   }
 
-  .mark {
+  .band {
+    bottom: 1px;
+    height: 3px;
     pointer-events: none;
     position: absolute;
-    top: 0;
-    z-index: 6;
-  }
-
-  .line {
-    opacity: 0.8;
-    width: 1px;
-  }
-
-  .band {
-    border-left: 1px solid;
-    border-right: 1px solid;
   }
 
   .band.open-start {
-    border-left-style: dashed;
+    border-left: 1px dashed currentColor;
   }
 
   .flag {

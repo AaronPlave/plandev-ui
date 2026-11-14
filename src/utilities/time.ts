@@ -904,19 +904,26 @@ export function getShortTimeZoneName() {
   return new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' }).format(new Date());
 }
 
+/**
+ * The local time zone, named for any date: "PT", not "PST" or "PDT". Local times are shown as the local clock read
+ * them on that date, daylight saving included, so a label taken from today's offset ("PST" in November) would be wrong
+ * for a summer timestamp. Falls back to today's short name where the generic one is not supported.
+ */
 export function getTimeZoneName() {
-  // set up formatter
-  const formatter = new Intl.DateTimeFormat(undefined, {
-    timeZoneName: 'short',
-  });
-  // run formatter on current date
-  const parts = formatter?.formatToParts(Date.now());
-  // extract the actual value from the formatter
-  const timeZoneName = parts.find(formatted => formatted.type === 'timeZoneName');
-  if (timeZoneName) {
-    return timeZoneName.value;
+  const name = (date: number, timeZoneName: 'short' | 'shortGeneric') =>
+    new Intl.DateTimeFormat(undefined, { timeZoneName }).formatToParts(date).find(part => part.type === 'timeZoneName')
+      ?.value;
+  const year = new Date().getFullYear();
+  const winter = name(Date.UTC(year, 0, 1), 'short');
+  // Only a zone with daylight saving has two names; "UTC" stays "UTC".
+  if (winter !== name(Date.UTC(year, 6, 1), 'short')) {
+    try {
+      return name(Date.now(), 'shortGeneric') ?? winter ?? 'UNK';
+    } catch {
+      return `${winter}/${name(Date.UTC(year, 6, 1), 'short')}`;
+    }
   }
-  return 'UNK';
+  return winter ?? 'UNK';
 }
 
 /**

@@ -1,5 +1,5 @@
 import { capitalize, isEqual } from 'lodash-es';
-import { derived, get, writable, type Writable } from 'svelte/store';
+import { derived, get, writable, type Readable, type Writable } from 'svelte/store';
 import type { ActivityFilterField } from '../enums/filter';
 import type { DynamicFilter } from '../types/filter';
 import type { ResourceType } from '../types/simulation';
@@ -42,6 +42,9 @@ import { gqlSubscribable } from './subscribable';
 /* Subscriptions. */
 
 export const views = gqlSubscribable<ViewSlim[]>(gql.SUB_VIEWS, {}, []);
+
+/** The views a Plan can open: not the layouts saved from an Analysis, which name data rather than a plan's sources. */
+export const planViews: Readable<ViewSlim[]> = derived(views, $views => $views.filter(view => !view.analysis_layout));
 
 /* Writeable. */
 

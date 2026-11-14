@@ -13,7 +13,12 @@ const predicted: ComparedActivity = {
 
 describe('compareActivities', () => {
   test('a late start with the same end: start later, duration shorter by the same amount', () => {
-    const observed = { ...predicted, key: 'ASRUN_0147', sourceIdentity: 'imported:300', startMs: predicted.startMs + 450_000 };
+    const observed = {
+      ...predicted,
+      key: 'ASRUN_0147',
+      sourceIdentity: 'imported:300',
+      startMs: predicted.startMs + 450_000,
+    };
     const result = compareActivities(predicted, observed);
     expect(result.startDeltaMs).toBe(450_000);
     expect(result.endDeltaMs).toBe(0);
@@ -46,6 +51,19 @@ describe('compareActivities', () => {
     expect(result.durationDeltaMs).toBeNull();
     expect(result.notes[0]).toMatch(/no end/);
   });
+
+  test('an end the source wrote before its start is not compared as a zero-length interval', () => {
+    // As the PEF adapter stores it: drawn at the start, with the file's value kept.
+    const invalid = { ...predicted, endInvalid: '2026-147T13:04:04.675', endMs: null };
+    const result = compareActivities(invalid, { ...predicted, key: 'ASRUN', sourceIdentity: 'imported:218' });
+    expect(result.endDeltaMs).toBeNull();
+    expect(result.durationDeltaMs).toBeNull();
+    expect(result.interval).toBeNull();
+    expect(result.notes[0]).toContain("A's end in its source (2026-147T13:04:04.675) is before its start");
+    expect(
+      describeComparison({ ...invalid, sourceLabel: 'PEF' }, { ...predicted, sourceLabel: 'As-run' }, result),
+    ).toContain('start 0s; end and duration unavailable.');
+  });
 });
 
 test('formatDelta', () => {
@@ -57,7 +75,13 @@ test('formatDelta', () => {
 
 test('describeComparison states the computed differences', () => {
   const a = { ...predicted, sourceLabel: 'PEF' };
-  const b = { ...predicted, key: 'ASRUN', parameters: { ANT: '36', PASS: '0147' }, sourceLabel: 'As-run', startMs: predicted.startMs + 450_000 };
+  const b = {
+    ...predicted,
+    key: 'ASRUN',
+    parameters: { ANT: '36', PASS: '0147' },
+    sourceLabel: 'As-run',
+    startMs: predicted.startMs + 450_000,
+  };
   const text = describeComparison(a, b, compareActivities(a, b));
   expect(text).toContain('start +7m 30s, end 0s, duration −7m 30s');
   expect(text).toContain('Same in both: PASS.');

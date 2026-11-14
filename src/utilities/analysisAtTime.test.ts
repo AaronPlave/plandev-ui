@@ -4,12 +4,14 @@ import type { Resource } from '../types/simulation';
 import type { Layer, Timeline } from '../types/timeline';
 import type { TimelineSource } from '../types/timelineSource';
 import {
+  explainAtTime,
   getAnalysisResourceRows,
   getCurrentSnapshot,
   getImportedValueAt,
   getInspectedResources,
   getResourceKey,
   getWatchedSelection,
+  summarizeAtTimeBasis,
   limitInspectedResources,
   MAX_INSPECTED_RESOURCES,
   getInstantQuery,
@@ -594,5 +596,31 @@ describe('getAnalysisResourceRows', () => {
 
   it('gives no rows without a cursor', () => {
     expect(getAnalysisResourceRows({ ...base, cursorMs: null })).toEqual([]);
+  });
+});
+
+describe('sampling support', () => {
+  const t0 = Date.parse('2026-05-27T14:00:00Z');
+  const reading = {
+    basis: 'interpolated' as const,
+    nextMs: t0 + 2 * 36e5,
+    nextValue: 14.3,
+    sampleMs: t0,
+    sampleValue: 12.1,
+    value: 12.4,
+  };
+  const at = t0 + 8 * 6e4;
+
+  it('says how far apart the samples behind an interpolated value are', () => {
+    expect(summarizeAtTimeBasis(reading, at)).toBe('Interpolated · samples 2h apart');
+    expect(summarizeAtTimeBasis({ basis: 'held', sampleMs: t0, value: 1 }, at)).toBe('Held · sample 8m before');
+    expect(summarizeAtTimeBasis({ basis: 'sample', sampleMs: at, value: 1 }, at)).toBe('Sample');
+  });
+
+  it('names the samples and their values, and that the value was not recorded', () => {
+    const text = explainAtTime(reading, at, ms => new Date(ms).toISOString().slice(11, 16));
+    expect(text).toBe(
+      'Not recorded at this time: a straight line between the samples at 14:00 (12.1) and 16:00 (14.3), 2h apart',
+    );
   });
 });

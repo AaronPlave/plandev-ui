@@ -1988,7 +1988,9 @@ const gql = {
       activities: ${Queries.SOURCE_ACTIVITIES}(where: $where, order_by: [{ start_time: asc }, { id: asc }], limit: $limit) {
         end_time
         id
+        metadata
         name
+        parameters
         source_key
         start_time
         type
@@ -3995,6 +3997,7 @@ const gql = {
   SUB_VIEWS: `#graphql
     subscription SubViews {
       views: ${Queries.VIEWS} {
+        analysis_layout
         created_at
         id
         name

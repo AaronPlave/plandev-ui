@@ -3,7 +3,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import { SearchParameters } from '../../enums/searchParameters';
-  import { initializeView, initialViewsLoading, view, views } from '../../stores/views';
+  import { initializeView, initialViewsLoading, planViews as views, view } from '../../stores/views';
   import type { User } from '../../types/app';
   import type { View, ViewSlim } from '../../types/view';
   import effects from '../../utilities/effects';

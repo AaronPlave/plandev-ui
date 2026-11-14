@@ -29,6 +29,8 @@
   import DataGrid from '../ui/DataGrid/DataGrid.svelte';
 
   export let open: boolean = false;
+  /** A view chosen in Use a Layout: read it at once. */
+  export let viewId: number | null = null;
   /** Names of this analysis's sources, by binding id. */
   export let sourceLabels: Record<string, string> = {};
   export let user: User | null;
@@ -56,6 +58,10 @@
 
   $: if (!open) {
     reset();
+  }
+  $: if (open && viewId !== null && !loaded && !loading) {
+    choose(viewId);
+    viewId = null;
   }
   $: bindings = $analysisSourceBindings;
   $: options = getUnboundLayerOptions(bindings);
@@ -111,7 +117,17 @@
   }
 
   function load() {
-    if (result && loaded && replaceAnalysisTimeline(result.timeline, user)) {
+    // The analysis keeps its own time guides (they are about its data); the view's come after them.
+    const own = analysisTimeline?.verticalGuides ?? [];
+    const firstId = Math.max(-1, ...own.map(({ id }) => id)) + 1;
+    const timeline = result && {
+      ...result.timeline,
+      verticalGuides: [
+        ...own,
+        ...result.timeline.verticalGuides.map((guide, index) => ({ ...guide, id: firstId + index })),
+      ],
+    };
+    if (result && timeline && loaded && replaceAnalysisTimeline(timeline, user, loaded.name)) {
       const omitted = result.omitted.length;
       showSuccessToast(
         `Loaded the timeline of "${loaded.name}"${omitted ? `; ${omitted} layer${omitted === 1 ? '' : 's'} left out` : ''}`,
@@ -160,8 +176,8 @@
 
         {#if currentRows}
           <div class="rounded border border-destructive/50 p-2" role="alert">
-            This replaces the timeline this analysis has now ({currentRows}
-            {currentRows === 1 ? 'row' : 'rows'}). Its sources, name and sharing stay as they are.
+            This replaces the rows this analysis has now ({currentRows}); you can undo it. Its sources, notes, time
+            guides, name and sharing stay as they are.
           </div>
         {/if}
 

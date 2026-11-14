@@ -1641,6 +1641,27 @@ const effects = {
     return null;
   },
 
+  /**
+   * Saves a view under `name` without opening it (createView opens the new view on the Plan page it is used from).
+   * Returns the new view's id, or null (reported).
+   */
+  async createNamedView(definition: ViewDefinition, name: string, user: User | null): Promise<number | null> {
+    try {
+      if (!queryPermissions.CREATE_VIEW(user)) {
+        throwPermissionError('create a view');
+      }
+      const data = await reqHasura<View>(gql.CREATE_VIEW, { view: { definition, name } }, user);
+      if (!data.newView) {
+        throw Error(`Unable to create view "${name}"`);
+      }
+      return data.newView.id;
+    } catch (e) {
+      catchError('log', 'View Create Failed', e as Error);
+      showFailureToast('View Create Failed');
+      return null;
+    }
+  },
+
   async createParcel(parcel: ParcelInsertInput, user: User | null): Promise<number | null> {
     try {
       if (!queryPermissions.CREATE_PARCEL(user)) {
@@ -5706,7 +5727,10 @@ const effects = {
     types: string[] | null,
     user: User | null,
   ): Promise<
-    (Pick<SourceActivity, 'category' | 'end_time' | 'id' | 'name' | 'parameters' | 'source_key' | 'start_time' | 'type'> & {
+    (Pick<
+      SourceActivity,
+      'category' | 'end_time' | 'id' | 'name' | 'parameters' | 'source_key' | 'start_time' | 'type'
+    > & {
       /** `metadata.parent`: the source key of another record of the revision, when the product named one. */
       parent: unknown;
     })[]
@@ -5735,14 +5759,19 @@ const effects = {
    */
   async getSourceActivityLinks(
     revisionId: number,
-    by: { keys: string[] } | { parent: string },
+    by: { keys: string[] } | { parent: string } | { reported: true },
     limit: number,
     user: User | null,
   ): Promise<SourceActivityLink[]> {
     try {
       const where = {
         revision_id: { _eq: revisionId },
-        ...('keys' in by ? { source_key: { _in: by.keys } } : { metadata: { _contains: { parent: by.parent } } }),
+        // reported: every record that names another as the one it was raised on (a product's warnings and errors).
+        ...('keys' in by
+          ? { source_key: { _in: by.keys } }
+          : 'parent' in by
+            ? { metadata: { _contains: { parent: by.parent } } }
+            : { metadata: { _has_key: 'related' } }),
       };
       const data = await reqHasura<SourceActivityLink[]>(gql.GET_SOURCE_ACTIVITY_LINKS, { limit, where }, user);
       return data.activities ?? [];

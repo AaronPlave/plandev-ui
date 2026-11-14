@@ -742,7 +742,6 @@
     {#if notes.length}
       <TimelineNotes
         {drawWidth}
-        height={pinnedHeight + rowsMaxHeight}
         marginLeft={timeline?.marginLeft}
         {notes}
         selectedId={selectedNoteId}
@@ -756,148 +755,148 @@
          unconditionally: an empty timeline still needs its "New Row +" button, which used to sit
          inside a guard on items.length and vanished once the last row was deleted. -->
     {#each regions as region (region.pinned)}
-    <!-- Pinned rows are not scrolled: a heavier rule under them says the rows below scroll and these do not. -->
-    <div
-      class={region.pinned ? 'pinned-rows' : 'rows'}
-      style="max-height: {region.pinned ? pinnedMaxHeight : rowsMaxHeight}px"
-      role="list"
-      aria-label={region.pinned ? 'Pinned rows' : undefined}
-      use:measurePinned={region.pinned}
-      on:wheel={handleScroll}
-    >
-      {#each region.items as item, i (`${item.type}-${item.id}`)}
-        {#if item.type === 'section'}
-          {@const section = sectionsById.get(item.id)}
-          {#if section}
-            <!-- A listitem rather than a group: `list` may only own `listitem`, so a group here
+      <!-- Pinned rows are not scrolled: a heavier rule under them says the rows below scroll and these do not. -->
+      <div
+        class={region.pinned ? 'pinned-rows' : 'rows'}
+        style="max-height: {region.pinned ? pinnedMaxHeight : rowsMaxHeight}px"
+        role="list"
+        aria-label={region.pinned ? 'Pinned rows' : undefined}
+        use:measurePinned={region.pinned}
+        on:wheel={handleScroll}
+      >
+        {#each region.items as item, i (`${item.type}-${item.id}`)}
+          {#if item.type === 'section'}
+            {@const section = sectionsById.get(item.id)}
+            {#if section}
+              <!-- A listitem rather than a group: `list` may only own `listitem`, so a group here
                  left the section's own rows as listitems with no owning list. The section is one
                  item of the timeline's list, named so assistive tech (and tests) can address it. -->
-            <div
-              class="timeline-section-wrapper"
-              class:active-section={$selectedSectionId === section.id}
-              role="listitem"
-              aria-label={section.name}
-            >
-              <!-- On the header, not the wrapper: a wrapper target would enclose the section's
+              <div
+                class="timeline-section-wrapper"
+                class:active-section={$selectedSectionId === section.id}
+                role="listitem"
+                aria-label={section.name}
+              >
+                <!-- On the header, not the wrapper: a wrapper target would enclose the section's
                    own row targets, and every target in the hierarchy is notified - so a drop on
                    a row would be handled twice, as a row and again as its section. -->
+                <div
+                  class="timeline-section-header-drop"
+                  use:makeDraggable={{ itemId: section.id, itemType: 'section', sectionId: null }}
+                  use:makeSectionDropTarget={{ sectionId: section.id }}
+                >
+                  <TimelineSectionHeader
+                    {section}
+                    width={(timeline?.marginLeft ?? 0) + drawWidth}
+                    dragDisabled={sectionDragDisabled}
+                    on:toggleCollapsed={onToggleSectionCollapsed}
+                    on:mouseDownSectionMove={onMouseDownSectionMove}
+                    on:mouseUpSectionMove={onMouseUpSectionMove}
+                    on:contextMenu={e => onSectionContextMenu(e, section)}
+                    on:editSection={() => onEditSection(section)}
+                    on:addRowToSection={() => onAddRowToSection(section)}
+                    on:duplicateSection={() => dispatch('duplicateSection', section)}
+                    on:moveSection={e => moveTimelineItem('section', section.id, e.detail.direction)}
+                    on:deleteSection={() => onDeleteSection(section)}
+                  />
+                </div>
+                {#if !section.collapsed && section.rowIds.length === 0}
+                  <!-- An empty section used to render as nothing, which read as broken. The whole
+                     strip accepts a row; the affordance is drawn in the row-header gutter. -->
+                  <div
+                    class="section-empty"
+                    style:--section-accent-color={section.color || ViewDefaultSectionColor}
+                    style:width={`${(timeline?.marginLeft ?? 0) + drawWidth}px`}
+                    use:makeEmptySectionDropTarget={{ sectionId: section.id }}
+                  >
+                    <div
+                      class="section-empty-hint st-typography-body"
+                      style:width={`${Math.max(120, (timeline?.marginLeft ?? 0) - 23)}px`}
+                    >
+                      Drag a row here
+                    </div>
+                  </div>
+                {/if}
+                {#if !section.collapsed}
+                  {#each section.rowIds as rowId, rowIndex (`section-${section.id}-row-${rowId}`)}
+                    {@const row = rowsById.get(rowId)}
+                    {#if row && (section.pinned || !row.pinned)}
+                      <!-- No listitem role: these rows are content of the section's listitem, and a
+                         second listitem level would need a nested list to own it. -->
+                      <div
+                        class="timeline-row-wrapper timeline-row-in-section"
+                        class:selected-row-outline={$selectedRow?.id === row.id}
+                        style:--section-accent-color={section.color || ViewDefaultSectionColor}
+                        use:makeDraggable={{ itemId: row.id, itemType: 'row', sectionId: section.id }}
+                        use:makeDropTarget={{ itemId: row.id, itemType: 'row', sectionId: section.id }}
+                      >
+                        <TimelineRowItem
+                          {row}
+                          index={rowIndex}
+                          sharedProps={sharedRowProps}
+                          discreteTreeExpansionMap={discreteTreeExpansionMapByRow[row.id]}
+                          on:buildDirective={onBuildDirective}
+                          on:contextMenu={onRowContextMenu}
+                          on:dblClick
+                          on:deleteActivityDirective
+                          on:discreteTreeExpansionChange={onDiscreteTreeExpansionChange}
+                          on:mouseDown={onMouseDown}
+                          on:mouseDownRowMove={onMouseDownRowMove}
+                          on:mouseOver={onRowMouseOver}
+                          on:mouseUpRowMove={onMouseUpRowMove}
+                          on:toggleRowExpansion={onToggleRowExpansion}
+                          on:updateRowHeight={onUpdateRowHeight}
+                          on:updateValueDomain
+                          on:updateYAxes
+                          on:zoom={throttledZoom}
+                        />
+                      </div>
+                    {/if}
+                  {/each}
+                {/if}
+              </div>
+            {/if}
+          {:else}
+            {@const row = rowsById.get(item.id)}
+            {#if row}
               <div
-                class="timeline-section-header-drop"
-                use:makeDraggable={{ itemId: section.id, itemType: 'section', sectionId: null }}
-                use:makeSectionDropTarget={{ sectionId: section.id }}
+                class="timeline-row-wrapper"
+                role="listitem"
+                use:makeDraggable={{ itemId: row.id, itemType: 'row', sectionId: null }}
+                use:makeDropTarget={{ itemId: row.id, itemType: 'row', sectionId: null }}
               >
-                <TimelineSectionHeader
-                  {section}
-                  width={(timeline?.marginLeft ?? 0) + drawWidth}
-                  dragDisabled={sectionDragDisabled}
-                  on:toggleCollapsed={onToggleSectionCollapsed}
-                  on:mouseDownSectionMove={onMouseDownSectionMove}
-                  on:mouseUpSectionMove={onMouseUpSectionMove}
-                  on:contextMenu={e => onSectionContextMenu(e, section)}
-                  on:editSection={() => onEditSection(section)}
-                  on:addRowToSection={() => onAddRowToSection(section)}
-                  on:duplicateSection={() => dispatch('duplicateSection', section)}
-                  on:moveSection={e => moveTimelineItem('section', section.id, e.detail.direction)}
-                  on:deleteSection={() => onDeleteSection(section)}
+                <TimelineRowItem
+                  {row}
+                  index={i}
+                  sharedProps={sharedRowProps}
+                  discreteTreeExpansionMap={discreteTreeExpansionMapByRow[row.id]}
+                  on:buildDirective={onBuildDirective}
+                  on:contextMenu={onRowContextMenu}
+                  on:dblClick
+                  on:deleteActivityDirective
+                  on:discreteTreeExpansionChange={onDiscreteTreeExpansionChange}
+                  on:mouseDown={onMouseDown}
+                  on:mouseDownRowMove={onMouseDownRowMove}
+                  on:mouseOver={onRowMouseOver}
+                  on:mouseUpRowMove={onMouseUpRowMove}
+                  on:toggleRowExpansion={onToggleRowExpansion}
+                  on:updateRowHeight={onUpdateRowHeight}
+                  on:updateValueDomain
+                  on:updateYAxes
+                  on:zoom={throttledZoom}
                 />
               </div>
-              {#if !section.collapsed && section.rowIds.length === 0}
-                <!-- An empty section used to render as nothing, which read as broken. The whole
-                     strip accepts a row; the affordance is drawn in the row-header gutter. -->
-                <div
-                  class="section-empty"
-                  style:--section-accent-color={section.color || ViewDefaultSectionColor}
-                  style:width={`${(timeline?.marginLeft ?? 0) + drawWidth}px`}
-                  use:makeEmptySectionDropTarget={{ sectionId: section.id }}
-                >
-                  <div
-                    class="section-empty-hint st-typography-body"
-                    style:width={`${Math.max(120, (timeline?.marginLeft ?? 0) - 23)}px`}
-                  >
-                    Drag a row here
-                  </div>
-                </div>
-              {/if}
-              {#if !section.collapsed}
-                {#each section.rowIds as rowId, rowIndex (`section-${section.id}-row-${rowId}`)}
-                  {@const row = rowsById.get(rowId)}
-                  {#if row && (section.pinned || !row.pinned)}
-                    <!-- No listitem role: these rows are content of the section's listitem, and a
-                         second listitem level would need a nested list to own it. -->
-                    <div
-                      class="timeline-row-wrapper timeline-row-in-section"
-                      class:selected-row-outline={$selectedRow?.id === row.id}
-                      style:--section-accent-color={section.color || ViewDefaultSectionColor}
-                      use:makeDraggable={{ itemId: row.id, itemType: 'row', sectionId: section.id }}
-                      use:makeDropTarget={{ itemId: row.id, itemType: 'row', sectionId: section.id }}
-                    >
-                      <TimelineRowItem
-                        {row}
-                        index={rowIndex}
-                        sharedProps={sharedRowProps}
-                        discreteTreeExpansionMap={discreteTreeExpansionMapByRow[row.id]}
-                        on:buildDirective={onBuildDirective}
-                        on:contextMenu={onRowContextMenu}
-                        on:dblClick
-                        on:deleteActivityDirective
-                        on:discreteTreeExpansionChange={onDiscreteTreeExpansionChange}
-                        on:mouseDown={onMouseDown}
-                        on:mouseDownRowMove={onMouseDownRowMove}
-                        on:mouseOver={onRowMouseOver}
-                        on:mouseUpRowMove={onMouseUpRowMove}
-                        on:toggleRowExpansion={onToggleRowExpansion}
-                        on:updateRowHeight={onUpdateRowHeight}
-                        on:updateValueDomain
-                        on:updateYAxes
-                        on:zoom={throttledZoom}
-                      />
-                    </div>
-                  {/if}
-                {/each}
-              {/if}
-            </div>
+            {/if}
           {/if}
-        {:else}
-          {@const row = rowsById.get(item.id)}
-          {#if row}
-            <div
-              class="timeline-row-wrapper"
-              role="listitem"
-              use:makeDraggable={{ itemId: row.id, itemType: 'row', sectionId: null }}
-              use:makeDropTarget={{ itemId: row.id, itemType: 'row', sectionId: null }}
-            >
-              <TimelineRowItem
-                {row}
-                index={i}
-                sharedProps={sharedRowProps}
-                discreteTreeExpansionMap={discreteTreeExpansionMapByRow[row.id]}
-                on:buildDirective={onBuildDirective}
-                on:contextMenu={onRowContextMenu}
-                on:dblClick
-                on:deleteActivityDirective
-                on:discreteTreeExpansionChange={onDiscreteTreeExpansionChange}
-                on:mouseDown={onMouseDown}
-                on:mouseDownRowMove={onMouseDownRowMove}
-                on:mouseOver={onRowMouseOver}
-                on:mouseUpRowMove={onMouseUpRowMove}
-                on:toggleRowExpansion={onToggleRowExpansion}
-                on:updateRowHeight={onUpdateRowHeight}
-                on:updateValueDomain
-                on:updateYAxes
-                on:zoom={throttledZoom}
-              />
-            </div>
-          {/if}
+        {/each}
+        {#if !region.pinned}
+          <div class="new-row">
+            <button on:click={_ => viewAddTimelineRow(timeline?.id, true)} class="st-button tertiary w-full">
+              New Row +
+            </button>
+          </div>
         {/if}
-      {/each}
-      {#if !region.pinned}
-        <div class="new-row">
-          <button on:click={_ => viewAddTimelineRow(timeline?.id, true)} class="st-button tertiary w-full">
-            New Row +
-          </button>
-        </div>
-      {/if}
-    </div>
+      </div>
     {/each}
   </div>
 

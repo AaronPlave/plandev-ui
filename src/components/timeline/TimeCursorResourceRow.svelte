@@ -6,7 +6,12 @@
   import type { ValueSchema } from '../../types/schema';
   import type { Resource } from '../../types/simulation';
   import type { Row } from '../../types/timeline';
-  import { atTimeBasisLabels, explainAtTime, type AtTimeValue } from '../../utilities/analysisAtTime';
+  import {
+    atTimeBasisLabels,
+    explainAtTime,
+    summarizeAtTimeBasis,
+    type AtTimeValue,
+  } from '../../utilities/analysisAtTime';
   import {
     formatResourceNumber,
     formatResourceValue,
@@ -99,8 +104,8 @@
     return { isGap: none, value: none ? null : reading.value };
   }
 
-  function basisLine(reading: AtTimeValue | null): string {
-    return reading ? atTimeBasisLabels[reading.basis] : '';
+  function basisLine(reading: AtTimeValue | null, time: number | null): string {
+    return reading ? (time === null ? atTimeBasisLabels[reading.basis] : summarizeAtTimeBasis(reading, time)) : '';
   }
 
   function sparkX(timeMs: number): number {
@@ -138,7 +143,9 @@
       </span>
       {#if readingA}
         <span class="sub" title={sourceLabel}>
-          {sourceLabel} · {basisLine(readingA)}{comparing && readingB ? ` / ${basisLine(readingB)}` : ''}
+          {sourceLabel} · {basisLine(readingA, cursorTimeMs)}{comparing && readingB
+            ? ` / ${basisLine(readingB, compareTimeMs)}`
+            : ''}
         </span>
       {/if}
       {#if unit && (comparing || showStats)}

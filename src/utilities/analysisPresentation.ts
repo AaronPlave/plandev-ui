@@ -1,18 +1,24 @@
 import type { AnalysisSimulationDataset, AnalysisSourceBinding, AnalysisSourceRevision } from '../types/analysis';
+import type { ResourceType } from '../types/simulation';
 import type { Layer, Row, Timeline } from '../types/timeline';
 import type { TimelineSourceId } from '../types/timelineSource';
 import { getSourceIdentity } from './analysis';
-import { isActivityLayer, removeRowFromTimelineHierarchy } from './timeline';
+import {
+  getNextVerticalGuideID,
+  isActivityLayer,
+  rebindResourceLayer,
+  removeRowFromTimelineHierarchy,
+} from './timeline';
 
 /*
  * Applying one Analysis's presentation to another Analysis's data. The presentation is the timeline: rows, sections,
- * layers, axes, styles and value guides. Each source its layers read is a role; the person maps every role to a
- * source of the target Analysis, and nothing is mapped for them unless it is the very same data. The target's
- * sources are never added to or changed. Opening an Analysis is a different thing: that shows the data it was saved
- * with.
+ * layers, axes, styles and value guides. Each source its layers read is a role, mapped to a source of the target
+ * Analysis: the very same data is mapped for the person, and another revision of the same logical source is
+ * suggested (and said to be another revision); anything else they choose. The target's sources are never added to
+ * or changed. Opening an Analysis is a different thing: that shows the data it was saved with.
  *
  * What does not travel: the original Analysis's notes (they are findings about its data) and, unless asked for, its
- * time guides (they mark times in its data).
+ * time guides (they mark times in its data). The target keeps its own time guides: they are about its data.
  */
 
 /** What one source offers, as far as a presentation can be checked against it. Null: not known, so not checked. */
@@ -86,15 +92,53 @@ export function getPresentationRoles(timeline: Timeline, bindings: AnalysisSourc
 
 export type RoleMapping = Record<TimelineSourceId, TimelineSourceId | null>;
 
-/** Preselects a target only for a role that reads the very same data; every other role is left for the person. */
+/** How a target relates to a role's source: the very same data, another revision of the same source, or neither. */
+export function getRoleMatch(
+  role: Pick<PresentationRole, 'binding'>,
+  target: AnalysisSourceBinding,
+): 'other' | 'revision' | 'same' {
+  const { binding } = role;
+  if (!binding) {
+    return 'other';
+  }
+  if (getSourceIdentity(binding) === getSourceIdentity(target)) {
+    return 'same';
+  }
+  return binding.kind === 'imported' &&
+    target.kind === 'imported' &&
+    binding.sourceId !== undefined &&
+    binding.sourceId === target.sourceId
+    ? 'revision'
+    : 'other';
+}
+
+/**
+ * Preselects a target for a role only when exactly one target reads the very same data or, failing that, exactly one
+ * reads another revision of the same source (a suggestion the person sees as such). Everything else is theirs to pick.
+ */
 export function getInitialRoleMapping(roles: PresentationRole[], targets: AnalysisSourceBinding[]): RoleMapping {
   return Object.fromEntries(
     roles.map(role => {
-      const identity = role.binding && getSourceIdentity(role.binding);
-      const same = targets.filter(target => getSourceIdentity(target) === identity);
-      return [role.sourceId, same.length === 1 ? same[0].id : null];
+      for (const match of ['same', 'revision'] as const) {
+        const found = targets.filter(target => getRoleMatch(role, target) === match);
+        if (found.length === 1) {
+          return [role.sourceId, found[0].id];
+        }
+        if (found.length > 1) {
+          break;
+        }
+      }
+      return [role.sourceId, null];
     }),
   );
+}
+
+/** A catalog entry as the declaration the timeline's rebinding rules read. */
+function asResourceType(name: string, entry: { type: string; unit: string | null }): ResourceType {
+  return {
+    name,
+    schema: { metadata: entry.unit ? { unit: { value: entry.unit } } : {}, type: entry.type } as ResourceType['schema'],
+  };
 }
 
 /** A resource the target does not have under the presentation's name, and what the person chose to read instead. */
@@ -103,8 +147,11 @@ export function getResourceRenameKey(roleId: TimelineSourceId, name: string): st
 }
 
 export type PresentationIssue = {
-  /** 'omitted': the layer is left out. 'warning': it is kept, and this is what to check. */
-  effect: 'omitted' | 'warning';
+  /**
+   * 'omitted': the layer is left out. 'warning': it is kept, and this is what to check. 'unverified': kept, but what
+   * the source offers could not be read, so whether it shows anything is not known.
+   */
+  effect: 'omitted' | 'unverified' | 'warning';
   layer: string;
   /** Set when a resource of that name is missing from the target: it can be mapped by hand. */
   missingResource?: { name: string; roleId: TimelineSourceId; type: string | null };
@@ -145,82 +192,128 @@ export function applyPresentation(
   let kept = 0;
   let total = 0;
 
-  const translate = (layer: Layer, row: Row): Layer | null => {
+  type Translated = { layer: Layer; rebind?: { next: ResourceType; previous: ResourceType | null } };
+  const translate = (layer: Layer, row: Row): Translated | null => {
     const roleId = layer.sourceId ?? '';
     const issue = (effect: PresentationIssue['effect'], reason: string, extra: Partial<PresentationIssue> = {}) =>
       issues.push({ effect, layer: layer.name, reason, row: row.name, rowId: row.id, ...extra });
     const targetId = mapping[roleId];
     const target = targetId ? targetCatalogs[targetId] : undefined;
     if (!targetId || !target) {
-      issue('omitted', 'Nothing chosen for its source above');
+      issue('omitted', 'Its source is not shown');
       return null;
     }
     const label = targetLabels[targetId] ?? targetId;
     if (isActivityLayer(layer)) {
       const types = layer.filter.activity?.static_types ?? [];
-      const absent = target.activityTypes ? types.filter(type => !target.activityTypes?.has(type)) : [];
-      if (absent.length) {
-        issue(
-          'warning',
-          `${label} has no ${absent.slice(0, 3).join(', ')}${absent.length > 3 ? ` and ${absent.length - 3} more types` : ''}: the layer will show ${absent.length === types.length ? 'nothing' : 'only the others'}`,
-        );
+      if (!target.activityTypes) {
+        issue('unverified', `${label}'s activity types could not be read: not checked`);
+        return { layer: { ...layer, sourceId: targetId } };
       }
-      return { ...layer, sourceId: targetId };
+      const absent = types.filter(type => !target.activityTypes?.has(type));
+      const list = `${absent.slice(0, 3).join(', ')}${absent.length > 3 ? ` and ${absent.length - 3} more` : ''}`;
+      // A layer every type of which is absent would draw nothing: kept, it would look applied and show nothing.
+      if (types.length && absent.length === types.length) {
+        issue('omitted', `${label} has no ${list}`);
+        return null;
+      }
+      if (absent.length) {
+        issue('warning', `${label} has no ${list}: shows the other types only`);
+      }
+      return { layer: { ...layer, sourceId: targetId } };
     }
     const original = layer.filter.resource ?? '';
+    if (!target.resources) {
+      issue('unverified', `${label}'s resources could not be read: not checked`);
+      return { layer: { ...layer, sourceId: targetId } };
+    }
     const was = sourceCatalogs[roleId]?.resources?.get(original) ?? null;
-    const name = target.resources && !target.resources.has(original)
-      ? resourceRenames[getResourceRenameKey(roleId, original)]
-      : original;
-    const now = name ? target.resources?.get(name) : undefined;
-    if (target.resources && !now) {
-      issue('omitted', `${label} has no resource named ${original}`, {
+    // A chosen replacement wins: it is also how a resource of the wrong type is replaced.
+    const name =
+      resourceRenames[getResourceRenameKey(roleId, original)] ??
+      (target.resources.has(original) ? original : undefined);
+    const now = name ? target.resources.get(name) : undefined;
+    if (!name || !now) {
+      issue('omitted', `${label} has no ${original}`, {
         missingResource: { name: original, roleId, type: was?.type ?? null },
       });
       return null;
     }
-    if (was && now && was.type !== now.type) {
-      issue('omitted', `${name} is ${now.type} in ${label}; this layer drew ${was.type} values`);
+    if (was && was.type !== now.type) {
+      issue(
+        'omitted',
+        `${name} is ${now.type} in ${label}, not ${was.type}: pick a ${was.type} resource or leave it out`,
+        {
+          missingResource: { name: original, roleId, type: was.type },
+        },
+      );
       return null;
     }
     if (name !== original) {
       issue('warning', `Reads ${name} in place of ${original}, as chosen`);
     }
-    if (was && now && (was.unit ?? '') !== (now.unit ?? '')) {
+    const unitChanged = !!was && (was.unit ?? '') !== (now.unit ?? '');
+    if (unitChanged) {
       issue(
         'warning',
-        `${name} is in ${now.unit || 'no unit'} in ${label}, not ${was.unit || 'no unit'}: values are not converted, so check the axis range and value guides`,
+        `${name} is in ${now.unit || 'no unit'} in ${label}, not ${was?.unit || 'no unit'}: its axis is rescaled and its value guides dropped, not converted`,
       );
     }
-    return { ...layer, filter: { ...layer.filter, resource: name }, sourceId: targetId };
+    const translated = { ...layer, filter: { ...layer.filter, resource: name }, sourceId: targetId };
+    return name !== original || unitChanged
+      ? {
+          layer: translated,
+          rebind: { next: asResourceType(name, now), previous: was ? asResourceType(original, was) : null },
+        }
+      : { layer: translated };
   };
 
   timeline.rows = timeline.rows.flatMap(row => {
-    const layers = row.layers.flatMap(layer => {
+    const translated = row.layers.flatMap(layer => {
       total++;
-      const translated = translate(layer, row);
-      kept += translated ? 1 : 0;
-      return translated ? [translated] : [];
+      const result = translate(layer, row);
+      kept += result ? 1 : 0;
+      return result ? [result] : [];
     });
-    if (row.layers.length && !layers.length) {
+    if (row.layers.length && !translated.length) {
       Object.assign(timeline, removeRowFromTimelineHierarchy(timeline, row.id));
       return [];
     }
     // An axis only omitted layers used goes with them, with its value guides.
-    const usedAxes = new Set(layers.map(layer => layer.yAxisId));
+    const usedAxes = new Set(translated.map(({ layer }) => layer.yAxisId));
     const keepAxis = (id: number) => usedAxes.has(id) || !row.layers.some(layer => layer.yAxisId === id);
-    return [
-      {
-        ...row,
-        horizontalGuides: row.horizontalGuides.filter(guide => keepAxis(guide.yAxisId)),
-        layers,
-        yAxes: row.yAxes.filter(axis => keepAxis(axis.id)),
-      },
-    ];
+    let next: Row = {
+      ...row,
+      horizontalGuides: row.horizontalGuides.filter(guide => keepAxis(guide.yAxisId)),
+      layers: translated.map(({ layer }) => layer),
+      yAxes: row.yAxes.filter(axis => keepAxis(axis.id)),
+    };
+    // Another resource, or the same one in another unit: the timeline's own rebinding rules refresh the axis and drop
+    // value guides that no longer measure the same thing (500 W is not 500 kW).
+    translated.forEach(({ layer, rebind }) => {
+      if (rebind) {
+        const targetId = layer.sourceId ?? '';
+        next = {
+          ...next,
+          ...rebindResourceLayer([timeline], next, layer, {
+            previousResourceType: rebind.previous,
+            resourceName: rebind.next.name,
+            resourceType: rebind.next,
+            sourceId: targetId,
+            sourceLabel: targetLabels[targetId],
+          }),
+        };
+      }
+    });
+    return [next];
   });
-  if (!includeTimeGuides) {
-    timeline.verticalGuides = [];
-  }
+  // The target's own time guides are about its data and stay; the original's come only when asked for, renumbered.
+  const incoming = includeTimeGuides ? timeline.verticalGuides : [];
+  const firstId = getNextVerticalGuideID([current]);
+  timeline.verticalGuides = [
+    ...current.verticalGuides,
+    ...incoming.map((guide, index) => ({ ...guide, id: firstId + index })),
+  ];
   timeline.id = current.id;
   return { issues, kept, timeline, total };
 }

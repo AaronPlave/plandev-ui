@@ -19,11 +19,17 @@ import { getIntervalInMs, getUnixEpochTimeFromInterval } from './time';
 export type AnalysisActivityDetails = {
   /** What the product's adapter recorded as limiting the record (`metadata.dataQuality`). */
   cautions?: string[];
-  /** Null when the source records no end (a plan directive). */
+  endInvalid?: string;
+  /**
+   * The recorded end. Null when there is none to use: a plan directive has none, and an end the product wrote before
+   * the start (`endInvalid`, the product's value) is not an end even though the record is drawn at its start.
+   */
   endMs: number | null;
   fields: [string, string][];
   /** The record's identity in its own source: a source key, a span id, a directive id. */
   key: string;
+  /** Imported only: what the adapter recorded about the record (`metadata`): its parent, step, kind. */
+  metadata?: Record<string, unknown>;
   name: string;
   /** What the record was given: imported parameters, or a span's or directive's arguments. */
   parameters: Record<string, unknown>;
@@ -39,7 +45,6 @@ export type AnalysisActivityDetails = {
   startMs: number;
   type: string;
 };
-
 
 export function getPlanDirectiveDetails(
   ref: AnalysisActivityRef,
@@ -104,10 +109,13 @@ export async function loadAnalysisActivityDetails(
       return null;
     }
     const revision = revisions.find(({ id }) => id === binding.revisionId);
-    const { parent, related } = activity.metadata;
+    const { endInvalid, endTime, parent, related } = activity.metadata;
+    // Adapter versions before `endInvalid` kept the product's end as `endTime` only when it was invalid.
+    const invalidEnd = endInvalid === true || typeof endTime === 'string' ? `${endTime ?? 'invalid'}` : undefined;
     return {
       cautions: typeof activity.metadata.dataQuality === 'string' ? [activity.metadata.dataQuality] : undefined,
-      endMs: Date.parse(activity.end_time),
+      endInvalid: invalidEnd,
+      endMs: invalidEnd === undefined ? Date.parse(activity.end_time) : null,
       fields: [
         ['Subsystem', activity.category ?? '—'],
         ['Id in source', `${activity.id}`],
@@ -115,6 +123,7 @@ export async function loadAnalysisActivityDetails(
         ['Product', revision ? `${revision.source.name}, ${getRevisionVersionLabel(revision)}` : ''],
       ],
       key: activity.source_key,
+      metadata: activity.metadata,
       name: activity.name,
       parameters: activity.parameters,
       ref,

@@ -36,6 +36,7 @@ import {
   simulationSpanToActivity,
   withSourceIdentity,
 } from '../utilities/analysis';
+import { ANNOTATION_COLOR, syncGuideNotes } from '../utilities/analysisAnnotations';
 import type { WatchedResource } from '../utilities/analysisAtTime';
 import { getSourceCatalog, type SourceCatalog } from '../utilities/analysisPresentation';
 import { getImportedPlanSourceIds, type ViewImportPlanSource } from '../utilities/analysisViewImport';
@@ -44,6 +45,8 @@ import gql from '../utilities/gql';
 import { featurePermissions } from '../utilities/permissions';
 import { showFailureToast, showSuccessToast } from '../utilities/toast';
 import { getSource, toIntervalType } from '../utilities/timelineSources';
+import { createRow, createTimelineActivityLayer, createVerticalGuide } from '../utilities/timeline';
+import { getDoyTime } from '../utilities/time';
 import { applyViewDefinitionMigrations } from '../utilities/view';
 import {
   createLoadedActivitySubscription,
@@ -104,6 +107,15 @@ export const analysisCompareReference: Writable<AnalysisActivityRef | null> = wr
 export const analysisAnnotations: Writable<AnalysisAnnotation[]> = writable([]);
 /** The note the Notes panel should show (set by clicking its marker on the timeline). */
 export const focusedAnnotationId: Writable<number | null> = writable(null);
+/**
+ * The timeline and notes as they were before the layout was last replaced, to undo it. Page state: cleared when the
+ * analysis closes, and by any later replacement.
+ */
+export const analysisLayoutUndo: Writable<{
+  annotations: AnalysisAnnotation[];
+  name: string;
+  timeline: Timeline;
+} | null> = writable(null);
 /** 'conflict': someone else saved the analysis since it was opened; saving stops until it is reloaded. */
 export const analysisSaveStatus: Writable<'conflict' | 'error' | 'saved' | 'saving' | 'unsaved'> = writable('saved');
 
@@ -342,6 +354,7 @@ export async function openAnalysis(initial: Analysis, user: User | null, context
   analysisCompareReference.set(null);
   analysisAnnotations.set(initial.definition.annotations ?? []);
   focusedAnnotationId.set(context.noteId ?? null);
+  analysisLayoutUndo.set(null);
   analysisWatchedResources.set([]);
   initializeView({
     created_at: initial.created_at,
@@ -392,6 +405,7 @@ export function closeAnalysis() {
   analysisCompareReference.set(null);
   analysisAnnotations.set([]);
   focusedAnnotationId.set(null);
+  analysisLayoutUndo.set(null);
   analysisWatchedResources.set([]);
   clearAnalysisImports();
   // The time cursors are page state of whichever page is open.
@@ -603,6 +617,60 @@ export function showAnalysisActivityType(sourceId: string, type: string): { adde
   return { added: !existing, row };
 }
 
+/**
+ * Adds a row of one source's activities of `type` whose parameter has one value (every ABORTED sequence, say), drawn
+ * in `color`, unless a row already shows exactly that. An ordinary filtered layer: editable like any other.
+ */
+export function showAnalysisActivitiesWith(
+  sourceId: string,
+  type: string,
+  parameter: string,
+  value: string,
+  color: string,
+): Row | undefined {
+  const timeline = get(view)?.definition.plan.timelines[0];
+  if (!timeline) {
+    return undefined;
+  }
+  const filter = {
+    static_types: [type],
+    type_subfilters: {
+      [type]: [
+        {
+          field: 'Parameter' as const,
+          id: 0,
+          operator: 'equals' as const,
+          subfield: { name: parameter, type: 'string' as const },
+          value,
+        },
+      ],
+    },
+  };
+  const existing = timeline.rows.find(row =>
+    row.layers.some(layer => layer.sourceId === sourceId && isEqual(layer.filter.activity, filter)),
+  );
+  const sourceLabel = getSource(get(analysisTimelineSources), sourceId)?.label ?? sourceId;
+  const row =
+    existing ??
+    createRow([timeline], {
+      layers: [
+        createTimelineActivityLayer([timeline], {
+          activityColor: color,
+          filter: { activity: filter },
+          name: `${type} ${value}`,
+          sourceId,
+        }),
+      ],
+      name: `${type} · ${parameter} ${value} · ${sourceLabel}`,
+    });
+  if (!existing) {
+    viewUpdateTimeline('rows', [...timeline.rows, row], timeline.id);
+  }
+  viewSetSelectedRow(row.id);
+  showSuccessToast(existing ? `Already shown in row "${row.name}"` : `Added row "${row.name}"`);
+  return row;
+}
+
 /** Adds a row of every activity of one source (see createSourceActivityRow). */
 export function addSourceActivityRow(sourceId: string, name: string) {
   const timeline = get(view)?.definition.plan.timelines[0];
@@ -658,9 +726,14 @@ export async function readViewForTimelineImport(
  * else in the view are untouched, and, like any edit, it is saved by the autosave. Not offered when the user can't
  * edit the analysis. Returns whether it replaced.
  */
-export function replaceAnalysisTimeline(timeline: Timeline, user: User | null): boolean {
+export function replaceAnalysisTimeline(
+  timeline: Timeline,
+  user: User | null,
+  name: string = 'another layout',
+): boolean {
   const current = get(analysis);
-  if (!current || !featurePermissions.analysis.canUpdate(user, current)) {
+  const previous = get(view)?.definition.plan.timelines[0];
+  if (!current || !previous || !featurePermissions.analysis.canUpdate(user, current)) {
     return false;
   }
   // Nothing mapped to this analysis's sources: replacing the timeline would only empty it.
@@ -668,6 +741,25 @@ export function replaceAnalysisTimeline(timeline: Timeline, user: User | null): 
     showFailureToast('Nothing In The View Maps To This Analysis, So The Timeline Was Not Replaced');
     return false;
   }
+  analysisLayoutUndo.set({ annotations: get(analysisAnnotations), name, timeline: previous });
+  // Rows are replaced wholesale, so a note explaining a value guide of an old row loses its guide (the new rows'
+  // ids can coincide with the old ones'); a time guide the new timeline no longer has, likewise.
+  analysisAnnotations.update(all => syncGuideNotes(all, timeline, true));
+  setAnalysisTimeline(timeline);
+  return true;
+}
+
+/** Puts back the timeline and notes the last layout replacement replaced. */
+export function undoAnalysisLayout() {
+  const undo = get(analysisLayoutUndo);
+  if (undo) {
+    analysisAnnotations.set(undo.annotations);
+    setAnalysisTimeline(undo.timeline);
+    analysisLayoutUndo.set(null);
+  }
+}
+
+function setAnalysisTimeline(timeline: Timeline) {
   view.update(currentView =>
     currentView
       ? {
@@ -683,14 +775,13 @@ export function replaceAnalysisTimeline(timeline: Timeline, user: User | null): 
   viewSetSelectedRow(null);
   selectedSectionId.set(null);
   selectedLayerId.set(null);
-  return true;
 }
 
 /* Notes. */
 
 /** Adds a note and returns its id. `about.data` is filled in from the source as it is bound now. */
 export function addAnalysisAnnotation(
-  note: Pick<AnalysisAnnotation, 'end' | 'start' | 'text'> & {
+  note: Pick<AnalysisAnnotation, 'end' | 'guide' | 'start' | 'text'> & {
     about?: Omit<NonNullable<AnalysisAnnotation['about']>, 'data' | 'sourceLabel'>;
   },
   user: User | null,
@@ -706,12 +797,61 @@ export function addAnalysisAnnotation(
           sourceLabel: getSource(get(analysisTimelineSources), binding.id)?.label ?? binding.id,
         }
       : undefined;
-  analysisAnnotations.set([
-    ...all,
-    { ...note, about, createdAt: new Date().toISOString(), createdBy: user?.id ?? undefined, id },
-  ]);
+  const added = [...all, { ...note, about, createdAt: new Date().toISOString(), createdBy: user?.id ?? undefined, id }];
+  // A note on a guide takes its time, label and values from the guide.
+  analysisAnnotations.set(syncGuideNotes(added, get(view)?.definition.plan.timelines[0]));
   focusedAnnotationId.set(id);
   return id;
+}
+
+/** Keeps notes on guides in step with the guides (see syncGuideNotes): call when the timeline changes. */
+export function syncAnalysisGuideNotes() {
+  const notes = get(analysisAnnotations);
+  const synced = syncGuideNotes(notes, get(view)?.definition.plan.timelines[0]);
+  if (synced !== notes) {
+    analysisAnnotations.set(synced);
+  }
+}
+
+/**
+ * The note explaining a guide: the one it has, focused, or a new empty one. `rowId` for a value guide. Returns its id.
+ */
+export function explainGuide(guide: { id: number; rowId?: number }, user: User | null): number {
+  const kind = guide.rowId === undefined ? 'time' : 'value';
+  const existing = get(analysisAnnotations).find(
+    note => note.guide?.kind === kind && note.guide.id === guide.id && note.guide.row?.id === guide.rowId,
+  );
+  if (existing) {
+    focusedAnnotationId.set(existing.id);
+    return existing.id;
+  }
+  return addAnalysisAnnotation(
+    {
+      guide: {
+        id: guide.id,
+        kind,
+        label: '',
+        row: guide.rowId === undefined ? undefined : { id: guide.rowId, name: '' },
+      },
+      text: '',
+    },
+    user,
+  );
+}
+
+/** Marks an interval across the rows with a time guide (a range) and opens a note to explain it. Returns the note's id. */
+export function markInterval(startMs: number, endMs: number, user: User | null): number | null {
+  const timeline = get(view)?.definition.plan.timelines[0];
+  if (!timeline) {
+    return null;
+  }
+  const [from, to] = [Math.min(startMs, endMs), Math.max(startMs, endMs)];
+  const guide = createVerticalGuide([timeline], getDoyTime(new Date(from)), {
+    label: { color: ANNOTATION_COLOR, text: 'Marked interval' },
+    timestamp2: getDoyTime(new Date(to)),
+  });
+  viewUpdateTimeline('verticalGuides', [...timeline.verticalGuides, guide], timeline.id);
+  return explainGuide({ id: guide.id }, user);
 }
 
 export function updateAnalysisAnnotation(id: number, changes: Partial<Pick<AnalysisAnnotation, 'color' | 'text'>>) {
@@ -729,6 +869,8 @@ export type AnalysisPresentation = {
   /** What each of its sources offers, by binding id, to check what the target can show. */
   catalogs: Record<string, SourceCatalog>;
   id: number;
+  /** Where it was read from: another analysis, or a layout saved as a view. */
+  kind: 'analysis' | 'view';
   name: string;
   /** Each source's name, by binding id. */
   names: Record<string, string>;
@@ -745,21 +887,37 @@ export async function readAnalysisPresentation(id: number, user: User | null): P
     showFailureToast('The Analysis Could Not Be Read');
     return null;
   }
-  const bindings = other.definition.sources;
+  return {
+    ...(await describePresentationSources(other.definition.sources, user)),
+    id: other.id,
+    kind: 'analysis',
+    name: other.name,
+    noteCount: other.definition.annotations?.length ?? 0,
+    timeline,
+  };
+}
+
+/** What a presentation's sources are: their names, and what each offers, to check what a target can show. */
+async function describePresentationSources(
+  sourceBindings: AnalysisSourceBinding[],
+  user: User | null,
+): Promise<Pick<AnalysisPresentation, 'bindings' | 'catalogs' | 'names'>> {
   const [revisions, datasets, plans] = await Promise.all([
     effects.getAnalysisSourceRevisions(
-      bindings.flatMap(binding => (binding.kind === 'imported' ? [binding.revisionId] : [])),
+      sourceBindings.flatMap(binding => (binding.kind === 'imported' ? [binding.revisionId] : [])),
       user,
     ),
     effects.getAnalysisSimulationDatasets(
-      bindings.flatMap(binding => (binding.kind === 'simulation' ? [binding.simulationDatasetId] : [])),
+      sourceBindings.flatMap(binding => (binding.kind === 'simulation' ? [binding.simulationDatasetId] : [])),
       user,
     ),
     effects.getAnalysisPlans(
-      bindings.flatMap(binding => (binding.kind === 'plan' ? [binding.planId] : [])),
+      sourceBindings.flatMap(binding => (binding.kind === 'plan' ? [binding.planId] : [])),
       user,
     ),
   ]);
+  // The logical source of each revision, so another revision of it can be suggested in the target.
+  const bindings = withSourceIdentity(sourceBindings, revisions ?? []);
   const names = Object.fromEntries(
     bindings.map(binding => {
       const { name, version } = getAnalysisSourceNames(binding, {
@@ -775,10 +933,84 @@ export async function readAnalysisPresentation(id: number, user: User | null): P
     catalogs: Object.fromEntries(
       bindings.map(binding => [binding.id, getSourceCatalog(binding, revisions ?? [], datasets)]),
     ),
-    id: other.id,
-    name: other.name,
     names,
-    noteCount: other.definition.annotations?.length ?? 0,
+  };
+}
+
+/** The data a layout saved from an analysis names in place of a binding (see saveAnalysisLayoutAsView). */
+const LAYOUT_SOURCE = /^(plan|revision|simulation):(\d+)$/;
+
+/**
+ * Saves the analysis's layout as a view anyone can find and use in another analysis: its timeline, with each layer
+ * naming the data it read (e.g. "revision:217") rather than this analysis's binding, so the view says on its own what
+ * each layer showed. Notes are not part of it. Returns the view's id, or null (reported).
+ */
+export async function saveAnalysisLayoutAsView(name: string, user: User | null): Promise<number | null> {
+  const current = get(view);
+  if (!current) {
+    return null;
+  }
+  const bindings = get(analysisSourceBindings);
+  const definition = structuredClone(current.definition);
+  definition.plan.timelines.forEach(timeline =>
+    timeline.rows.forEach(row =>
+      row.layers.forEach(layer => {
+        const binding = bindings.find(({ id }) => id === layer.sourceId);
+        if (binding) {
+          layer.sourceId = getSourceIdentity(binding);
+        }
+      }),
+    ),
+  );
+  const id = await effects.createNamedView(definition, name, user);
+  if (id !== null) {
+    showSuccessToast(`Saved the layout as view "${name}": use it in any analysis from Use a Layout`);
+  }
+  return id;
+}
+
+/**
+ * A saved view as a presentation, when it is a layout saved from an analysis (its layers name data, see
+ * saveAnalysisLayoutAsView). Null when it is a Plan's view, to be loaded as one (readViewForTimelineImport).
+ */
+export async function readViewPresentation(
+  viewId: number,
+  user: User | null,
+): Promise<AnalysisPresentation | 'plan-view' | null> {
+  const saved = await effects.getView(new URLSearchParams(`?${SearchParameters.VIEW_ID}=${viewId}`), user, false);
+  if (!saved || saved.id !== viewId) {
+    showFailureToast('The View Could Not Be Read');
+    return null;
+  }
+  const { error, migratedViewDefinition } = applyViewDefinitionMigrations(saved.definition);
+  const timeline = (migratedViewDefinition ?? saved.definition).plan.timelines[0];
+  if (error || !timeline) {
+    showFailureToast(`Unable To Read View "${saved.name}"`);
+    return null;
+  }
+  const identities = [
+    ...new Set(
+      timeline.rows.flatMap(row => row.layers.map(layer => layer.sourceId ?? '').filter(id => LAYOUT_SOURCE.test(id))),
+    ),
+  ];
+  if (!identities.length) {
+    return 'plan-view';
+  }
+  // Each data the layout names is a role, its binding id the identity itself.
+  const bindings = identities.map((identity): AnalysisSourceBinding => {
+    const [, kind, ref] = identity.match(LAYOUT_SOURCE) ?? [];
+    return kind === 'revision'
+      ? { id: identity, kind: 'imported', revisionId: Number(ref) }
+      : kind === 'simulation'
+        ? { id: identity, kind: 'simulation', simulationDatasetId: Number(ref) }
+        : { id: identity, kind: 'plan', planId: Number(ref) };
+  });
+  return {
+    ...(await describePresentationSources(bindings, user)),
+    id: saved.id,
+    kind: 'view',
+    name: saved.name,
+    noteCount: 0,
     timeline,
   };
 }
@@ -840,6 +1072,11 @@ async function save() {
 }
 
 const saveSoon = debounce(save, 1000);
+
+/** Sends a pending save now (leaving the page, say). */
+export function flushAnalysisSave() {
+  saveSoon.flush();
+}
 
 /**
  * Saves the analysis whenever its sources or view change. Returns the function that stops it. Does nothing for a user

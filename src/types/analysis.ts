@@ -33,9 +33,14 @@ export type AnalysisSourceTarget =
 export type AnalysisSourceBinding = AnalysisSourceTarget & { id: TimelineSourceId; label?: string };
 
 /**
- * A note on an analysis: a time or interval, the explanation, and optionally the record or resource it is about.
- * Notes are findings about the data the analysis reads. They are saved with the analysis and are not part of its
- * presentation: applying the presentation to another analysis never carries them.
+ * A note on an analysis: the explanation of a time, an interval, a record or resource, or a timeline guide. Notes are
+ * findings about the data the analysis reads. They are saved with the analysis and are not part of its presentation:
+ * applying the presentation to another analysis never carries them.
+ *
+ * Marks and explanations are kept apart: a guide (a time, a time range, a value, a value range) is the mark drawn
+ * across the rows, part of the presentation; a note is what it means. A note that explains a guide names it, and
+ * takes its time from it while it is there. The timeline draws a note only as a flag in its notes lane, so nothing
+ * but guides shades the rows.
  */
 export type AnalysisAnnotation = {
   /** What the note is about, beyond its time. Absent for a note about a time or interval alone. */
@@ -61,10 +66,24 @@ export type AnalysisAnnotation = {
   createdBy?: string;
   /** ISO time; present for an interval. */
   end?: string;
+  /** The timeline guide the note explains. */
+  guide?: AnalysisAnnotationGuide;
   id: number;
-  /** ISO time. */
-  start: string;
+  /** ISO time. Absent for a note on a value guide, which has no time. */
+  start?: string;
   text: string;
+};
+
+export type AnalysisAnnotationGuide = {
+  /** The guide's id; absent once the guide is no longer on the timeline. The note keeps its words and its time. */
+  id?: number;
+  kind: 'time' | 'value';
+  /** The guide's label as last seen. */
+  label: string;
+  /** A value guide's row: its id, and its name as last seen. */
+  row?: { id: number; name: string };
+  /** A value guide's value, or its range, as last seen. */
+  values?: number[];
 };
 
 export type AnalysisDefinition = {
@@ -282,4 +301,7 @@ export type SourceActivity = {
 };
 
 /** A record another record is linked to, as far as listing and going to it needs. */
-export type SourceActivityLink = Pick<SourceActivity, 'end_time' | 'id' | 'name' | 'source_key' | 'start_time' | 'type'>;
+export type SourceActivityLink = Pick<
+  SourceActivity,
+  'end_time' | 'id' | 'metadata' | 'name' | 'parameters' | 'source_key' | 'start_time' | 'type'
+>;
