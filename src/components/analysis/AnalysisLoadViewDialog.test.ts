@@ -62,7 +62,7 @@ function readView() {
   return { id: 12, name: 'Ops view', planSources: [], timelines };
 }
 
-describe('Load Timeline from View', () => {
+describe('Use a Plan view (from Use a Layout)', () => {
   beforeEach(() => {
     analysisSourceBindings.set([{ id: 'source-1', kind: 'plan', planId: 1 }]);
     state.readViewForTimelineImport.mockResolvedValue(readView());
@@ -73,14 +73,13 @@ describe('Load Timeline from View', () => {
     vi.clearAllMocks();
   });
 
+  let onBack = vi.fn();
+
+  /** Opened by Use a Layout with the Plan view chosen there. */
   async function chooseView() {
-    render(Dialog, { open: true, sourceLabels: { 'source-1': 'Tour plan' }, user });
-    await waitFor(() => expect(screen.getByText('Ops view')).toBeTruthy());
-    await fireEvent.click(screen.getByText('Ops view'));
-    await waitFor(() =>
-      expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false),
-    );
-    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    onBack = vi.fn();
+    const { component } = render(Dialog, { open: true, sourceLabels: { 'source-1': 'Tour plan' }, user, viewId: 12 });
+    component.$on('back', onBack);
     await waitFor(() => expect(screen.getByText(/will be loaded/)).toBeTruthy());
   }
 
@@ -114,7 +113,7 @@ describe('Load Timeline from View', () => {
     view.set({ definition: { plan: { timelines: [{ id: 0, rows: [{ id: 1 }] }] } } });
     await chooseView();
     await fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeTruthy());
+    expect(onBack).toHaveBeenCalled(); // back to the layout list: there is no second list here
     expect(state.replaceAnalysisTimeline).not.toHaveBeenCalled();
   });
 });

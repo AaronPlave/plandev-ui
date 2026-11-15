@@ -1,23 +1,22 @@
 <svelte:options immutable={true} />
 
 <!--
-  Loading a saved View's timeline into this analysis. Pick a view, then review what comes across: the timeline
-  replaces this analysis's timeline and nothing else changes (sources, name, ownership), and the view itself is only
-  read. Layers name sources in the Plan's terms, so each is translated to one of this analysis's sources or left out
-  and listed here first; nothing is guessed.
+  The step of Use a Layout for a Plan's view (chosen there; this is not a separate way in). Review what comes across:
+  the timeline replaces this analysis's timeline and nothing else changes (sources, name, ownership), and the view
+  itself is only read. Layers name sources in the Plan's terms, so each is translated to one of this analysis's
+  sources or left out and listed here first; nothing is guessed. Back returns to the layout list.
 -->
 <script lang="ts">
   import { Button, Dialog } from '@nasa-jpl/stellar-svelte';
+  import { createEventDispatcher } from 'svelte';
   import {
     analysisSourceBindings,
     readViewForTimelineImport,
     replaceAnalysisTimeline,
     type ViewForTimelineImport,
   } from '../../stores/analysis';
-  import { initialViewsLoading, view, views } from '../../stores/views';
+  import { view } from '../../stores/views';
   import type { User } from '../../types/app';
-  import type { DataGridColumnDef, RowId } from '../../types/data-grid';
-  import type { ViewSlim } from '../../types/view';
   import {
     countUnboundLayers,
     getUnboundLayerOptions,
@@ -26,34 +25,19 @@
     type ViewImportChoices,
   } from '../../utilities/analysisViewImport';
   import { showSuccessToast } from '../../utilities/toast';
-  import DataGrid from '../ui/DataGrid/DataGrid.svelte';
 
   export let open: boolean = false;
-  /** A view chosen in Use a Layout: read it at once. */
+  /** The Plan view chosen in Use a Layout: read at once. */
   export let viewId: number | null = null;
   /** Names of this analysis's sources, by binding id. */
   export let sourceLabels: Record<string, string> = {};
   export let user: User | null;
 
-  const columnDefs: DataGridColumnDef<ViewSlim>[] = [
-    { field: 'name', filter: 'text', headerName: 'Name', resizable: true, sortable: true },
-    { field: 'owner', filter: 'text', headerName: 'Owner', resizable: true, sortable: true, width: 120 },
-    {
-      field: 'updated_at',
-      filter: 'text',
-      headerName: 'Last Edited',
-      resizable: true,
-      sortable: true,
-      valueFormatter: ({ value }: { value: string | null }) => (value ? value.slice(0, 16).replace('T', ' ') : ''),
-      width: 150,
-    },
-  ];
+  const dispatch = createEventDispatcher<{ back: void }>();
 
   let choices: ViewImportChoices = { activitySourceId: null, resourceSourceId: null };
-  let filter: string = '';
   let loaded: ViewForTimelineImport | null = null;
   let loading: boolean = false;
-  let selectedViewId: RowId | null = null;
   let timelineIndex: number = 0;
 
   $: if (!open) {
@@ -75,19 +59,10 @@
       : null;
   $: layerTotal = source ? source.rows.reduce((total, row) => total + row.layers.length, 0) : 0;
   $: omittedByReason = groupByReason(result?.omitted ?? []);
-  $: viewRows = $views.map(({ created_at, id, name, owner, updated_at }) => ({
-    created_at,
-    id,
-    name,
-    owner,
-    updated_at,
-  }));
 
   function reset() {
-    filter = '';
     loaded = null;
     loading = false;
-    selectedViewId = null;
     timelineIndex = 0;
   }
 
@@ -102,14 +77,13 @@
     return `${layers.length} layer${layers.length === 1 ? '' : 's'} in ${rows.slice(0, 4).join(', ')}${rows.length > 4 ? `, and ${rows.length - 4} more` : ''}`;
   }
 
-  async function choose(viewId: RowId | null) {
-    if (viewId === null || loading) {
-      return;
-    }
+  async function choose(viewId: number) {
     loading = true;
-    const read = await readViewForTimelineImport(Number(viewId), user);
+    const read = await readViewForTimelineImport(viewId, user);
     loading = false;
-    if (read) {
+    if (!read) {
+      open = false;
+    } else {
       loaded = read;
       timelineIndex = 0;
       choices = options.defaults;
@@ -140,32 +114,14 @@
 <Dialog.Root bind:open>
   <Dialog.Content class="flex max-h-[85vh] max-w-[680px] flex-col gap-3">
     <Dialog.Header>
-      <Dialog.Title>Load Timeline from View</Dialog.Title>
+      <Dialog.Title>Use a Plan View{loaded ? ` “${loaded.name}”` : ''}</Dialog.Title>
       <Dialog.Description>
-        Use the timeline of a saved view in this analysis. The view is not changed, and only its timeline is used.
+        Its layers name a plan's data; choose which of this analysis's sources they read. The view is not changed.
       </Dialog.Description>
     </Dialog.Header>
 
     {#if !loaded}
-      <input bind:value={filter} class="st-input w-full" placeholder="Filter views" aria-label="Filter views" />
-      <div class="h-[320px]">
-        <DataGrid
-          bind:currentSelectedRowId={selectedViewId}
-          {columnDefs}
-          filterExpression={filter}
-          loading={$initialViewsLoading}
-          rowData={viewRows}
-          rowSelection="single"
-          noRowsOverlayText="No saved views"
-          on:rowDoubleClicked={({ detail: { data } }) => choose(data.id)}
-        />
-      </div>
-      <Dialog.Footer>
-        <Button variant="outline" on:click={() => (open = false)}>Cancel</Button>
-        <Button disabled={selectedViewId === null || loading} on:click={() => choose(selectedViewId)}>
-          {loading ? 'Reading…' : 'Next'}
-        </Button>
-      </Dialog.Footer>
+      <div class="text-xs text-muted-foreground">Reading the view…</div>
     {:else if result && source}
       <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-auto text-xs">
         <div>
@@ -257,7 +213,13 @@
         {/if}
       </div>
       <Dialog.Footer>
-        <Button variant="outline" on:click={() => (loaded = null)}>Back</Button>
+        <Button
+          variant="outline"
+          on:click={() => {
+            open = false;
+            dispatch('back');
+          }}>Back</Button
+        >
         <Button variant={currentRows ? 'destructive' : 'default'} disabled={result.kept === 0} on:click={load}>
           {currentRows ? 'Replace Timeline' : 'Load Timeline'}
         </Button>

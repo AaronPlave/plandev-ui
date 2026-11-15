@@ -164,6 +164,11 @@
       });
   }
 
+  /** The grid's row id: views and analyses share numbers, so the kind is part of it. */
+  function getChoiceId(choice: Choice): RowId {
+    return `${choice.kind === 'analysis' ? 'analysis' : 'view'}:${choice.id}`;
+  }
+
   function reset() {
     filter = '';
     includeTimeGuides = false;
@@ -249,7 +254,11 @@
   }
 
   function apply() {
-    if (loaded && result && replaceAnalysisTimeline(result.timeline, user, loaded.name)) {
+    if (
+      loaded &&
+      result &&
+      replaceAnalysisTimeline(result.timeline, user, loaded.name, { dataless: result.total === 0 })
+    ) {
       const left = result.total - result.kept;
       showSuccessToast(
         `Using the layout of "${loaded.name}"${left ? `; ${left} layer${left === 1 ? '' : 's'} left out` : ''}`,
@@ -292,17 +301,19 @@
         placeholder="Filter by name or owner"
         aria-label="Filter layouts"
       />
-      <div class="h-[300px]">
+      <!-- Enter on the grid does what Next does (Space or a click selects a row). -->
+      <!-- svelte-ignore a11y-no-static-element-interactions -->
+      <div class="h-[300px]" on:keydown={event => event.key === 'Enter' && choose(selectedId)}>
         <DataGrid
           bind:currentSelectedRowId={selectedId}
           {columnDefs}
           filterExpression={filter}
           loading={$initialViewsLoading}
-          getRowId={choice => `${choice.kind === 'analysis' ? 'analysis' : 'view'}:${choice.id}`}
+          getRowId={getChoiceId}
           rowData={choices}
           rowSelection="single"
           noRowsOverlayText="No saved views or other analyses"
-          on:rowDoubleClicked={({ detail: { data } }) => choose(data.id)}
+          on:rowDoubleClicked={({ detail: { data } }) => choose(getChoiceId(data))}
         />
       </div>
       <Dialog.Footer class="sm:justify-between">
@@ -425,8 +436,9 @@
       </div>
       <Dialog.Footer>
         <Button variant="outline" on:click={() => (loaded = null)}>Back</Button>
-        <Button disabled={result.kept === 0} on:click={apply}>
-          {currentRows ? `Replace Layout (${counts.ready + counts.attention} rows)` : 'Use Layout'}
+        <!-- A layout with no data layers (rows, sections, guides only) is used as it is. -->
+        <Button disabled={result.total > 0 && result.kept === 0} on:click={apply}>
+          {currentRows ? `Replace Layout (${result.timeline.rows.length} rows)` : 'Use Layout'}
         </Button>
       </Dialog.Footer>
     {/if}

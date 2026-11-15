@@ -17,6 +17,7 @@
     analysisSimulationDatasets,
     analysisSourceBindings,
     analysisTimelineSources,
+    explainGuide,
     focusedAnnotationId,
     selectedAnalysisActivity,
     undoAnalysisLayout,
@@ -179,6 +180,29 @@
           selectedActivityDirectiveId={null}
           selectedExternalEventId={null}
           {selectedSpanId}
+          revealSelection
+          guideNotes
+          on:guideNote={({ detail }) => {
+            const explained = $analysisAnnotations.some(
+              ({ guide }) =>
+                guide?.id === detail.id &&
+                guide.kind === (detail.rowId === undefined ? 'time' : 'value') &&
+                guide.row?.id === detail.rowId,
+            );
+            // Someone who can't change the analysis can read an explanation, not start one.
+            if (explained || !readOnly) {
+              explainGuide(detail, user);
+              dispatch('openNotes');
+            }
+          }}
+          explainedGuides={{
+            time: $analysisAnnotations.flatMap(({ guide }) =>
+              guide?.kind === 'time' && guide.id !== undefined ? [guide.id] : [],
+            ),
+            value: $analysisAnnotations.flatMap(({ guide }) =>
+              guide?.kind === 'value' && guide.id !== undefined ? [`${guide.row?.id}:${guide.id}`] : [],
+            ),
+          }}
           spanUtilityMaps={noSpanMaps}
           spansMap={{}}
           initialSpansLoading={activityTimesLoading}

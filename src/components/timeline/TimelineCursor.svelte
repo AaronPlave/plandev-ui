@@ -2,6 +2,7 @@
   import MarkerIcon from '@nasa-jpl/stellar/icons/marker.svg?component';
   import AddMarkerIcon from '@nasa-jpl/stellar/icons/marker_add.svg?component';
   import RemoveMarkerIcon from '@nasa-jpl/stellar/icons/marker_remove.svg?component';
+  import { createEventDispatcher } from 'svelte';
   import TimelineCursorLabel from './TimelineCursorLabel.svelte';
 
   export let x = 0;
@@ -13,6 +14,8 @@
   export let maxWidthFlipped = 0;
 
   let hovered = false;
+
+  const dispatch = createEventDispatcher<{ labelClick: void }>();
 </script>
 
 <div class="timeline-cursor" style="transform: translateX({x}px)">
@@ -33,7 +36,7 @@
       <MarkerIcon />
     {/if}
   </button>
-  <TimelineCursorLabel {label} {maxWidth} {flippable} {maxWidthFlipped} />
+  <TimelineCursorLabel {label} {maxWidth} {flippable} {maxWidthFlipped} on:click={() => dispatch('labelClick')} />
 </div>
 
 <style>

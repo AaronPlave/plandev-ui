@@ -217,6 +217,8 @@ export type Span = SpanDB & {
   /** Activities from a source other than the Plan: the source they come from. */
   sourceId?: string;
   startMs: number;
+  /** Imported records: its place among its parent's steps, when the product gives one (not its time). */
+  step?: number;
 };
 
 export type Topic = {

@@ -1960,6 +1960,7 @@ const gql = {
         parent: metadata(path: "parent")
         source_key
         start_time
+        step
         type
       }
     }
@@ -1985,7 +1986,12 @@ const gql = {
 
   GET_SOURCE_ACTIVITY_LINKS: `#graphql
     query GetSourceActivityLinks($where: source_activity_bool_exp!, $limit: Int!) {
-      activities: ${Queries.SOURCE_ACTIVITIES}(where: $where, order_by: [{ start_time: asc }, { id: asc }], limit: $limit) {
+      activities: ${Queries.SOURCE_ACTIVITIES}(
+        where: $where
+        # The product's step order first, so a limit never drops a sequence's first steps.
+        order_by: [{ step: asc_nulls_last }, { start_time: asc }, { id: asc }]
+        limit: $limit
+      ) {
         end_time
         id
         metadata
@@ -2016,6 +2022,46 @@ const gql = {
         id
         last_seen_at
         version
+      }
+    }
+  `,
+
+  GET_SOURCE_BY_NAME: `#graphql
+    query GetSourceByName($name: String!) {
+      sources: ${Queries.SOURCES}(where: { name: { _eq: $name } }, limit: 1) {
+        id
+        name
+        owner
+        revisions(order_by: { id: desc }) {
+          activity_types_aggregate {
+            aggregate {
+              sum {
+                count
+              }
+            }
+          }
+          content_hash
+          id
+          status
+        }
+      }
+    }
+  `,
+
+  GET_SOURCE_REVISION_STATUS: `#graphql
+    query GetSourceRevisionStatus($id: Int!) {
+      revisions: ${Queries.SOURCE_REVISIONS}(where: { id: { _eq: $id } }) {
+        activity_types_aggregate {
+          aggregate {
+            sum {
+              count
+            }
+          }
+        }
+        content_hash
+        error
+        id
+        status
       }
     }
   `,

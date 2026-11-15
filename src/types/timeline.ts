@@ -18,6 +18,8 @@ export type DiscreteTreeNode = {
   isLeaf: boolean;
   items: DiscreteTreeNodeItem[];
   label: string;
+  /** Said quietly after the label, e.g. what kind of record a step is. */
+  tag?: string;
   type: 'Activity' | 'ExternalEvent';
 };
 

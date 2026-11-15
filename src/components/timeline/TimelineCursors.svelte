@@ -33,8 +33,13 @@
   export let readOnly: boolean = false;
   export let xScaleView: ScaleTime<number, number> | null = null;
   export let verticalGuides: VerticalGuide[] = [];
+  /** Guides a note explains: their label says so. */
+  export let explainedGuideIds: number[] = [];
+  /** A guide's label opens its note (or starts one): set where notes explain guides (an Analysis). */
+  export let guideNotes: boolean = false;
 
   const dispatch = createEventDispatcher<{
+    guideNote: { id: number; rowId?: number };
     updateVerticalGuides: VerticalGuide[];
   }>();
 
@@ -255,9 +260,10 @@
     <TimelineCursor
       color={guide.label.color}
       x={guide.x}
-      label={guide.label.text}
+      label={explainedGuideIds.includes(guide.id) ? `${guide.label.text} ¶` : guide.label.text}
       maxWidth={guide.maxWidth}
       on:click={() => removeVerticalGuide(guide.id)}
+      on:labelClick={() => guideNotes && dispatch('guideNote', { id: guide.id })}
     />
   {/each}
 </div>

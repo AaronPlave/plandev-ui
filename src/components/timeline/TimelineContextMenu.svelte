@@ -47,6 +47,9 @@
   export let spansMap: SpansMap;
   export let spanUtilityMaps: SpanUtilityMaps;
   export let verticalGuides: VerticalGuide[];
+  /** Offer each of the row's value guides' notes (an Analysis): explained ones as "See", the rest as "Explain". */
+  export let guideNotes: boolean = false;
+  export let explainedValueGuides: string[] = [];
   export let xScaleView: ScaleTime<number, number> | null = null;
   export let user: User | null;
 
@@ -61,6 +64,7 @@
     duplicateSection: TimelineSection;
     editRow: Row;
     editSection: TimelineSection;
+    guideNote: { id: number; rowId?: number };
     insertRow: Row;
     insertSection: { row: Row | null };
     jumpToActivityDirective: number;
@@ -636,6 +640,18 @@
         </ContextMenu.Sub>
         <ContextMenu.Separator />
       {/if}
+    {/if}
+    {#if guideNotes && row?.horizontalGuides.length}
+      {@const guideRow = row}
+      {#each guideRow.horizontalGuides as guide (guide.id)}
+        {@const explained = explainedValueGuides.includes(`${guideRow.id}:${guide.id}`)}
+        {#if explained || !readOnly}
+          <ContextMenu.Item size="sm" on:click={() => dispatch('guideNote', { id: guide.id, rowId: guideRow.id })}>
+            {explained ? 'See explanation of' : 'Explain'} “{guide.label.text || 'value guide'}”
+          </ContextMenu.Item>
+        {/if}
+      {/each}
+      <ContextMenu.Separator />
     {/if}
     {#if !readOnly}
       <ContextMenu.Item size="sm" on:click={onEditRow}>Edit Row</ContextMenu.Item>

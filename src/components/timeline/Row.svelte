@@ -4,7 +4,7 @@
   import type { ScaleTime } from 'd3-scale';
   import { select, type Selection } from 'd3-selection';
   import { zoom as d3Zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior, type ZoomTransform } from 'd3-zoom';
-  import { createEventDispatcher, onDestroy } from 'svelte';
+  import { createEventDispatcher, onDestroy, tick } from 'svelte';
   import FilterWithXIcon from '../../assets/filter-with-x.svg?component';
   import { ViewDefaultDiscreteOptions } from '../../constants/view';
   import { activityArgumentDefaultsMap } from '../../stores/activities';
@@ -88,6 +88,7 @@
     isExternalEventLayer,
     isLineLayer,
     isXRangeLayer,
+    revealSpanInTree,
     spanInView,
     type TimelineLockStatus,
   } from '../../utilities/timeline';
@@ -146,6 +147,10 @@
   export let selectedActivityDirectiveId: ActivityDirectiveId | null = null;
   export let selectedExternalEventId: ExternalEventId | null = null;
   export let selectedSpanId: SpanId | null = null;
+  /** Open this row's tree to the selected activity when it is selected (see revealSpanInTree). */
+  export let revealSelection: boolean = false;
+  /** Value guides a note explains, as "rowId:guideId": their label says so. */
+  export let explainedValueGuides: string[] = [];
   export let simulationDataset: SimulationDataset | null = null;
   export let spanUtilityMaps: SpanUtilityMaps;
   export let spansMap: SpansMap | null = {};
@@ -838,6 +843,55 @@
     );
   }
 
+  // A selection is revealed when it is made, and again when the row's activities change under it (they load, or the
+  // window moves and the tree regroups): never because the person opened or closed something.
+  let revealed: { spanId: SpanId | null; spans: Span[] | null } = { spanId: null, spans: null };
+  $: if (
+    revealSelection &&
+    (selectedSpanId !== revealed.spanId || timeFilteredSpans !== revealed.spans) &&
+    discreteOptions?.displayMode === 'grouped' &&
+    expanded
+  ) {
+    revealSelected(selectedSpanId, timeFilteredSpans);
+  }
+
+  async function revealSelected(spanId: SpanId | null, rowSpans: Span[]) {
+    revealed = { spanId, spans: rowSpans };
+    const spans = rowSpansMap || spansMap || {};
+    // Not (yet) in this row's data: tried again when its activities change.
+    if (spanId === null || !spans[spanId] || !rowSpans.some(span => span.span_id === spanId)) {
+      return;
+    }
+    // The selected record and the records above it, as far as they are in this row's data.
+    const chain = new Set<SpanId>();
+    for (let span: Span | undefined = spans[spanId]; span && !chain.has(span.span_id); ) {
+      chain.add(span.span_id);
+      span = span.parent_id === null ? undefined : spans[span.parent_id];
+    }
+    const map = revealSpanInTree(
+      next =>
+        generateDiscreteTree(
+          timeFilteredActivityDirectives,
+          timeFilteredSpans,
+          timeFilteredExternalEvents,
+          next,
+          discreteOptions?.activityOptions?.hierarchyMode,
+          discreteOptions?.externalEventOptions?.groupBy,
+          hasExternalEventsLayer,
+          hasActivityLayer,
+        ),
+      discreteTreeExpansionMap ?? {},
+      chain,
+      spanId,
+    );
+    if (map) {
+      dispatch('discreteTreeExpansionChange', map);
+    }
+    await tick();
+    await tick();
+    rowRef?.parentElement?.querySelector('.row-header-discrete-group.selected')?.scrollIntoView({ block: 'nearest' });
+  }
+
   function onDiscreteTreeNodeChange(e: { detail: DiscreteTreeNode }) {
     const node = e.detail;
     dispatch('discreteTreeExpansionChange', {
@@ -1202,7 +1256,13 @@
             <RowHorizontalGuides
               drawHeight={computedDrawHeight}
               {drawWidth}
-              {horizontalGuides}
+              horizontalGuides={explainedValueGuides.length
+                ? horizontalGuides.map(guide =>
+                    explainedValueGuides.includes(`${id}:${guide.id}`)
+                      ? { ...guide, label: { ...guide.label, text: `${guide.label.text} ¶` } }
+                      : guide,
+                  )
+                : horizontalGuides}
               yAxes={yAxesWithScaleDomains}
             />
           {/if}

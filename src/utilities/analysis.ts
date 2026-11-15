@@ -93,6 +93,8 @@ export type ImportedActivityRecord = {
   /** The id of the record the product names as its parent, when that resolves to a record of the same revision. */
   parentId?: number;
   start_time: string;
+  /** Its place among its parent's steps, when the product gives one. */
+  step?: number | null;
   type: string;
 };
 
@@ -113,6 +115,7 @@ export function importedActivityToSpan(sourceId: TimelineSourceId, activity: Imp
     span_id: getActivityDrawingId({ activityId: activity.id, sourceId }),
     startMs,
     start_offset: '',
+    ...(typeof activity.step === 'number' ? { step: activity.step } : {}),
     type: activity.type,
   };
 }

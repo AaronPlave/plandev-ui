@@ -1,5 +1,6 @@
 import type { ColDef, ColumnState } from 'ag-grid-community';
 import type { UserId } from './app';
+import type { AnalysisSourceTarget } from './analysis';
 import type { Timeline } from './timeline';
 
 export type AutoSizeColumns = 'fit' | 'fill' | 'off';
@@ -79,7 +80,23 @@ export type ViewGrid = {
   rightSplit: boolean;
 };
 
+/**
+ * What a layout saved from an Analysis says about each data its layers name (by that data's identity, e.g.
+ * "revision:217"): its role in the layout (the alias it had), what it was, and the resources the layers read with
+ * their type and unit. So the role stays understandable, and its rows checkable, after that data is gone.
+ */
+export type AnalysisLayoutSource = {
+  binding: AnalysisSourceTarget & { label?: string };
+  /** What the data was when the layout was saved, e.g. "cruise015, revision 217". */
+  name: string;
+  resources: Record<string, { type: string; unit: string | null }>;
+};
+
+export type AnalysisLayout = { sources: Record<string, AnalysisLayoutSource> };
+
 export type ViewDefinition = {
+  /** Present on a layout saved from an Analysis (see saveAnalysisLayoutAsView); what says it is one. */
+  analysisLayout?: AnalysisLayout;
   plan: {
     activityDirectivesTable: ViewTable;
     activitySpansTable: ViewTable;

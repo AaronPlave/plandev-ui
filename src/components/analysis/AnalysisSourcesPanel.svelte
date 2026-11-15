@@ -36,6 +36,7 @@
   import { getIntervalInMs } from '../../utilities/time';
   import { getSource } from '../../utilities/timelineSources';
   import SourceBrowser from '../sources/SourceBrowser.svelte';
+  import AnalysisAuthoredSequence from './AnalysisAuthoredSequence.svelte';
 
   export let bindings: AnalysisSourceBinding[] = [];
   export let registry: TimelineSourceRegistry;
@@ -295,6 +296,9 @@
               {#if revision.content_hash}
                 <dt>Content hash</dt>
                 <dd class="truncate" title={revision.content_hash}>{revision.content_hash}</dd>
+              {/if}
+              {#if revision.metadata?.product?.mission?.kind === 'authored sequence'}
+                <AnalysisAuthoredSequence mission={revision.metadata.product.mission} />
               {/if}
             {:else if info.dataset}
               {@const dataset = info.dataset}

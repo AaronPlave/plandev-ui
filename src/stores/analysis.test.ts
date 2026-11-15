@@ -7,11 +7,16 @@ import { createAnalysisDefinition, createSourceActivityRow } from '../utilities/
 import { resolveResourceLayerSource } from '../utilities/timelineSources';
 
 const effects = vi.hoisted(() => ({
+  createAnalysis: vi.fn(),
   getAnalysisPlans: vi.fn(async () => []),
   getAnalysisSimulationDatasets: vi.fn(),
   getAnalysisSourceRecovery: vi.fn(async () => ({})),
   getAnalysisSourceRevisions: vi.fn(),
+  getAnalysisSourceUsage: vi.fn(),
+  getSourceByName: vi.fn(),
+  getSourceRevisionStatus: vi.fn(),
   getSpans: vi.fn(),
+  importSourceRevision: vi.fn(),
   updateAnalysis: vi.fn(),
 }));
 vi.mock('$env/dynamic/public', () => ({ env: {} }));
@@ -27,14 +32,21 @@ const {
   analysisSourceBindings,
   analysisWatchedResources,
   analysisSourceRecovery,
+  analyzeWorkspaceSequence,
   analysisTimelineSources,
+  analysis,
+  analysisAnnotations,
+  analysisSaveStatus,
   autosaveAnalysis,
   closeAnalysis,
+  flushAnalysisSave,
   openAnalysis,
   rebindAnalysisSource,
   removeAnalysisSource,
+  renameAnalysis,
   selectedAnalysisActivity,
   showAnalysisActivityType,
+  showAnalysisSequence,
 } = await import('./analysis');
 const { viewTimeRange } = await import('./plan');
 const { view } = await import('./views');
@@ -321,6 +333,26 @@ describe('analysis store', () => {
     });
   });
 
+  describe('showing a sequence on the timeline', () => {
+    it('adds one grouped, by-parent row of its kinds, and reuses it after', async () => {
+      await openAnalysis(savedAnalysis(definitionWithRows()), user);
+      const row = showAnalysisSequence('source-1', ['SEQUENCE', 'COMMAND', 'SEQUENCE'])!;
+      expect(row.discreteOptions).toMatchObject({
+        activityOptions: { groupBy: 'name', hierarchyMode: 'parent' },
+        displayMode: 'grouped',
+      });
+      expect(row.layers[0]).toMatchObject({
+        filter: { activity: { static_types: ['COMMAND', 'SEQUENCE'] } },
+        sourceId: 'source-1',
+      });
+      const rows = () => get(view)!.definition.plan.timelines[0].rows;
+      const count = rows().length;
+      expect(showAnalysisSequence('source-1', ['COMMAND'])?.id).toBe(row.id); // already shown that way
+      expect(rows()).toHaveLength(count);
+      expect(showAnalysisSequence('source-2', ['SEQUENCE'])?.id).not.toBe(row.id); // another source's: its own row
+    });
+  });
+
   describe('source identity', () => {
     const legacy = (): AnalysisDefinition => {
       const definition = definitionWithRows();
@@ -402,5 +434,191 @@ describe('analysis store', () => {
       expect(gone.label).toBe('Demo tour · Source deleted');
       expect(gone.resources?.unavailableReason).toBe('The source was deleted');
     });
+  });
+});
+
+describe('analysis saves', () => {
+  /** updateAnalysis calls that finish only when the test says so. */
+  function controlledSaves() {
+    const calls: { resolve: (value: string | 'conflict' | null) => void; update: any; updatedAt: string }[] = [];
+    effects.updateAnalysis.mockImplementation(
+      (current: Analysis, update: unknown) =>
+        new Promise(resolve => calls.push({ resolve, update, updatedAt: current.updated_at })),
+    );
+    return calls;
+  }
+  const note = (text: string) => ({ id: 1, text }) as never;
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    effects.getAnalysisSourceRevisions.mockResolvedValue([]);
+    effects.getAnalysisSimulationDatasets.mockResolvedValue([]);
+    await openAnalysis({ ...savedAnalysis(createAnalysisDefinition()), updated_at: 'r0' }, user);
+  });
+  afterEach(async () => {
+    closeAnalysis();
+    await vi.runAllTimersAsync();
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('sends one save at a time; changes made meanwhile go next, on the revision the last one returned', async () => {
+    const calls = controlledSaves();
+    const stop = autosaveAnalysis(user);
+    analysisAnnotations.set([note('a')]);
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(calls).toHaveLength(1);
+    expect(get(analysisSaveStatus)).toBe('saving');
+
+    // Typing on while the first save is slow.
+    analysisAnnotations.set([note('ab')]);
+    analysisAnnotations.set([note('abc')]);
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(calls).toHaveLength(1); // not a second concurrent write on r0
+    expect(get(analysisSaveStatus)).toBe('unsaved');
+
+    calls[0].resolve('r1');
+    await vi.advanceTimersByTimeAsync(0);
+    // Not Saved: 'abc' is not persisted yet.
+    expect(get(analysisSaveStatus)).toBe('saving');
+    expect(calls).toHaveLength(2);
+    expect(calls[1].updatedAt).toBe('r1');
+    expect(calls[1].update.definition.annotations).toEqual([note('abc')]);
+
+    calls[1].resolve('r2');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get(analysisSaveStatus)).toBe('saved');
+    expect(get(analysis)?.updated_at).toBe('r2');
+    stop();
+  });
+
+  it('serializes a rename with the autosave', async () => {
+    const calls = controlledSaves();
+    const stop = autosaveAnalysis(user);
+    analysisAnnotations.set([note('a')]);
+    await vi.advanceTimersByTimeAsync(1100);
+    const renamed = renameAnalysis('Renamed', user);
+    expect(calls).toHaveLength(1);
+    calls[0].resolve('r1');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls[1]).toMatchObject({ update: { name: 'Renamed' }, updatedAt: 'r1' });
+    calls[1].resolve('r2');
+    await renamed;
+    expect(get(analysis)).toMatchObject({ name: 'Renamed', updated_at: 'r2' });
+    stop();
+  });
+
+  it("still sends a pending save on leaving, and a late reply doesn't touch the next analysis", async () => {
+    const calls = controlledSaves();
+    const stop = autosaveAnalysis(user);
+    analysisAnnotations.set([note('left behind')]);
+    stop();
+    closeAnalysis(); // before the debounce: must not be dropped
+    expect(calls).toHaveLength(1);
+    expect(calls[0].update.definition.annotations).toEqual([note('left behind')]);
+
+    await openAnalysis({ ...savedAnalysis(createAnalysisDefinition()), id: 9, updated_at: 'other' }, user);
+    calls[0].resolve('r1');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get(analysis)).toMatchObject({ id: 9, updated_at: 'other' });
+    expect(get(analysisSaveStatus)).toBe('saved');
+  });
+
+  it('stops on a real conflict and keeps a failed save for a retry', async () => {
+    const calls = controlledSaves();
+    const stop = autosaveAnalysis(user);
+    analysisAnnotations.set([note('a')]);
+    await vi.advanceTimersByTimeAsync(1100);
+    calls[0].resolve(null);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get(analysisSaveStatus)).toBe('error');
+
+    const retried = flushAnalysisSave();
+    expect(calls[1].update.definition.annotations).toEqual([note('a')]);
+    expect(calls[1].updatedAt).toBe('r0');
+    calls[1].resolve('conflict');
+    await retried;
+    expect(get(analysisSaveStatus)).toBe('conflict');
+
+    analysisAnnotations.set([note('ab')]);
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(calls).toHaveLength(2); // nothing is written over someone else's change
+    expect(get(analysisSaveStatus)).toBe('conflict');
+    stop();
+  });
+});
+
+describe('analyzing a SeqDev workspace sequence', () => {
+  const file = {
+    content: '{"id":"s","metadata":{},"steps":[]}',
+    path: 'seqs/s.seq.json',
+    workspaceId: 2,
+    workspaceName: 'ws',
+  };
+  const sha256 = async (text: string) =>
+    `sha256:${[...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))]
+      .map(byte => byte.toString(16).padStart(2, '0'))
+      .join('')}`;
+
+  beforeEach(() => {
+    effects.getAnalysisSourceUsage.mockResolvedValue([]);
+    effects.createAnalysis.mockResolvedValue(31);
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('imports a snapshot as a revision of a source named for the workspace and path, then analyzes it', async () => {
+    effects.getSourceByName.mockResolvedValue(undefined);
+    effects.importSourceRevision.mockResolvedValue({ owner: 'test', revisionId: 50, sourceId: 9 });
+    effects.getSourceRevisionStatus
+      .mockResolvedValueOnce({ activityCount: 0, id: 50, status: 'pending' })
+      .mockResolvedValueOnce({ activityCount: 3, id: 50, status: 'success' });
+    expect(await analyzeWorkspaceSequence(file, user, async () => {})).toBe(31);
+    const [uploaded, target, adapter, , metadata] = effects.importSourceRevision.mock.calls[0] as unknown as [
+      File,
+      unknown,
+      string,
+      unknown,
+      unknown,
+    ];
+    expect(uploaded.name).toBe('s.seq.json');
+    expect(target).toEqual({ sourceName: 'ws/seqs/s.seq.json' });
+    expect(adapter).toBe('seq_json');
+    expect(metadata).toEqual({ workspaceFile: { path: 'seqs/s.seq.json', workspaceId: 2, workspaceName: 'ws' } });
+    const [, definition] = effects.createAnalysis.mock.calls[0] as unknown as [
+      string,
+      { sources: unknown[]; view: { plan: { timelines: { items: unknown[]; rows: { id: number }[] }[] } } },
+    ];
+    // Its activities row is in the timeline's order, so it is drawn.
+    const [timeline] = definition.view.plan.timelines;
+    expect(timeline.items).toEqual([{ id: timeline.rows[0].id, type: 'row' }]);
+    expect(definition.sources).toEqual([
+      { id: 'source-1', kind: 'imported', revisionId: 50, sourceId: 9, sourceName: 'ws/seqs/s.seq.json' },
+    ]);
+  });
+
+  it('reuses the revision of the same bytes, and snapshots changed bytes as a new revision of the same source', async () => {
+    const revisions = [{ activityCount: 0, content_hash: await sha256(file.content), id: 44, status: 'success' }];
+    effects.getSourceByName.mockResolvedValue({ id: 9, name: 'ws/seqs/s.seq.json', owner: 'test', revisions });
+    await analyzeWorkspaceSequence(file, user, async () => {});
+    expect(effects.importSourceRevision).not.toHaveBeenCalled();
+    expect(
+      (effects.createAnalysis.mock.calls[0] as unknown as [string, { sources: { revisionId: number }[] }])[1].sources[0]
+        .revisionId,
+    ).toBe(44);
+
+    effects.importSourceRevision.mockResolvedValue({ owner: 'test', revisionId: 45, sourceId: 9 });
+    effects.getSourceRevisionStatus.mockResolvedValue({ activityCount: 0, id: 45, status: 'success' });
+    await analyzeWorkspaceSequence({ ...file, content: `${file.content} ` }, user, async () => {});
+    expect(effects.importSourceRevision.mock.calls[0][1]).toEqual({ owner: 'test', sourceId: 9 });
+  });
+
+  it('opens nothing when the file is not readable as seqJSON', async () => {
+    effects.getSourceByName.mockResolvedValue(undefined);
+    effects.importSourceRevision.mockResolvedValue({ owner: 'test', revisionId: 51, sourceId: 9 });
+    effects.getSourceRevisionStatus.mockResolvedValue({ activityCount: 0, id: 51, status: 'failed' });
+    expect(await analyzeWorkspaceSequence(file, user, async () => {})).toBeNull();
+    expect(effects.createAnalysis).not.toHaveBeenCalled();
   });
 });

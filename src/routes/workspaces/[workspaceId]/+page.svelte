@@ -15,6 +15,7 @@
     UserSequence,
   } from '@nasa-jpl/plandev-sequence-languages';
   import { Button, Checkbox, Resizable, Select } from '@nasa-jpl/stellar-svelte';
+  import { analyzeWorkspaceSequence } from '../../../stores/analysis';
   import type { EditorView } from 'codemirror';
   import { capitalize, startCase } from 'lodash-es';
   import { Folder, ListX, LoaderCircle, TriangleAlert } from 'lucide-svelte';
@@ -854,8 +855,47 @@
     replaceUrl(getWorkspacesUrl(base, $workspaceId, newFilePath));
   }
 
+  let analyzingSequence: boolean = false;
+  /** Whether the editor's current output is seqJSON (what the default adaptation converts a sequence file to). */
+  $: outputIsSeqJson = (() => {
+    try {
+      const parsed = JSON.parse(selectedSequenceOutput ?? '');
+      return typeof parsed?.id === 'string' && Array.isArray(parsed.steps);
+    } catch {
+      return false;
+    }
+  })();
+
+  /** Opens an Analysis of the active seqJSON file as saved now (a snapshot; later edits change nothing analyzed). */
+  async function onAnalyzeSequence() {
+    const ws = $workspace ?? initialWorkspace;
+    const fullPath = $activeDocumentPath;
+    if (!ws || !fullPath || analyzingSequence) {
+      return;
+    }
+    if ($activeDocumentIsDirty && !(await saveBeforeOperation('analyzing'))) {
+      return;
+    }
+    analyzingSequence = true;
+    const converted = !fullPath.endsWith('.seq.json');
+    const id = await analyzeWorkspaceSequence(
+      {
+        content: converted ? (selectedSequenceOutput ?? '') : $activeDocument.currentContent,
+        ...(converted ? { convertedFrom: $sequenceAdaptation.input.name } : {}),
+        path: fullPath.startsWith(`${ws.name}/`) ? fullPath.slice(ws.name.length + 1) : fullPath,
+        workspaceId: ws.id,
+        workspaceName: ws.name,
+      },
+      $user,
+    );
+    analyzingSequence = false;
+    if (id !== null) {
+      goto(`${base}/analyses/${id}`);
+    }
+  }
+
   async function saveBeforeOperation(
-    operation: 'moving' | 'renaming' | 'downloading' | 'running action',
+    operation: 'moving' | 'renaming' | 'downloading' | 'running action' | 'analyzing',
   ): Promise<boolean> {
     const operationVerb =
       operation === 'moving'
@@ -864,7 +904,9 @@
           ? 'Rename'
           : operation === 'downloading'
             ? 'Download'
-            : 'Run';
+            : operation === 'analyzing'
+              ? 'Analyze'
+              : 'Run';
     const { confirm } = await showConfirmModal(
       `Save before ${startCase(operation)}`,
       `The file ${operation === 'running action' ? 'you are running this action on' : `you are ${operation}`} has unsaved changes. Would you like to save them before ${operation === 'running action' ? 'running the action' : operation}?`,
@@ -1746,6 +1788,20 @@
                 >
                   <LoaderCircle size={32} class="animate-spin text-muted-foreground" />
                 </div>
+              {/if}
+              {#if $activeDocumentPath?.endsWith('.seq.json') || (activeFileIsInputSequence && outputIsSeqJson)}
+                <!-- An Analysis reads seqJSON: the file itself, or a sequence file's seqJSON output (a conversion,
+                     recorded as one). -->
+                <Button
+                  class="absolute bottom-2 right-4 z-20"
+                  size="sm"
+                  variant="outline"
+                  disabled={analyzingSequence}
+                  title={$activeDocumentPath?.endsWith('.seq.json')
+                    ? 'Open this sequence, as saved now, in an Analysis'
+                    : "Open this sequence's seqJSON output, as converted now, in an Analysis"}
+                  on:click={onAnalyzeSequence}>{analyzingSequence ? 'Importing…' : 'Analyze sequence'}</Button
+                >
               {/if}
               {#if isTextOrEmpty && activeFileIsSequence}
                 <div class="flex h-full">

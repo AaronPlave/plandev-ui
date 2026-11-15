@@ -37,7 +37,15 @@ import type { ExternalEvent, ExternalEventType } from '../types/external-event';
 import type { DynamicFilter } from '../types/filter';
 import type { DefaultEffectiveArgumentsMap } from '../types/parameter';
 import type { ValueSchema } from '../types/schema';
-import type { Resource, ResourceType, ResourceValue, Span, SpanUtilityMaps, SpansMap } from '../types/simulation';
+import type {
+  Resource,
+  ResourceType,
+  ResourceValue,
+  Span,
+  SpanId,
+  SpanUtilityMaps,
+  SpansMap,
+} from '../types/simulation';
 import type {
   ActivityLayer,
   ActivityLayerFilter,
@@ -2266,7 +2274,32 @@ export function getSpanSubtrees(
 ): DiscreteTreeNode[] {
   const children: DiscreteTreeNode[] = [];
   const spanChildren = spanUtilityMaps.spanIdToChildIdsMap[span.span_id].map(id => spansMap[id]);
-  if (type === 'aggregation') {
+  if (type === 'aggregation' && spanChildren.length && spanChildren.every(child => child.step !== undefined)) {
+    // Steps the product numbers (a sequence's commands and the sequences they start): listed in that order, each
+    // tagged with its kind, not folded into a group per type. A sequence a command started shares its step and
+    // follows it. Time is not the order here; each step still draws at its own time.
+    const steps = filterActivitiesByTime
+      ? spanChildren.filter(child => spanInView(child, viewTimeRange))
+      : spanChildren;
+    [...steps]
+      .sort(
+        (a, b) =>
+          (a.step as number) - (b.step as number) || Number(a.type === 'SEQUENCE') - Number(b.type === 'SEQUENCE'),
+      )
+      .forEach(child => {
+        const [node] = getSpanSubtrees(
+          child,
+          parentId,
+          activityTreeExpansionMap,
+          'span',
+          filterActivitiesByTime,
+          spanUtilityMaps,
+          spansMap,
+          viewTimeRange,
+        );
+        children.push({ ...node, label: `${child.step}  ${node.label}`, tag: child.type.toLowerCase() });
+      });
+  } else if (type === 'aggregation') {
     // Group by type
     let computedSpans = spanChildren;
     if (filterActivitiesByTime) {
@@ -3192,4 +3225,45 @@ export function applyTimelineItemDrop(
   }
 
   return { items, sections };
+}
+
+/**
+ * The expansion that shows `targetId`'s own node in a discrete tree: each round builds the tree and opens the first
+ * closed node holding the target or one of its ancestors (`chain`), until the target's node is in view. Works from
+ * what the tree holds, whatever its grouping or paging. Null when nothing needed opening or the target isn't there.
+ */
+export function revealSpanInTree(
+  build: (map: DiscreteTreeExpansionMap) => DiscreteTreeNode[],
+  map: DiscreteTreeExpansionMap,
+  chain: Set<SpanId>,
+  targetId: SpanId,
+): DiscreteTreeExpansionMap | null {
+  let next = map;
+  const holds = (node: DiscreteTreeNode) => node.items.some(({ span }) => span && chain.has(span.span_id));
+  const find = (nodes: DiscreteTreeNode[]): DiscreteTreeNode | 'shown' | null => {
+    for (const node of nodes.filter(holds)) {
+      if (node.activity_type === 'span' && node.items[0]?.span?.span_id === targetId) {
+        return 'shown';
+      }
+      if (!node.isLeaf && !node.expanded) {
+        return node;
+      }
+      const found = find(node.children);
+      if (found) {
+        return found;
+      }
+    }
+    return null;
+  };
+  for (let round = 0; round < 64; round++) {
+    const found = find(build(next));
+    if (found === 'shown') {
+      return next === map ? null : next;
+    }
+    if (!found) {
+      return null;
+    }
+    next = { ...next, [found.id]: true };
+  }
+  return null;
 }

@@ -44,6 +44,7 @@ import {
   externalEventInView,
   formatBandDuration,
   generateDiscreteTreeUtil,
+  revealSpanInTree,
   getContrastingTextColor,
   getContrastRatio,
   getHorizontalGuideBand,
@@ -3731,4 +3732,92 @@ test('generateDiscreteTreeUtil groups activities by name when asked, and labels 
     ['a.seq', 2],
     ['b.seq', 1],
   ]);
+});
+
+test("by parent, a sequence's numbered steps are listed in the product's order, each tagged with its kind", () => {
+  const span = (id: number, type: string, name: string, startMs: number, parent: number | null, step?: number) =>
+    ({ durationMs: 1, name, parent_id: parent, span_id: id, startMs, step, type }) as Span;
+  // Times disagree with the product's order: the order wins in the tree.
+  const spans = [
+    span(1, 'SEQUENCE', 'main', 0, null),
+    span(2, 'COMMAND', 'CMD_B', 5, 1, 2),
+    span(3, 'COMMAND', 'CMD_A', 9, 1, 1),
+    span(4, 'SEQUENCE', 'sub', 6, 1, 2),
+  ];
+  const maps = createSpanUtilityMaps(spans);
+  const [group] = generateDiscreteTreeUtil(
+    [],
+    spans,
+    [],
+    { SEQUENCE: true, SEQUENCE_1: true },
+    'parent',
+    'event_type_name',
+    false,
+    maps,
+    keyBy(spans, 'span_id'),
+    true,
+    false,
+    { end: 10, start: 0 },
+    false,
+    true,
+  );
+  const [main] = group.children;
+  expect(main.label).toBe('main');
+  const expanded = generateDiscreteTreeUtil(
+    [],
+    spans,
+    [],
+    { SEQUENCE: true, [main.id]: true },
+    'parent',
+    'event_type_name',
+    false,
+    maps,
+    keyBy(spans, 'span_id'),
+    true,
+    false,
+    { end: 10, start: 0 },
+    false,
+    true,
+  )[0].children[0];
+  // No COMMAND / SEQUENCE folders of one: the steps themselves, a started sequence right after its command.
+  expect(expanded.children.map(node => [node.label, node.tag])).toEqual([
+    ['1  CMD_A', 'command'],
+    ['2  CMD_B', 'command'],
+    ['2  sub', 'sequence'],
+  ]);
+});
+
+test('revealSpanInTree opens the groups and parents above a record, and nothing else', () => {
+  const span = (id: number, type: string, parent: number | null, step?: number) =>
+    ({ durationMs: 1, name: `${type}${id}`, parent_id: parent, span_id: id, startMs: 0, step, type }) as Span;
+  const spans = [
+    span(1, 'SEQUENCE', null),
+    span(2, 'SEQUENCE', 1, 1),
+    span(3, 'COMMAND', 2, 1),
+    span(4, 'SEQUENCE', null),
+  ];
+  const maps = createSpanUtilityMaps(spans);
+  const build = (map: Record<string, boolean>) =>
+    generateDiscreteTreeUtil(
+      [],
+      spans,
+      [],
+      map,
+      'parent',
+      'event_type_name',
+      false,
+      maps,
+      keyBy(spans, 'span_id'),
+      true,
+      false,
+      { end: 10, start: 0 },
+      false,
+      true,
+    );
+  const map = revealSpanInTree(build, {}, new Set([3, 2, 1]), 3)!;
+  expect(Object.keys(map)).toHaveLength(3); // the SEQUENCE group, sequence 1, sequence 2
+  const sequence1 = build(map)[0].children.find(node => node.label === 'SEQUENCE1')!;
+  expect(sequence1.children[0].children[0]).toMatchObject({ items: [{ span: { span_id: 3 } }], tag: 'command' });
+  expect(build(map)[0].children.find(node => node.label === 'SEQUENCE4')?.expanded).toBe(false);
+  expect(revealSpanInTree(build, map, new Set([3, 2, 1]), 3)).toBeNull(); // already shown
 });

@@ -243,6 +243,9 @@
         {:else if $analysisSaveStatus === 'conflict'}
           Changed elsewhere, not saving.
           <button class="st-button secondary" on:click={() => location.reload()}>Reload</button>
+        {:else if $analysisSaveStatus === 'error'}
+          Save failed.
+          <button class="st-button secondary" on:click={() => flushAnalysisSave()}>Retry</button>
         {:else}
           {saveStatusLabels[$analysisSaveStatus]}
         {/if}
@@ -483,7 +486,13 @@
 />
 
 {#if !readOnly}
-  <AnalysisLoadViewDialog bind:open={loadViewOpen} bind:viewId={loadViewId} {sourceLabels} user={$user} />
+  <AnalysisLoadViewDialog
+    bind:open={loadViewOpen}
+    bind:viewId={loadViewId}
+    {sourceLabels}
+    user={$user}
+    on:back={() => openLayout('use')}
+  />
 {/if}
 <AnalysisApplyPresentationDialog
   bind:open={layoutOpen}

@@ -11,7 +11,7 @@
 -->
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import { showAnalysisActivitiesWith } from '../../stores/analysis';
+  import { showAnalysisActivitiesWith, showAnalysisSequence } from '../../stores/analysis';
   import { plugins } from '../../stores/plugins';
   import type { SourceActivityLink } from '../../types/analysis';
   import type { User } from '../../types/app';
@@ -145,6 +145,10 @@
     reportedOn = counts;
   }
   $: ownState = state(details);
+  // The kinds of record a sequence's row needs: this record's, its steps', and those of the sequences above it.
+  $: sequenceTypes = structure
+    ? [details.type, ...[...structure.steps, ...structure.ancestors, ...structure.siblings].map(record => record.type)]
+    : [];
   $: isSequence = details.type === 'SEQUENCE' || structure?.steps.length;
   $: siblingIndex = structure?.siblings.findIndex(record => record.source_key === details.key) ?? -1;
   $: siblingWindow =
@@ -176,6 +180,19 @@
         <span>engine {details.parameters.engine}</span>
         {#if details.parameters.invocationType}<span>{details.parameters.invocationType}</span>{/if}
         {#if details.metadata?.step !== undefined}<span>step {details.metadata.step} of its parent</span>{/if}
+      </div>
+    {/if}
+
+    {#if !readOnly && (structure.steps.length || structure.ancestors.length)}
+      <div class="facts">
+        <button
+          class="link"
+          title="Reveal {structure.steps.length
+            ? 'this sequence'
+            : 'this step in its sequence'} in a timeline row of its source's sequences, steps in order"
+          on:click={() => showAnalysisSequence(details.ref.sourceId, [...new Set(sequenceTypes)])}
+          >Show {structure.steps.length ? 'sequence' : 'in its sequence'} on timeline</button
+        >
       </div>
     {/if}
 

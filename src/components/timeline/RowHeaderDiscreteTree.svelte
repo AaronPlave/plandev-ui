@@ -121,7 +121,8 @@
               </div>
             {/if}
           </div>
-          {node.label}
+          <span class="leaf-label" title={node.label}>{node.label}</span>
+          {#if node.tag}<span class="tag">{node.tag}</span>{/if}
         </button>
       {:else}
         {@const externalEvent = node.items[0].externalEvent}
@@ -174,8 +175,11 @@
           <div class="label">
             {node.label}
           </div>
+          {#if node.tag}<span class="tag">{node.tag}</span>{/if}
           <div class="title-metadata">
-            {#if node.activity_type === 'directive'}
+            {#if node.activity_type === 'span'}
+              <!-- One record: a count would always say 1. -->
+            {:else if node.activity_type === 'directive'}
               <!--NOTE: Doesn't appear to run under any setting for directive/span visibility-->
               <div
                 title={`${node.children.length} child type group${pluralize(node.children.length)}`}
@@ -184,7 +188,8 @@
                 <FolderIcon />
                 <span>{node.children.length}</span>
               </div>
-            {:else}
+            {:else if activityDirectiveCount + spanCount + combinedActivityDirectiveSpanCount > 1}
+              <!-- A group of one needs no count. -->
               {activityDirectiveCount + spanCount + combinedActivityDirectiveSpanCount}
             {/if}
           </div>
@@ -276,8 +281,11 @@
     border-radius: 0px;
     font-size: 10px;
     letter-spacing: 0.1px;
+    min-width: 0;
+    overflow: hidden;
     padding: 0 !important;
     padding-left: 4px !important;
+    white-space: nowrap;
   }
 
   :global(.row-header-discrete-group.collapse-root:not(.selected) > .collapse-header:hover),
@@ -348,6 +356,21 @@
   :global(.row-header-discrete-group.collapse-root:has(> .collapse-header:hover) > button.select),
   :global(.row-header-discrete-group.collapse-root:has(> button.select:hover) > button.select) {
     opacity: 1;
+  }
+
+  .leaf-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tag {
+    flex-shrink: 0;
+    white-space: nowrap;
+    color: var(--st-gray-50);
+    font-size: 10px;
+    margin-left: 4px;
   }
 
   :global(.row-header-discrete-group .label) {

@@ -45,7 +45,8 @@ import gql from '../utilities/gql';
 import { featurePermissions } from '../utilities/permissions';
 import { showFailureToast, showSuccessToast } from '../utilities/toast';
 import { getSource, toIntervalType } from '../utilities/timelineSources';
-import { createRow, createTimelineActivityLayer, createVerticalGuide } from '../utilities/timeline';
+import { createRow, createTimelineActivityLayer, createVerticalGuide, isActivityLayer } from '../utilities/timeline';
+import { ViewDefaultActivityOptions, ViewDefaultDiscreteOptions } from '../constants/view';
 import { getDoyTime } from '../utilities/time';
 import { applyViewDefinitionMigrations } from '../utilities/view';
 import {
@@ -364,7 +365,13 @@ export async function openAnalysis(initial: Analysis, user: User | null, context
     owner: initial.owner,
     updated_at: initial.updated_at,
   });
-  analysisSaveStatus.set('saved');
+  // Reopened while its earlier changes are still being sent: those saves carry on (and say so). Otherwise what was
+  // just read is the revision to save over.
+  const queue = saveQueues.get(initial.id);
+  if (queue && !queue.running) {
+    saveQueues.delete(initial.id);
+  }
+  analysisSaveStatus.set(queue?.running ? 'saving' : 'saved');
   const ranges = await loadSourceDetails(initial.definition.sources, user);
   if (ranges === undefined) {
     return;
@@ -393,7 +400,8 @@ export async function openAnalysis(initial: Analysis, user: User | null, context
 }
 
 export function closeAnalysis() {
-  saveSoon.cancel();
+  // Changes already captured are still sent, for the analysis they were made in.
+  flushAnalysisSave();
   sourceDetailsRequest++;
   analysis.set(null);
   analysisSourceBindings.set([]);
@@ -664,10 +672,84 @@ export function showAnalysisActivitiesWith(
       name: `${type} · ${parameter} ${value} · ${sourceLabel}`,
     });
   if (!existing) {
-    viewUpdateTimeline('rows', [...timeline.rows, row], timeline.id);
+    appendRootRow(timeline, row);
   }
   viewSetSelectedRow(row.id);
   showSuccessToast(existing ? `Already shown in row "${row.name}"` : `Added row "${row.name}"`);
+  return row;
+}
+
+/** Adds a row at the end of the timeline, outside any section (a row the order doesn't name is put in one). */
+function appendRootRow(timeline: Timeline, row: Row) {
+  // One update: a timeline whose rows changed without its order could be normalized in between.
+  view.update(
+    current =>
+      current && {
+        ...current,
+        definition: {
+          ...current.definition,
+          plan: {
+            ...current.definition.plan,
+            timelines: current.definition.plan.timelines.map(t =>
+              t.id === timeline.id
+                ? { ...t, items: [...(t.items ?? []), { id: row.id, type: 'row' as const }], rows: [...t.rows, row] }
+                : t,
+            ),
+          },
+        },
+      },
+  );
+}
+
+/**
+ * Shows a sequence (or the sequence a step is in) on the timeline: a row of the source's records of `types` (the
+ * sequence's own kinds and its steps'), grouped by name and opened by parent, so its steps sit under it in the
+ * product's order. A row that already shows those types that way is reused, not duplicated. The selection, revealed
+ * in the row's tree, does the rest. Only the presentation changes; the data is only read.
+ */
+export function showAnalysisSequence(sourceId: string, types: string[]): Row | undefined {
+  const timeline = get(view)?.definition.plan.timelines[0];
+  if (!timeline || !types.length) {
+    return undefined;
+  }
+  const wanted = [...new Set(types)].sort();
+  const existing = timeline.rows.find(
+    row =>
+      row.discreteOptions?.displayMode === 'grouped' &&
+      row.discreteOptions.activityOptions?.hierarchyMode === 'parent' &&
+      row.layers.some(
+        layer =>
+          layer.sourceId === sourceId &&
+          isActivityLayer(layer) &&
+          wanted.every(type => layer.filter.activity?.static_types?.includes(type)),
+      ),
+  );
+  const sourceLabel = getSource(get(analysisTimelineSources), sourceId)?.label ?? sourceId;
+  const row =
+    existing ??
+    createRow([timeline], {
+      discreteOptions: {
+        ...ViewDefaultDiscreteOptions,
+        activityOptions: { ...ViewDefaultActivityOptions, groupBy: 'name', hierarchyMode: 'parent' },
+        displayMode: 'grouped',
+      },
+      height: 320,
+      layers: [
+        createTimelineActivityLayer([timeline], {
+          filter: { activity: { static_types: wanted } },
+          name: wanted.join(' + '),
+          sourceId,
+        }),
+      ],
+      name: `Sequences · ${sourceLabel}`,
+    });
+  if (!existing) {
+    appendRootRow(timeline, row);
+  }
+  viewSetSelectedRow(row.id);
+  if (!existing) {
+    showSuccessToast(`Added row "${row.name}"`);
+  }
   return row;
 }
 
@@ -730,14 +812,16 @@ export function replaceAnalysisTimeline(
   timeline: Timeline,
   user: User | null,
   name: string = 'another layout',
+  { dataless = false }: { dataless?: boolean } = {},
 ): boolean {
   const current = get(analysis);
   const previous = get(view)?.definition.plan.timelines[0];
   if (!current || !previous || !featurePermissions.analysis.canUpdate(user, current)) {
     return false;
   }
-  // Nothing mapped to this analysis's sources: replacing the timeline would only empty it.
-  if (!timeline.rows.some(row => row.layers.length)) {
+  // Nothing mapped to this analysis's sources: replacing the timeline would only empty it. (A layout that never had
+  // data layers, only rows, sections and guides, is used as it is.)
+  if (!dataless && !timeline.rows.some(row => row.layers.length)) {
     showFailureToast('Nothing In The View Maps To This Analysis, So The Timeline Was Not Replaced');
     return false;
   }
@@ -942,8 +1026,10 @@ const LAYOUT_SOURCE = /^(plan|revision|simulation):(\d+)$/;
 
 /**
  * Saves the analysis's layout as a view anyone can find and use in another analysis: its timeline, with each layer
- * naming the data it read (e.g. "revision:217") rather than this analysis's binding, so the view says on its own what
- * each layer showed. Notes are not part of it. Returns the view's id, or null (reported).
+ * naming the data it read (e.g. "revision:217") rather than this analysis's binding, and `analysisLayout` saying what
+ * each of those was (its alias, source, name, and the resources read with their type and unit), so the view says on
+ * its own what each layer showed, even once that data is gone. Notes are not part of it. Returns the view's id, or
+ * null (reported).
  */
 export async function saveAnalysisLayoutAsView(name: string, user: User | null): Promise<number | null> {
   const current = get(view);
@@ -952,16 +1038,48 @@ export async function saveAnalysisLayoutAsView(name: string, user: User | null):
   }
   const bindings = get(analysisSourceBindings);
   const definition = structuredClone(current.definition);
+  const used = new Map<string, { binding: AnalysisSourceBinding; resources: Set<string> }>();
   definition.plan.timelines.forEach(timeline =>
     timeline.rows.forEach(row =>
       row.layers.forEach(layer => {
         const binding = bindings.find(({ id }) => id === layer.sourceId);
         if (binding) {
           layer.sourceId = getSourceIdentity(binding);
+          const entry = used.get(layer.sourceId) ?? { binding, resources: new Set<string>() };
+          if (layer.filter.resource) {
+            entry.resources.add(layer.filter.resource);
+          }
+          used.set(layer.sourceId, entry);
         }
       }),
     ),
   );
+  // Described without their aliases: the alias is kept apart, as the role.
+  const described = await describePresentationSources(
+    [...used.values()].map(({ binding: { label: _, ...binding } }) => binding),
+    user,
+  );
+  definition.analysisLayout = {
+    sources: Object.fromEntries(
+      [...used.entries()].map(([identity, { binding, resources }]) => {
+        const { id, label, ...target } = withSourceIdentity([binding], get(analysisSourceRevisions))[0];
+        const catalog = described.catalogs[id]?.resources;
+        return [
+          identity,
+          {
+            binding: { ...target, ...(label ? { label } : {}) },
+            name: described.names[id] ?? identity,
+            resources: Object.fromEntries(
+              [...resources].flatMap(key => {
+                const entry = catalog?.get(key);
+                return entry ? [[key, entry]] : [];
+              }),
+            ),
+          },
+        ];
+      }),
+    ),
+  };
   const id = await effects.createNamedView(definition, name, user);
   if (id !== null) {
     showSuccessToast(`Saved the layout as view "${name}": use it in any analysis from Use a Layout`);
@@ -970,8 +1088,9 @@ export async function saveAnalysisLayoutAsView(name: string, user: User | null):
 }
 
 /**
- * A saved view as a presentation, when it is a layout saved from an analysis (its layers name data, see
- * saveAnalysisLayoutAsView). Null when it is a Plan's view, to be loaded as one (readViewForTimelineImport).
+ * A saved view as a presentation, when it is a layout saved from an Analysis (it says so in `analysisLayout`, or,
+ * saved before that, its layers name data). 'plan-view' when it is a Plan's view, to be loaded as one
+ * (readViewForTimelineImport).
  */
 export async function readViewPresentation(
   viewId: number,
@@ -988,16 +1107,21 @@ export async function readViewPresentation(
     showFailureToast(`Unable To Read View "${saved.name}"`);
     return null;
   }
+  const described = saved.definition.analysisLayout?.sources ?? {};
   const identities = [
     ...new Set(
       timeline.rows.flatMap(row => row.layers.map(layer => layer.sourceId ?? '').filter(id => LAYOUT_SOURCE.test(id))),
     ),
   ];
-  if (!identities.length) {
+  if (!identities.length && !saved.definition.analysisLayout) {
     return 'plan-view';
   }
-  // Each data the layout names is a role, its binding id the identity itself.
+  // Each data the layout names is a role, its binding id the identity itself; what the layout says about it (its
+  // source, alias) is kept, so another revision of that source is suggested even if this one is gone.
   const bindings = identities.map((identity): AnalysisSourceBinding => {
+    if (described[identity]) {
+      return { ...described[identity].binding, id: identity };
+    }
     const [, kind, ref] = identity.match(LAYOUT_SOURCE) ?? [];
     return kind === 'revision'
       ? { id: identity, kind: 'imported', revisionId: Number(ref) }
@@ -1005,8 +1129,20 @@ export async function readViewPresentation(
         ? { id: identity, kind: 'simulation', simulationDatasetId: Number(ref) }
         : { id: identity, kind: 'plan', planId: Number(ref) };
   });
+  const presentation = await describePresentationSources(bindings, user);
+  bindings.forEach(({ id, label }) => {
+    const said = described[id];
+    if (said && !presentation.catalogs[id]?.resources) {
+      // That data can't be read now: what the layout said about it stands in, as what it was.
+      presentation.names[id] = `${label ? `${label} — ` : ''}originally ${said.name}`;
+      presentation.catalogs[id] = {
+        activityTypes: presentation.catalogs[id]?.activityTypes ?? null,
+        resources: new Map(Object.entries(said.resources)),
+      };
+    }
+  });
   return {
-    ...(await describePresentationSources(bindings, user)),
+    ...presentation,
     id: saved.id,
     kind: 'view',
     name: saved.name,
@@ -1045,37 +1181,94 @@ export async function removeAnalysisSource(sourceId: string, user: User | null) 
 
 /* Saving: the analysis saves itself shortly after anything it persists changes. */
 
-let saveUser: User | null = null;
+type AnalysisPatch = Partial<Pick<Analysis, 'definition' | 'name'>>;
 
-async function save() {
-  const current = get(analysis);
-  const currentView = get(view);
-  if (!current || !currentView || get(analysisSaveStatus) === 'conflict') {
-    return;
-  }
-  analysisSaveStatus.set('saving');
-  const definition = {
-    annotations: get(analysisAnnotations),
-    sources: get(analysisSourceBindings),
-    version: 1 as const,
-    view: currentView.definition,
-  };
-  const updatedAt = await effects.updateAnalysis(current, { definition }, saveUser);
-  if (updatedAt === 'conflict') {
-    analysisSaveStatus.set('conflict');
-  } else if (updatedAt) {
-    analysis.set({ ...current, definition, updated_at: updatedAt });
-    analysisSaveStatus.set('saved');
-  } else {
-    analysisSaveStatus.set('error');
+/**
+ * One analysis's saves, sent one at a time. Each change is captured when it is made, so a change made while a save is
+ * in flight goes in the next save, sent with the revision the previous one returned, and the analysis only says Saved
+ * once nothing newer is waiting. The queue keeps working after the page moves to another analysis.
+ */
+type SaveQueue = {
+  base: AnalysisSlim; // updated_at is the revision the next save must replace
+  conflict: boolean;
+  pending: AnalysisPatch | null;
+  running: Promise<void> | null;
+  user: User | null;
+};
+
+const saveQueues = new Map<number, SaveQueue>();
+
+function setSaveStatus(id: number, status: Parameters<typeof analysisSaveStatus.set>[0]) {
+  if (get(analysis)?.id === id) {
+    analysisSaveStatus.set(status);
   }
 }
 
-const saveSoon = debounce(save, 1000);
+function getSaveQueue(current: AnalysisSlim, user: User | null): SaveQueue {
+  let queue = saveQueues.get(current.id);
+  if (!queue) {
+    queue = { base: current, conflict: false, pending: null, running: null, user };
+    saveQueues.set(current.id, queue);
+  }
+  queue.user = user ?? queue.user;
+  return queue;
+}
 
-/** Sends a pending save now (leaving the page, say). */
-export function flushAnalysisSave() {
-  saveSoon.flush();
+async function drainSaveQueue(queue: SaveQueue) {
+  const { id } = queue.base;
+  while (queue.pending && !queue.conflict) {
+    const patch = queue.pending;
+    queue.pending = null;
+    setSaveStatus(id, 'saving');
+    const updatedAt = await effects.updateAnalysis(queue.base, patch, queue.user);
+    if (updatedAt === 'conflict') {
+      // Someone else changed it: never overwrite their work.
+      queue.conflict = true;
+      setSaveStatus(id, 'conflict');
+      return;
+    }
+    if (!updatedAt) {
+      // Kept, under anything newer, for the next try.
+      queue.pending = { ...patch, ...(queue.pending ?? {}) };
+      setSaveStatus(id, 'error');
+      return;
+    }
+    queue.base = { ...queue.base, ...(patch.name !== undefined ? { name: patch.name } : {}), updated_at: updatedAt };
+    analysis.update(current => (current?.id === id ? { ...current, ...patch, updated_at: updatedAt } : current));
+  }
+  if (!queue.conflict) {
+    setSaveStatus(id, 'saved');
+  }
+}
+
+/** Sends the analysis's waiting changes unless a save is already in flight (which then sends them next). */
+function startSave(queue: SaveQueue): Promise<void> {
+  if (!queue.running) {
+    queue.running = drainSaveQueue(queue).finally(() => {
+      queue.running = null;
+      if (!queue.pending && get(analysis)?.id !== queue.base.id) {
+        saveQueues.delete(queue.base.id);
+      }
+    });
+  }
+  return queue.running;
+}
+
+function requestSave(current: AnalysisSlim, patch: AnalysisPatch, user: User | null): SaveQueue {
+  const queue = getSaveQueue(current, user);
+  queue.pending = { ...queue.pending, ...patch };
+  if (!queue.conflict) {
+    setSaveStatus(current.id, 'unsaved');
+  }
+  return queue;
+}
+
+const saveSoon = debounce(() => saveQueues.forEach(queue => queue.pending && startSave(queue)), 1000);
+
+/** Sends every waiting save now (leaving the page, say, or retrying one that failed). */
+export function flushAnalysisSave(): Promise<void> {
+  saveSoon.cancel();
+  return Promise.all([...saveQueues.values()].filter(queue => queue.pending).map(startSave)).then(() => {});
 }
 
 /**
@@ -1087,21 +1280,25 @@ export function autosaveAnalysis(user: User | null): () => void {
   if (!user || !current || !featurePermissions.analysis.canUpdate(user, current)) {
     return () => {};
   }
-  saveUser = user;
+  const queue = getSaveQueue(current, user);
   let first = true;
-  const unsubscribe = derived([analysisSourceBindings, view, analysisAnnotations], values => values).subscribe(() => {
-    if (first) {
-      first = false;
-      return;
-    }
-    if (get(analysis) && get(analysisSaveStatus) !== 'conflict') {
-      analysisSaveStatus.set('unsaved');
+  const unsubscribe = derived([analysisSourceBindings, view, analysisAnnotations], values => values).subscribe(
+    ([sources, currentView, annotations]) => {
+      if (first) {
+        first = false;
+        return;
+      }
+      if (get(analysis)?.id !== current.id || !currentView || queue.conflict) {
+        return;
+      }
+      // Captured now: the stores may hold another analysis by the time this is sent.
+      requestSave(current, { definition: { annotations, sources, version: 1, view: currentView.definition } }, user);
       saveSoon();
-    }
-  });
+    },
+  );
   return () => {
     unsubscribe();
-    saveSoon.flush();
+    flushAnalysisSave();
   };
 }
 
@@ -1174,6 +1371,82 @@ export async function analyzeRevision(
   );
 }
 
+/** A SeqDev workspace file, as "Analyze sequence" reads it. */
+export type WorkspaceSequenceFile = {
+  /** The seqJSON read: the file's own bytes, or, for a file in another language, the adaptation's conversion. */
+  content: string;
+  /** Set when `content` is a conversion: the language of the file it was converted from. */
+  convertedFrom?: string;
+  path: string;
+  workspaceId: number;
+  workspaceName: string;
+};
+
+/**
+ * "Analyze sequence" on a seqJSON file in a SeqDev workspace. Workspace files keep no versions, so the analysis reads
+ * a snapshot: the file's bytes, imported as a revision of a source named for the workspace and path. The same bytes
+ * analyzed again reuse their revision (by content hash); changed bytes become a new revision, which an analysis of
+ * the old one offers as an update and never takes on its own. Later edits in SeqDev change nothing analyzed. A file
+ * moved or renamed is another source: the workspace keeps no identity across a move. Returns the analysis's id, or
+ * null (reported) when the import or the analysis failed.
+ */
+export async function analyzeWorkspaceSequence(
+  file: WorkspaceSequenceFile,
+  user: User | null,
+  wait: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms)),
+): Promise<number | null> {
+  const name = `${file.workspaceName}/${file.path}`;
+  const bytes = new TextEncoder().encode(file.content);
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  const contentHash = `sha256:${[...digest].map(byte => byte.toString(16).padStart(2, '0')).join('')}`;
+  const source = await effects.getSourceByName(name, user);
+  if (source === null) {
+    showFailureToast('The Sequence Could Not Be Analyzed');
+    return null;
+  }
+  let revision = source?.revisions.find(r => r.content_hash === contentHash && r.status === 'success') ?? null;
+  let sourceId = source?.id;
+  if (!revision) {
+    const imported = await effects.importSourceRevision(
+      new File(
+        [bytes],
+        `${(file.path.split('/').pop() || 'sequence').replace(/\.seq\.json$/, '').replace(/\.[^.]*$/, '')}.seq.json`,
+        { type: 'application/json' },
+      ),
+      source ? { owner: source.owner, sourceId: source.id } : { sourceName: name },
+      'seq_json',
+      user,
+      {
+        workspaceFile: {
+          path: file.path,
+          workspaceId: file.workspaceId,
+          workspaceName: file.workspaceName,
+          ...(file.convertedFrom ? { convertedFrom: file.convertedFrom } : {}),
+        },
+      },
+    );
+    if (!imported) {
+      return null;
+    }
+    sourceId = imported.sourceId;
+    // ponytail: polls the import for up to a minute; a seqJSON file ingests in well under a second.
+    for (let tries = 0; tries < 120; tries++) {
+      revision = await effects.getSourceRevisionStatus(imported.revisionId, user);
+      if (revision && revision.status !== 'pending' && revision.status !== 'incomplete') {
+        break;
+      }
+      await wait(500);
+    }
+    if (revision?.status !== 'success') {
+      showFailureToast(
+        revision?.status === 'failed' ? 'The Sequence Could Not Be Read As seqJSON' : 'The Sequence Is Still Importing',
+      );
+      return null;
+    }
+  }
+  return analyzeRevision({ id: sourceId as number, name }, revision, user);
+}
+
 /**
  * A new analysis of one imported revision, useful when it opens: it opens on the revision's coverage (every analysis
  * does, from its sources) and, unless there are too many to load at once, has a row of its activities. Its resources
@@ -1190,6 +1463,8 @@ export async function createRevisionAnalysis(
   if (activityCount > 0 && activityCount <= INITIAL_ACTIVITY_ROW_LIMIT) {
     const [timeline] = definition.view.plan.timelines;
     timeline.rows = [createSourceActivityRow(definition.view.plan.timelines, 'source-1', 'Activities')];
+    // The timeline draws what its order names.
+    timeline.items = timeline.rows.map(({ id }) => ({ id, type: 'row' as const }));
   }
   return effects.createAnalysis(`${sourceName} analysis`, { ...definition, sources }, user);
 }
@@ -1229,6 +1504,7 @@ export async function createPlanAnalysis(
         createSourceActivityRow(definition.view.plan.timelines, source.id, 'Activities'),
       ];
     });
+    timeline.items = timeline.rows.map(({ id }) => ({ id, type: 'row' as const }));
   }
   return effects.createAnalysis(`${plan.name} analysis`, { ...definition, sources }, user);
 }
@@ -1236,11 +1512,8 @@ export async function createPlanAnalysis(
 export async function renameAnalysis(name: string, user: User | null) {
   const current = get(analysis);
   if (current && name && name !== current.name) {
-    const updatedAt = await effects.updateAnalysis(current, { name }, user);
-    if (updatedAt === 'conflict') {
-      analysisSaveStatus.set('conflict');
-    } else if (updatedAt) {
-      analysis.set({ ...current, name, updated_at: updatedAt });
-    }
+    // In the same queue as the autosave, so the two never race on one revision.
+    const queue = requestSave(current, { name }, user);
+    await startSave(queue);
   }
 }

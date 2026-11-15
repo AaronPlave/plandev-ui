@@ -8,10 +8,11 @@ import { importViewTimeline } from '../utilities/analysisViewImport';
 import { createRow, createTimelineActivityLayer, createTimelineLineLayer, createYAxis } from '../utilities/timeline';
 
 const effects = vi.hoisted(() => ({
+  createNamedView: vi.fn(),
   getAnalysisPlans: vi.fn(async () => []),
   getAnalysisSimulationDatasets: vi.fn(async () => []),
   getAnalysisSourceRecovery: vi.fn(async () => ({})),
-  getAnalysisSourceRevisions: vi.fn(async () => []),
+  getAnalysisSourceRevisions: vi.fn(async (_ids: number[]): Promise<unknown[]> => []),
   getPlanSourcesForImport: vi.fn(),
   getView: vi.fn(),
   updateAnalysis: vi.fn(),
@@ -33,8 +34,11 @@ const {
   closeAnalysis,
   openAnalysis,
   readViewForTimelineImport,
+  readViewPresentation,
   replaceAnalysisTimeline,
+  saveAnalysisLayoutAsView,
 } = await import('./analysis');
+const { getInitialRoleMapping, getPresentationRoles } = await import('../utilities/analysisPresentation');
 const { view } = await import('./views');
 
 const owner = {
@@ -202,5 +206,103 @@ describe('loading a saved view into an open analysis', () => {
 
     effects.getPlanSourcesForImport.mockResolvedValueOnce(null);
     expect(await readViewForTimelineImport(12, owner)).toBeNull();
+  });
+});
+
+describe('a layout saved from an analysis', () => {
+  /** cruise015 revision 217, with one resource. */
+  const revision = (id: number) => ({
+    activity_types: [],
+    coverage_end: null,
+    coverage_start: null,
+    id,
+    metadata: {},
+    requested_at: '2026-10-03T12:00:00Z',
+    resources: [{ key: 'BusPower', schema: { type: 'real' }, units: 'W' }],
+    source: { id: 5, latest: [], name: 'cruise015', source_type: 'pef' },
+    status: 'success',
+  });
+
+  function powerAnalysis(revisionId: number): Analysis {
+    const definition = createAnalysisDefinition();
+    definition.sources = [{ id: 'source-1', kind: 'imported', label: 'Power telemetry', revisionId, sourceId: 5 }];
+    const timelines = definition.view.plan.timelines;
+    const axis = createYAxis(timelines, {});
+    timelines[0].rows = [
+      createRow(timelines, {
+        id: 1,
+        layers: [createTimelineLineLayer(timelines, [axis], { filter: { resource: 'BusPower' }, sourceId: 'source-1' })],
+        name: 'Power',
+        yAxes: [axis],
+      }),
+    ];
+    return { created_at: '', definition, id: 4, name: 'Cruise power', owner: 'test', updated_at: '' };
+  }
+
+  beforeEach(() => {
+    effects.getAnalysisSourceRevisions.mockImplementation(async (ids: number[]) =>
+      ids.filter(id => id !== 217 || !deleted).map(revision),
+    );
+    effects.createNamedView.mockResolvedValue(30);
+  });
+  afterEach(() => {
+    closeAnalysis();
+    deleted = false;
+    vi.clearAllMocks();
+  });
+  let deleted = false;
+
+  async function saveLayout() {
+    await openAnalysis(powerAnalysis(217), owner);
+    await saveAnalysisLayoutAsView('Power review', owner);
+    const [definition] = effects.createNamedView.mock.calls[0] as unknown as [View['definition']];
+    return definition;
+  }
+
+  it('says what each source was: its role, its source, its name and the resources read', async () => {
+    const definition = await saveLayout();
+    expect(definition.plan.timelines[0].rows[0].layers[0].sourceId).toBe('revision:217');
+    expect(definition.analysisLayout?.sources['revision:217']).toEqual({
+      binding: { kind: 'imported', label: 'Power telemetry', revisionId: 217, sourceId: 5, sourceName: 'cruise015' },
+      name: expect.stringContaining('cruise015'),
+      resources: { BusPower: { type: 'real', unit: 'W' } },
+    });
+  });
+
+  it('keeps the role when its revision is gone, and suggests the same source\'s other revision', async () => {
+    const definition = await saveLayout();
+    closeAnalysis();
+    deleted = true;
+    effects.getView.mockResolvedValue({ created_at: '', definition, id: 30, name: 'Power review', owner: 'test' });
+    const read = await readViewPresentation(30, owner);
+    if (!read || read === 'plan-view') {
+      throw Error('not read as a layout');
+    }
+    expect(read.names['revision:217']).toMatch(/^Power telemetry — originally cruise015/);
+    // Its rows can still be checked against what it read.
+    expect(read.catalogs['revision:217'].resources?.get('BusPower')).toEqual({ type: 'real', unit: 'W' });
+    const roles = getPresentationRoles(read.timeline, read.bindings);
+    expect(getInitialRoleMapping(roles, [{ id: 'source-1', kind: 'imported', revisionId: 244, sourceId: 5 }])).toEqual(
+      { 'revision:217': 'source-1' },
+    );
+  });
+
+  it('is a layout even with no data layers, and is used as it is', async () => {
+    const definition = await saveLayout();
+    definition.plan.timelines[0].rows = [{ ...definition.plan.timelines[0].rows[0], layers: [], yAxes: [] }];
+    effects.getView.mockResolvedValue({ created_at: '', definition, id: 30, name: 'Sections only', owner: 'test' });
+    const read = await readViewPresentation(30, owner);
+    expect(read).not.toBe('plan-view');
+    const timeline = (read as Exclude<typeof read, 'plan-view' | null>).timeline;
+    expect(replaceAnalysisTimeline(timeline, owner)).toBe(false); // looks like nothing mapped
+    expect(replaceAnalysisTimeline(timeline, owner, 'Sections only', { dataless: true })).toBe(true);
+  });
+
+  it('still reads a layout saved before layouts described their sources', async () => {
+    const definition = await saveLayout();
+    delete definition.analysisLayout;
+    effects.getView.mockResolvedValue({ created_at: '', definition, id: 30, name: 'Old', owner: 'test' });
+    const read = await readViewPresentation(30, owner);
+    expect(read && read !== 'plan-view' && read.bindings.map(({ id }) => id)).toEqual(['revision:217']);
   });
 });

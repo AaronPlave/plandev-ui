@@ -1,6 +1,7 @@
 <svelte:options immutable={true} />
 
 <script lang="ts">
+  import PinIcon from 'lucide-svelte/icons/pin';
   import type { Edge } from '@atlaskit/pragmatic-drag-and-drop-hitbox/closest-edge';
   import { monitorForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
   import type { ScaleTime } from 'd3-scale';
@@ -93,6 +94,15 @@
   export let selectedActivityDirectiveId: ActivityDirectiveId | null = null;
   export let selectedExternalEventId: ExternalEventId | null = null;
   export let selectedSpanId: SpanId | null = null;
+  /** Grouped rows open their tree to show the selected activity in its place (an Analysis). */
+  export let revealSelection: boolean = false;
+  /**
+   * Guides a note explains, marked "¶" after their label (display only): time guides by id, value guides by
+   * "rowId:guideId". The note is in the Notes panel, under the guide's name.
+   */
+  export let explainedGuides: { time: number[]; value: string[] } = { time: [], value: [] };
+  /** Guide labels and the row menu open a guide's note (dispatched as `guideNote`). */
+  export let guideNotes: boolean = false;
   export let simulation: Simulation | null = null;
   export let simulationDataset: SimulationDataset | null = null;
   export let spanUtilityMaps: SpanUtilityMaps;
@@ -199,6 +209,7 @@
     decimate,
     dpr,
     drawWidth,
+    explainedValueGuides: explainedGuides.value,
     externalEvents: externalEventsFilteredByDG,
     hasUpdateDirectivePermission,
     interpolateHoverValue,
@@ -208,6 +219,7 @@
     planEndTimeDoy,
     planStartTimeYmd,
     readOnly,
+    revealSelection,
     rowDragMoveDisabled,
     rowHeaderDragHandleWidthPx,
     selectedActivityDirectiveId,
@@ -720,6 +732,9 @@
       marginLeft={timeline?.marginLeft}
       {mouseOver}
       verticalGuides={timeline?.verticalGuides}
+      explainedGuideIds={explainedGuides.time}
+      {guideNotes}
+      on:guideNote
       {readOnly}
       {xScaleView}
       on:updateVerticalGuides
@@ -800,6 +815,17 @@
                     on:deleteSection={() => onDeleteSection(section)}
                   />
                 </div>
+                {#if section.pinned}
+                  <button
+                    class="pin-badge section"
+                    style:left="{(timeline?.marginLeft ?? 0) - 18}px"
+                    disabled={readOnly}
+                    aria-label="Unpin section {section.name}"
+                    title={readOnly ? 'Pinned' : 'Pinned: click to unpin'}
+                    on:click={() => viewUpdateSection('pinned', undefined, section.id, timeline?.id)}
+                    ><PinIcon size={11} /></button
+                  >
+                {/if}
                 {#if !section.collapsed && section.rowIds.length === 0}
                   <!-- An empty section used to render as nothing, which read as broken. The whole
                      strip accepts a row; the affordance is drawn in the row-header gutter. -->
@@ -830,6 +856,18 @@
                         use:makeDraggable={{ itemId: row.id, itemType: 'row', sectionId: section.id }}
                         use:makeDropTarget={{ itemId: row.id, itemType: 'row', sectionId: section.id }}
                       >
+                        {#if row.pinned}
+                          <!-- Pinned: said where the row is, with the way out. -->
+                          <button
+                            class="pin-badge"
+                            style:left="{(timeline?.marginLeft ?? 0) - 18}px"
+                            disabled={readOnly}
+                            aria-label="Unpin {row.name}"
+                            title={readOnly ? 'Pinned' : 'Pinned: click to unpin'}
+                            on:click={() => viewUpdateRow('pinned', undefined, timeline?.id, row.id)}
+                            ><PinIcon size={11} /></button
+                          >
+                        {/if}
                         <TimelineRowItem
                           {row}
                           index={rowIndex}
@@ -865,6 +903,18 @@
                 use:makeDraggable={{ itemId: row.id, itemType: 'row', sectionId: null }}
                 use:makeDropTarget={{ itemId: row.id, itemType: 'row', sectionId: null }}
               >
+                {#if row.pinned}
+                  <!-- Pinned: said where the row is, with the way out. -->
+                  <button
+                    class="pin-badge"
+                    style:left="{(timeline?.marginLeft ?? 0) - 18}px"
+                    disabled={readOnly}
+                    aria-label="Unpin {row.name}"
+                    title={readOnly ? 'Pinned' : 'Pinned: click to unpin'}
+                    on:click={() => viewUpdateRow('pinned', undefined, timeline?.id, row.id)}
+                    ><PinIcon size={11} /></button
+                  >
+                {/if}
                 <TimelineRowItem
                   {row}
                   index={i}
@@ -925,6 +975,9 @@
     {spanUtilityMaps}
     {plan}
     verticalGuides={timeline?.verticalGuides ?? []}
+    {guideNotes}
+    explainedValueGuides={explainedGuides.value}
+    on:guideNote
     {xScaleView}
     {user}
     on:toggleActivityComposition
@@ -1011,6 +1064,26 @@
   .timeline-section-wrapper,
   .timeline-row-wrapper {
     position: relative;
+  }
+
+  .pin-badge {
+    align-items: center;
+    background: var(--st-gray-15);
+    border: 0;
+    border-radius: 3px;
+    color: var(--st-gray-70);
+    display: flex;
+    height: 16px;
+    justify-content: center;
+    position: absolute;
+    top: 3px;
+    width: 16px;
+    z-index: 10;
+  }
+
+  .pin-badge:not(:disabled):hover {
+    background: var(--st-gray-30);
+    color: var(--st-gray-100);
   }
 
   /* Editing a section outlines the whole block, header and rows, the way editing a row outlines

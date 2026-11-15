@@ -590,6 +590,16 @@ async function bulkMoveWorkspaceItems(
 /**
  * Functions that have side-effects (e.g. HTTP requests, toasts, popovers, store updates, etc.).
  */
+type SourceRevisionStatusRow = {
+  activity_types_aggregate: { aggregate: { sum: { count: number | null } | null } | null };
+  id: number;
+  status: string;
+};
+
+function toRevisionStatus<T extends SourceRevisionStatusRow>({ activity_types_aggregate, ...rest }: T) {
+  return { ...rest, activityCount: activity_types_aggregate.aggregate?.sum?.count ?? 0 };
+}
+
 const effects = {
   async applyActivitiesByFilter(
     filter: SequenceFilter,
@@ -5805,6 +5815,63 @@ const effects = {
     }
   },
 
+  /** A source by its exact name, with its revisions (newest first): undefined when there is none, null on failure. */
+  async getSourceByName(
+    name: string,
+    user: User | null,
+  ): Promise<
+    | {
+        id: number;
+        name: string;
+        owner: UserId | null;
+        revisions: { activityCount: number; content_hash: string | null; id: number; status: string }[];
+      }
+    | undefined
+    | null
+  > {
+    try {
+      type Row = {
+        id: number;
+        name: string;
+        owner: UserId | null;
+        revisions: (SourceRevisionStatusRow & { content_hash: string | null })[];
+      };
+      const data = await reqHasura<Row[]>(gql.GET_SOURCE_BY_NAME, { name }, user);
+      const [source] = data.sources ?? [];
+      return source
+        ? { ...source, revisions: source.revisions.map(revision => toRevisionStatus(revision)) }
+        : undefined;
+    } catch (e) {
+      catchError('log', 'Unable to retrieve the source', e as Error);
+      return null;
+    }
+  },
+
+  /** One revision's import status, or null when it can't be read. */
+  async getSourceRevisionStatus(
+    id: number,
+    user: User | null,
+  ): Promise<{
+    activityCount: number;
+    content_hash: string | null;
+    error?: string | null;
+    id: number;
+    status: string;
+  } | null> {
+    try {
+      const data = await reqHasura<(SourceRevisionStatusRow & { content_hash: string | null; error: string | null })[]>(
+        gql.GET_SOURCE_REVISION_STATUS,
+        { id },
+        user,
+      );
+      const [revision] = data.revisions ?? [];
+      return revision ? toRevisionStatus(revision) : null;
+    } catch (e) {
+      catchError('log', 'Unable to retrieve the import status', e as Error);
+      return null;
+    }
+  },
+
   async getSpan(datasetId: number, spanId: number, user: User | null): Promise<SpanDB | null> {
     try {
       const data = await reqHasura<SpanDB>(gql.GET_SPAN, { datasetId, spanId }, user);
@@ -6365,6 +6432,8 @@ const effects = {
     target: { owner: UserId | null; sourceId: number } | { sourceName: string },
     adapter: string,
     user: User | null,
+    /** More facts to keep with the revision, e.g. the workspace file it is a snapshot of. */
+    metadata: Record<string, unknown> = {},
   ): Promise<{ owner: UserId | null; revisionId: number; sourceId: number } | null> {
     try {
       const allowed =
@@ -6399,7 +6468,7 @@ const effects = {
         {
           revision: {
             adapter,
-            metadata: { originalFileName: file.name },
+            metadata: { ...metadata, originalFileName: file.name },
             original_file_id: fileId,
             source_id: sourceId,
             storage_kind: 'pg_chunks_v1',
