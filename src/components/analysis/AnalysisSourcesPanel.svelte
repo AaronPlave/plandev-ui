@@ -1,43 +1,39 @@
 <svelte:options immutable={true} />
 
 <!--
-  The analysis's sources: what each one is (its name, which version of its data, the analysis's alias for it), its
-  details on demand, an update when a newer revision of an imported source exists, and the Sources browser to add
-  their resources and activities as rows.
+  The analysis's sources, each once, as one tree: open a source to add its resources and activities to the timeline,
+  click its name to inspect it (identity, revision, coverage, provenance, import), and find the rest in its menu. A
+  simulation of a plan that is also a source sits under that plan, with the plan's other simulations ready to add.
+  What needs attention (a failed import, a deleted revision, a newer one) is said on the source's row.
 -->
 <script lang="ts">
-  import { Badge, Button } from '@nasa-jpl/stellar-svelte';
-  import { CalendarRange, Database, Info, Pencil, Play, X } from 'lucide-svelte';
+  import { Button } from '@nasa-jpl/stellar-svelte';
   import { createEventDispatcher } from 'svelte';
-  import { getAuthoredMission } from '../../utilities/analysisSequence';
   import {
+    addAnalysisSource,
     analysisPlans,
-    analysisSequenceFocus,
     analysisSimulationDatasets,
     analysisSourceRecovery,
     analysisSourceRevisions,
-    rebindAnalysisSource,
+    inspect,
     removeAnalysisSource,
-    setAnalysisSourceLabel,
   } from '../../stores/analysis';
+  import { view } from '../../stores/views';
   import type {
     AnalysisPlan,
+    AnalysisPlanSimulationDataset,
     AnalysisSimulationDataset,
     AnalysisSourceBinding,
     AnalysisSourceRevision,
     SourceRecovery,
   } from '../../types/analysis';
   import type { User } from '../../types/app';
-  import type { TimelineSourceRegistry } from '../../types/timelineSource';
-  import {
-    formatRange,
-    getAnalysisSourceNames,
-    getNewerRevision,
-    getRevisionVersionLabel,
-  } from '../../utilities/analysis';
-  import { getIntervalInMs } from '../../utilities/time';
-  import { getSource } from '../../utilities/timelineSources';
-  import SourceBrowser from '../sources/SourceBrowser.svelte';
+  import type { Layer, Row } from '../../types/timeline';
+  import type { SourceBrowserAction, TimelineSourceRegistry } from '../../types/timelineSource';
+  import { getNewerRevision } from '../../utilities/analysis';
+  import { getAuthoredMission, getAuthoredSections } from '../../utilities/analysisSequence';
+  import { addSourceItem, dragSourceItem } from '../sources/sourceBrowserActions';
+  import AnalysisSourceNode, { type SourceStatus } from './AnalysisSourceNode.svelte';
 
   export let bindings: AnalysisSourceBinding[] = [];
   export let registry: TimelineSourceRegistry;
@@ -46,78 +42,112 @@
 
   const dispatch = createEventDispatcher<{ addSource: void }>();
 
-  let detailsShown: Record<string, boolean> = {};
-  let renaming: string | null = null;
-  /** The replacement chosen for a source whose revision was deleted; the newest successful one until chosen. */
-  let replacements: Record<string, number> = {};
+  let expanded: Record<string, boolean> = {};
+  let filterText: string = '';
 
-  // What each source is, recomputed whenever the details it is built from arrive or change.
-  $: described = Object.fromEntries(
-    bindings.map(binding => [
-      binding.id,
-      describe(
-        binding,
-        $analysisSourceRevisions,
-        $analysisSimulationDatasets,
-        $analysisPlans ?? [],
-        $analysisSourceRecovery,
-      ),
-    ]),
+  $: rows = $view?.definition.plan.timelines[0]?.rows ?? [];
+  $: sources = Object.fromEntries(registry.sources.map(source => [source.id, source]));
+  $: labels = Object.fromEntries(registry.sources.map(source => [source.id, source.label]));
+  const plansLoading = analysisPlans.loading;
+  $: statuses = getStatuses(
+    bindings,
+    $analysisPlans ?? [],
+    $plansLoading,
+    $analysisSimulationDatasets,
+    $analysisSourceRevisions,
+    $analysisSourceRecovery,
   );
-  // Two revisions of one source on one day have the same short name: tell them apart by their full version.
-  $: duplicated = new Set(
-    Object.values(described)
-      .map(info => info.label)
-      .filter((label, index, all) => all.indexOf(label) !== index),
+  $: sequenceSteps = Object.fromEntries(
+    bindings.flatMap(binding => {
+      const mission =
+        binding.kind === 'imported'
+          ? getAuthoredMission($analysisSourceRevisions.find(({ id }) => id === binding.revisionId))
+          : null;
+      return mission
+        ? [[binding.id, getAuthoredSections(mission).reduce((n, section) => n + section.entries.length, 0)]]
+        : [];
+    }),
   );
-  // Only the kinds of source the analysis has: an analysis of one plan shows no empty "Imported Sources".
-  $: browserGroups = ['Imported Sources', 'Plans', 'Simulations'].filter(group =>
-    registry.sources.some(source => source.group === group),
+  // Each bound plan's simulations, newest first, with the binding that reads each one.
+  $: planSimulations = Object.fromEntries(
+    bindings.flatMap(binding => {
+      if (binding.kind !== 'plan') {
+        return [];
+      }
+      const plan = ($analysisPlans ?? []).find(({ id }) => id === binding.planId);
+      const datasets: AnalysisPlanSimulationDataset[] = (plan?.simulations ?? [])
+        .flatMap(simulation => simulation.simulation_datasets)
+        .sort((a, b) => b.id - a.id);
+      return [
+        [
+          binding.id,
+          datasets.map(dataset => ({
+            binding: bindings.find(b => b.kind === 'simulation' && b.simulationDatasetId === dataset.id),
+            dataset,
+          })),
+        ],
+      ];
+    }),
   );
+  // A simulation shown under its plan is not shown again at the top.
+  $: nested = new Set(
+    Object.values(planSimulations).flatMap(simulations => simulations.flatMap(s => (s.binding ? [s.binding.id] : []))),
+  );
+  $: topLevel = bindings.filter(binding => !nested.has(binding.id));
 
-  function describe(
-    binding: AnalysisSourceBinding,
-    revisions: AnalysisSourceRevision[],
-    datasets: AnalysisSimulationDataset[],
+  function getStatuses(
+    all: AnalysisSourceBinding[],
     plans: AnalysisPlan[],
+    plansLoading: boolean,
+    datasets: AnalysisSimulationDataset[],
+    revisions: AnalysisSourceRevision[],
     recoveries: Record<number, SourceRecovery | null>,
-  ) {
-    const revision = binding.kind === 'imported' ? revisions.find(({ id }) => id === binding.revisionId) : undefined;
-    const dataset =
-      binding.kind === 'simulation' ? datasets.find(({ id }) => id === binding.simulationDatasetId) : undefined;
-    const plan = binding.kind === 'plan' ? plans.find(({ id }) => id === binding.planId) : undefined;
-    // What is left of the source when its bound revision is gone (null: the source is gone too).
-    const recovery =
-      binding.kind === 'imported' && !revision && binding.sourceId !== undefined
-        ? recoveries[binding.sourceId]
-        : undefined;
-    const newer = getNewerRevision(revision);
-    return {
-      ...getAnalysisSourceNames(binding, { dataset, plan, revision, source: recovery }),
-      dataset,
-      // Not offered when the newer revision is already here too (comparing revisions).
-      newer: bindings.some(b => b.kind === 'imported' && b.revisionId === newer?.id) ? null : newer,
-      plan,
-      recovery,
-      revision,
+  ): Record<string, SourceStatus | null> {
+    const getStatus = (binding: AnalysisSourceBinding): SourceStatus | null => {
+      if (binding.kind === 'plan') {
+        return plans.some(({ id }) => id === binding.planId) || plansLoading
+          ? { text: 'Live', tone: 'muted' }
+          : { text: 'Plan deleted', tone: 'error' };
+      }
+      if (binding.kind === 'simulation') {
+        const dataset = datasets.find(({ id }) => id === binding.simulationDatasetId);
+        return dataset && dataset.status !== 'success'
+          ? { text: dataset.status, tone: dataset.status === 'failed' ? 'error' : 'muted' }
+          : null;
+      }
+      const revision = revisions.find(({ id }) => id === binding.revisionId);
+      if (!revision) {
+        const recovery = binding.sourceId === undefined ? undefined : recoveries[binding.sourceId];
+        return recovery === undefined
+          ? null
+          : { text: recovery === null ? 'Source deleted' : 'Revision deleted', tone: 'error' };
+      }
+      if (revision.status === 'failed') {
+        return { text: 'Import failed', tone: 'error' };
+      }
+      if (revision.status !== 'success') {
+        return { text: 'Importing…', tone: 'muted' };
+      }
+      const newer = getNewerRevision(revision);
+      return newer && !all.some(b => b.kind === 'imported' && b.revisionId === newer.id)
+        ? { text: 'Newer revision', tone: 'warning' }
+        : null;
     };
+    return Object.fromEntries(all.map(binding => [binding.id, getStatus(binding)]));
   }
 
-  /** "Imported Oct 2, 2026, 18:58 UTC" as "Oct 2, 18:58": what tells two revisions of one day apart, in little room. */
-  function shortVersion(version: string): string {
-    return version
-      .replace(/^Imported /, '')
-      .replace(/, \d{4}/, '')
-      .replace(' UTC', '');
+  function onAdd({
+    detail: { action, layer, row },
+  }: CustomEvent<{ action: SourceBrowserAction; layer?: Layer; row?: Row }>) {
+    addSourceItem(registry, action, row, layer);
   }
 
-  function onRename(binding: AnalysisSourceBinding, event: Event) {
-    setAnalysisSourceLabel(binding.id, (event.currentTarget as HTMLInputElement).value);
-    renaming = null;
+  function onDragStart({ detail: { action, event } }: CustomEvent<{ action: SourceBrowserAction; event: DragEvent }>) {
+    dragSourceItem(registry, action, event);
   }
 
-  function planEnd(plan: { duration: string; start_time: string }) {
-    return new Date(Date.parse(plan.start_time) + getIntervalInMs(plan.duration)).toISOString();
+  function onToggle({ detail: { id, open } }: CustomEvent<{ id: string; open: boolean }>) {
+    expanded = { ...expanded, [id]: !open };
   }
 </script>
 
@@ -126,226 +156,43 @@
     <span class="st-typography-medium">Sources</span>
     <Button size="xs" variant="outline" disabled={readOnly} on:click={() => dispatch('addSource')}>Add Source</Button>
   </div>
-
-  <!-- What the analysis reads (kept apart from the browser below, which only looks inside them). -->
-  <div class="section-label st-typography-label">Attached to this analysis ({bindings.length})</div>
-  <ul class="bound" aria-label="Analysis sources">
-    {#each bindings as binding (binding.id)}
-      {@const source = getSource(registry, binding.id)}
-      {@const info = described[binding.id]}
-      <li class="bound-source">
-        <div class="flex items-center gap-1" title="{info.name} · {info.version}">
-          <svelte:component
-            this={binding.kind === 'plan' ? CalendarRange : binding.kind === 'simulation' ? Play : Database}
-            size={14}
-            class="shrink-0 text-muted-foreground"
-          />
-          {#if renaming === binding.id}
-            <input
-              class="st-input min-w-0 flex-1"
-              aria-label="Name in this analysis"
-              placeholder={info.name}
-              value={binding.label ?? ''}
-              on:change={event => onRename(binding, event)}
-              on:blur={() => (renaming = null)}
-            />
-          {:else}
-            <div class="min-w-0 flex-1 truncate font-medium">
-              {duplicated.has(info.label) ? `${info.name} · ${shortVersion(info.version)}` : info.label}
-              {#if binding.kind === 'plan'}
-                <Badge variant="secondary" class="ml-1 px-1 py-0 text-[10px]">Live</Badge>
-              {/if}
-            </div>
-          {/if}
-          <div class="flex shrink-0">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Details of {info.label}"
-              aria-expanded={!!detailsShown[binding.id]}
-              on:click={() => (detailsShown = { ...detailsShown, [binding.id]: !detailsShown[binding.id] })}
-            >
-              <Info size={13} />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Rename {info.label} in this analysis"
-              disabled={readOnly}
-              on:click={() => (renaming = binding.id)}
-            >
-              <Pencil size={13} />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Remove {info.label}"
-              disabled={readOnly}
-              on:click={() => removeAnalysisSource(binding.id, user)}
-            >
-              <X size={14} />
-            </Button>
-          </div>
-        </div>
-        {#if source?.resources?.unavailableReason}
-          <div class="text-[11px] text-red-700">{source.resources.unavailableReason}</div>
-        {/if}
-
-        {#if info.newer && !readOnly}
-          <div class="newer">
-            <span>Newer: {getRevisionVersionLabel(info.newer)}</span>
-            <Button
-              size="xs"
-              variant="outline"
-              on:click={() =>
-                info.newer &&
-                info.revision &&
-                rebindAnalysisSource(
-                  binding.id,
-                  {
-                    kind: 'imported',
-                    revisionId: info.newer.id,
-                    sourceId: info.revision.source.id,
-                    sourceName: info.revision.source.name,
-                  },
-                  user,
-                )}>Use it</Button
-            >
-          </div>
-        {/if}
-
-        {#if info.recovery !== undefined}
-          {@const recovery = info.recovery}
-          {#if recovery === null}
-            <div class="text-[11px] text-red-700">
-              The source was deleted, so its data is gone. Remove it from this analysis; rows that show it are removed
-              with it.
-            </div>
-          {:else if !recovery.revisions.length}
-            <div class="text-[11px] text-red-700">This revision was deleted, and no successful revision remains.</div>
-          {:else if !readOnly}
-            {@const bound = new Set(bindings.flatMap(b => (b.kind === 'imported' ? [b.revisionId] : [])))}
-            {@const choice =
-              replacements[binding.id] ??
-              recovery.revisions.find(({ id }) => !bound.has(id))?.id ??
-              recovery.revisions[0].id}
-            <div class="text-[11px] text-red-700">
-              This revision was deleted. Its rows stay on this source; pick a revision to show them again.
-            </div>
-            <div class="newer">
-              <select
-                class="st-select min-w-0 flex-1"
-                aria-label="Replacement revision for {info.label}"
-                value={choice}
-                on:change={event =>
-                  (replacements = { ...replacements, [binding.id]: Number(event.currentTarget.value) })}
-              >
-                {#each recovery.revisions as revision (revision.id)}
-                  <option value={revision.id} disabled={bound.has(revision.id)}
-                    >{getRevisionVersionLabel(revision)}{revision.id === recovery.revisions[0].id
-                      ? ' · latest'
-                      : ''}</option
-                  >
-                {/each}
-              </select>
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={bound.has(choice)}
-                on:click={() =>
-                  rebindAnalysisSource(
-                    binding.id,
-                    { kind: 'imported', revisionId: choice, sourceId: recovery.id, sourceName: recovery.name },
-                    user,
-                  )}>Use it</Button
-              >
-            </div>
-          {:else}
-            <div class="text-[11px] text-red-700">This revision was deleted.</div>
-          {/if}
-        {/if}
-
-        {#if detailsShown[binding.id]}
-          <dl class="details" aria-label="Details of {info.label}">
-            {#if info.revision}
-              {@const revision = info.revision}
-              <dt>Source</dt>
-              <dd>{revision.source.name}</dd>
-              <dt>Revision</dt>
-              <dd>{getRevisionVersionLabel(revision)}</dd>
-              {#if revision.metadata?.product?.suggestedName}
-                <dt>Product</dt>
-                <dd>{revision.metadata.product.suggestedName}</dd>
-              {/if}
-              <dt>File</dt>
-              <dd>{revision.metadata?.originalFileName ?? revision.original_file?.name ?? 'Read from the server'}</dd>
-              <dt>Covers</dt>
-              <dd>{formatRange(revision.coverage_start, revision.coverage_end)}</dd>
-              <dt>Contents</dt>
-              <dd>
-                {revision.resources.length.toLocaleString()} resources ·
-                {revision.activity_types.reduce((total, type) => total + type.count, 0).toLocaleString()} activities
-              </dd>
-              <dt>Import</dt>
-              <dd>
-                {revision.status}{revision.finished_at
-                  ? ` · ${revision.finished_at.slice(0, 16).replace('T', ' ')}`
-                  : ''}
-              </dd>
-              <dt>Format</dt>
-              <dd>{revision.adapter}{revision.adapter_version ? ` ${revision.adapter_version}` : ''}</dd>
-              {#if revision.content_hash}
-                <dt>Content hash</dt>
-                <dd class="truncate" title={revision.content_hash}>{revision.content_hash}</dd>
-              {/if}
-              {@const mission = getAuthoredMission(revision)}
-              {#if mission}
-                <dt>Sequence</dt>
-                <dd>
-                  {mission.sequenceId} · {mission.steps.length} steps
-                  <button
-                    class="text-primary underline"
-                    on:click={() => ($analysisSequenceFocus = { sourceId: binding.id })}>Inspect</button
-                  >
-                </dd>
-              {/if}
-            {:else if info.dataset}
-              {@const dataset = info.dataset}
-              <dt>Plan</dt>
-              <dd>{dataset.simulation?.plan?.name ?? '—'}</dd>
-              <dt>Simulation</dt>
-              <dd>{dataset.id} · {dataset.status}</dd>
-              <dt>Covers</dt>
-              <dd>{formatRange(dataset.simulation_start_time, dataset.simulation_end_time)}</dd>
-            {:else if info.plan}
-              {@const plan = info.plan}
-              <dt>Plan</dt>
-              <dd>{plan.name}</dd>
-              <dt>Data</dt>
-              <dd>Its current activity directives, live: edits to the plan show here as they happen.</dd>
-              <dt>Plan bounds</dt>
-              <dd>{formatRange(plan.start_time, planEnd(plan))}</dd>
-              <dt>Plan revision</dt>
-              <dd>{plan.revision}</dd>
-            {/if}
-            <dt>Rows refer to it as</dt>
-            <dd>{binding.id}</dd>
-          </dl>
-        {/if}
-      </li>
+  {#if bindings.length}
+    <div class="filter">
+      <input
+        bind:value={filterText}
+        class="st-input w-full"
+        autocomplete="off"
+        placeholder="Filter sources, resources, activities"
+        aria-label="Filter sources"
+      />
+    </div>
+  {/if}
+  <div class="tree" role="tree" aria-label="Analysis sources">
+    {#each topLevel as binding (binding.id)}
+      <AnalysisSourceNode
+        {binding}
+        {expanded}
+        {filterText}
+        {labels}
+        {readOnly}
+        {rows}
+        {sequenceSteps}
+        simulations={planSimulations[binding.id] ?? []}
+        {sources}
+        {statuses}
+        on:add={onAdd}
+        on:addSimulation={({ detail }) => addAnalysisSource({ kind: 'simulation', simulationDatasetId: detail }, user)}
+        on:dragstart={onDragStart}
+        on:remove={({ detail }) => removeAnalysisSource(detail, user)}
+        on:rename={({ detail }) => inspect({ kind: 'source', sourceId: detail })}
+        on:toggle={onToggle}
+      />
     {:else}
-      <li class="text-muted-foreground">
+      <div class="empty">
         No sources yet.
         <button class="link" disabled={readOnly} on:click={() => dispatch('addSource')}>Add one</button>
-      </li>
+      </div>
     {/each}
-  </ul>
-
-  <div class="section-label st-typography-label">Browse contents</div>
-  <div class="browser">
-    {#if browserGroups.length}
-      <SourceBrowser groups={browserGroups} {readOnly} showUpload={false} {user} />
-    {/if}
   </div>
 </div>
 
@@ -366,53 +213,20 @@
     padding: 6px 8px;
   }
 
-  .section-label {
-    background: var(--st-gray-10);
-    border-bottom: 1px solid var(--st-gray-20);
-    color: var(--st-gray-60);
-    padding: 3px 8px;
+  .filter {
+    padding: 6px 8px 4px;
   }
 
-  .bound {
-    background: var(--st-gray-10);
-    border-bottom: 1px solid var(--st-gray-20);
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    list-style: none;
-    margin: 0;
-    max-height: 40%;
+  .tree {
+    flex: 1;
+    min-height: 0;
     overflow: auto;
-    padding: 4px 8px 6px;
+    padding-bottom: 8px;
   }
 
-  .bound-source {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .newer {
-    align-items: center;
-    display: flex;
-    gap: 6px;
-    justify-content: space-between;
-  }
-
-  .details {
-    display: grid;
-    gap: 2px 8px;
-    grid-template-columns: max-content 1fr;
-    margin: 0;
-  }
-
-  .details dt {
-    color: var(--st-gray-50);
-  }
-
-  .details dd {
-    margin: 0;
-    min-width: 0;
+  .empty {
+    color: var(--st-gray-60);
+    padding: 8px;
   }
 
   .link {
@@ -421,10 +235,5 @@
     cursor: pointer;
     padding: 0;
     text-decoration: underline;
-  }
-
-  .browser {
-    flex: 1;
-    min-height: 0;
   }
 </style>

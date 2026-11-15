@@ -1,3 +1,5 @@
+import seqJsonSchema from '@nasa-jpl/seq-json-schema/schema.json';
+import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020';
 import type { AnalysisSourceBinding, AnalysisSourceRevision } from '../types/analysis';
 
 /*
@@ -190,8 +192,39 @@ export function checkGeneratedFrom(
   const assigned = new Set(recorded.assigned);
   const ids = [...new Set(stepActivityIds)];
   return {
-    plan: !recorded.exists || claimed.planId === undefined ? 'unchecked' : recorded.planId === claimed.planId ? 'verified' : 'mismatch',
+    plan:
+      !recorded.exists || claimed.planId === undefined
+        ? 'unchecked'
+        : recorded.planId === claimed.planId
+          ? 'verified'
+          : 'mismatch',
     sequence: recorded.exists ? 'verified' : 'missing',
     stepActivities: { unassigned: ids.filter(id => !assigned.has(id)), verified: ids.filter(id => assigned.has(id)) },
   };
+}
+
+let validateSeqJson: ValidateFunction | null = null;
+
+/**
+ * Why `content` can't be imported as a seqJSON sequence, or null when it can: it must be JSON that the published
+ * seqJSON schema accepts (an id, metadata, well-formed steps, requests and immediate commands). An empty sequence is a
+ * sequence. The backend's import is still the authority on what it can read; this only stops what can't be one.
+ */
+export function seqJsonProblem(content: string | undefined): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content ?? '');
+  } catch {
+    return 'it is not JSON';
+  }
+  validateSeqJson ??= new Ajv2020({ strict: false }).compile(seqJsonSchema);
+  // Metadata is required by the schema but nothing here reads it: a conversion that leaves it out is still a sequence.
+  const candidate =
+    parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? { metadata: {}, ...(parsed as object) } : parsed;
+  if (validateSeqJson(candidate)) {
+    return null;
+  }
+  // A step that matches no kind reports every kind's complaint; the first, with where it is, says enough.
+  const [error] = validateSeqJson.errors ?? [];
+  return error ? `${error.instancePath || 'the sequence'} ${error.message}` : 'it is not a seqJSON sequence';
 }

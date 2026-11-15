@@ -55,6 +55,7 @@
 
   const dispatch = createEventDispatcher<{
     addRowToSection: TimelineSection;
+    addValueGuide: number;
     collapseDiscreteTree: Row;
     createActivityDirectives: ActivityDirective[];
     deleteActivityDirective: number;
@@ -469,7 +470,7 @@
         <ContextMenu.Separator />
         {#if !readOnly}
           <ContextMenu.Sub>
-            <ContextMenu.SubTrigger size="sm">Place Guide</ContextMenu.SubTrigger>
+            <ContextMenu.SubTrigger size="sm">{guideNotes ? 'Annotate a Time' : 'Place Guide'}</ContextMenu.SubTrigger>
             <ContextMenu.SubContent class="w-48">
               <ContextMenu.Item size="sm" on:click={() => span && addVerticalGuide(getSpanDate(span))}>
                 At Simulated Activity Start
@@ -524,7 +525,7 @@
             size="sm"
             on:click={() => xScaleView && offsetX !== undefined && addVerticalGuide(xScaleView.invert(offsetX))}
           >
-            Place Guide
+            {guideNotes ? 'Annotate This Time' : 'Place Guide'}
           </ContextMenu.Item>
         {/if}
         <ContextMenu.Item
@@ -641,16 +642,20 @@
         <ContextMenu.Separator />
       {/if}
     {/if}
-    {#if guideNotes && row?.horizontalGuides.length}
+    {#if guideNotes && row && (row.horizontalGuides.length || (row.yAxes.length && !readOnly))}
       {@const guideRow = row}
       {#each guideRow.horizontalGuides as guide (guide.id)}
-        {@const explained = explainedValueGuides.includes(`${guideRow.id}:${guide.id}`)}
-        {#if explained || !readOnly}
-          <ContextMenu.Item size="sm" on:click={() => dispatch('guideNote', { id: guide.id, rowId: guideRow.id })}>
-            {explained ? 'See explanation of' : 'Explain'} “{guide.label.text || 'value guide'}”
-          </ContextMenu.Item>
-        {/if}
+        <ContextMenu.Item size="sm" on:click={() => dispatch('guideNote', { id: guide.id, rowId: guideRow.id })}>
+          Annotation “{guide.label.text || 'unlabeled'}”{explainedValueGuides.includes(`${guideRow.id}:${guide.id}`)
+            ? ' ¶'
+            : ''}
+        </ContextMenu.Item>
       {/each}
+      {#if guideRow.yAxes.length && !readOnly}
+        <ContextMenu.Item size="sm" on:click={() => dispatch('addValueGuide', guideRow.id)}>
+          Annotate a value on this row
+        </ContextMenu.Item>
+      {/if}
       <ContextMenu.Separator />
     {/if}
     {#if !readOnly}

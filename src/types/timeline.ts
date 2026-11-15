@@ -165,6 +165,8 @@ export type SpanTimeBounds = {
 };
 
 export type HorizontalGuide = {
+  /** What the mark means (an Analysis annotation's explanation); absent for a plain guide. */
+  description?: string;
   id: number;
   label: Label;
   y: number;
@@ -476,6 +478,8 @@ export type Timeline = {
 };
 
 export type VerticalGuide = {
+  /** What the mark means (an Analysis annotation's explanation); absent for a plain guide. */
+  description?: string;
   id: number;
   label: Label;
   timestamp: string;

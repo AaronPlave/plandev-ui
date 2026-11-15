@@ -1,3 +1,4 @@
+import { getAuthoredMission, getWorkspaceFileSnapshot } from './analysisSequence';
 import type {
   AnalysisActivityRef,
   AnalysisActivityRow,
@@ -17,6 +18,7 @@ import type { SourceResource } from '../types/importedSource';
 import type { ResourceType, Span } from '../types/simulation';
 import type { Row, TimeRange, Timeline } from '../types/timeline';
 import type {
+  SourceBrowserNode,
   TimelineActivityRequest,
   TimelineActivitySubscription,
   TimelineResourceSubscription,
@@ -24,7 +26,7 @@ import type {
   TimelineSource,
   TimelineSourceId,
 } from '../types/timelineSource';
-import { ViewDefaultDiscreteOptions } from '../constants/view';
+import { ViewDefaultActivityOptions, ViewDefaultDiscreteOptions } from '../constants/view';
 import { getIntervalInMs } from './time';
 import { createRow, createTimeline, createTimelineActivityLayer, isActivityLayer } from './timeline';
 import {
@@ -111,7 +113,8 @@ export function importedActivityToSpan(sourceId: TimelineSourceId, activity: Imp
     durationMs: endMs - startMs,
     endMs,
     name: activity.name,
-    parent_id: activity.parentId === undefined ? null : getActivityDrawingId({ activityId: activity.parentId, sourceId }),
+    parent_id:
+      activity.parentId === undefined ? null : getActivityDrawingId({ activityId: activity.parentId, sourceId }),
     sourceActivityId: activity.id,
     sourceId,
     span_id: getActivityDrawingId({ activityId: activity.id, sourceId }),
@@ -651,7 +654,13 @@ export function getAnalysisSourceNames(
   let name: string;
   let version: string;
   let short: string;
-  if (binding.kind === 'imported') {
+  const file = getWorkspaceFileSnapshot(details.revision);
+  if (binding.kind === 'imported' && file && details.revision) {
+    // A SeqDev file: its sequence's name, with the workspace it is in (the full path is in its details).
+    name = getAuthoredMission(details.revision)?.sequenceId ?? file.path.split('/').pop()?.split('.')[0] ?? file.path;
+    version = getRevisionVersionLabel(details.revision);
+    short = file.workspaceName;
+  } else if (binding.kind === 'imported') {
     name = details.revision?.source.name ?? details.source?.name ?? binding.sourceName ?? 'Imported source';
     version = details.revision
       ? getRevisionVersionLabel(details.revision)
@@ -714,6 +723,22 @@ export function createAnalysisSources(input: AnalysisSourcesInput): TimelineSour
       return source;
     }
     const revision = input.revisions.find(({ id }) => id === binding.revisionId);
+    const file = getWorkspaceFileSnapshot(revision);
+    const twin =
+      file &&
+      input.revisions.find(other => {
+        const otherFile = getWorkspaceFileSnapshot(other);
+        return (
+          other !== revision &&
+          otherFile &&
+          otherFile.workspaceId !== file.workspaceId &&
+          otherFile.workspaceName === file.workspaceName
+        );
+      });
+    if (file && twin) {
+      // Two workspaces of one name: the workspace's id tells them apart.
+      return { ...source, label: `${source.label} (workspace ${file.workspaceId})` };
+    }
     const { name, version } = getAnalysisSourceNames(binding, {
       revision,
       source: binding.sourceId === undefined ? undefined : input.sourceRecovery?.[binding.sourceId],
@@ -739,6 +764,7 @@ function createPlanSource(
   return {
     browserNodes: [
       {
+        badge: present ? `${present.reduce((total, type) => total + type.count, 0)}` : undefined,
         children: groupBrowserNodes(
           sourceId,
           'activity',
@@ -750,7 +776,7 @@ function createPlanSource(
         emptyMessage: unavailableReason ?? (present ? 'No activities' : 'Loading…'),
         id: `${sourceId}/activities`,
         kind: 'group',
-        label: `Current Activities (${(present ?? []).reduce((total, type) => total + type.count, 0)})`,
+        label: 'Current activities',
         tooltip: present ? summarizeActivityTypes(present).tooltip : undefined,
       },
     ],
@@ -804,47 +830,52 @@ function createImportedRevisionSource(
   const activityTypes = revision?.activity_types ?? [];
   const resourcesByKey = new Map(resources.map(resource => [resource.key, resource]));
   return {
-    browserNodes: [
-      {
-        children: groupBrowserNodes(
-          sourceId,
-          'resource',
-          resources,
-          resource => resource.category,
-          resource => ({
-            action: { item: { name: resource.key, schema: resource.schema }, sourceId, typeName: 'resource' },
-            id: `${sourceId}/resource/${resource.key}`,
-            kind: 'item',
-            label: resource.key,
-            tags: [resource.schema.type],
-            tooltip: [resource.units, resource.sample_count !== null ? `${resource.sample_count} samples` : null]
-              .filter(Boolean)
-              .join(' · '),
-          }),
-          members => ({ badge: `${members.length}`, tooltip: countLabel(members.length, 'resource', 'resources') }),
-        ),
-        emptyMessage: unavailableReason ?? (input.loading ? 'Loading…' : 'No resources'),
-        id: `${sourceId}/resources`,
-        kind: 'group',
-        label: `Resources (${resources.length})`,
-        tooltip: countLabel(resources.length, 'resource', 'resources'),
-      },
-      {
-        children: groupBrowserNodes(
-          sourceId,
-          'activity',
-          activityTypes,
-          type => type.category,
-          type => activityItemNode(sourceId, type.type, type.count),
-          summarizeActivityTypes,
-        ),
-        emptyMessage: unavailableReason ?? (input.loading ? 'Loading…' : 'No activities'),
-        id: `${sourceId}/activities`,
-        kind: 'group',
-        label: `Activities (${activityTypes.reduce((total, type) => total + type.count, 0)})`,
-        tooltip: summarizeActivityTypes(activityTypes).tooltip,
-      },
-    ],
+    browserNodes: (
+      [
+        {
+          badge: `${resources.length}`,
+          children: groupBrowserNodes(
+            sourceId,
+            'resource',
+            resources,
+            resource => resource.category,
+            resource => ({
+              action: { item: { name: resource.key, schema: resource.schema }, sourceId, typeName: 'resource' },
+              id: `${sourceId}/resource/${resource.key}`,
+              kind: 'item',
+              label: resource.key,
+              tags: [resource.schema.type],
+              tooltip: [resource.units, resource.sample_count !== null ? `${resource.sample_count} samples` : null]
+                .filter(Boolean)
+                .join(' · '),
+            }),
+            members => ({ badge: `${members.length}`, tooltip: countLabel(members.length, 'resource', 'resources') }),
+          ),
+          emptyMessage: unavailableReason ?? (input.loading ? 'Loading…' : 'No resources'),
+          id: `${sourceId}/resources`,
+          kind: 'group',
+          label: 'Resources',
+          tooltip: countLabel(resources.length, 'resource', 'resources'),
+        },
+        {
+          badge: `${activityTypes.reduce((total, type) => total + type.count, 0)}`,
+          children: groupBrowserNodes(
+            sourceId,
+            'activity',
+            activityTypes,
+            type => type.category,
+            type => activityItemNode(sourceId, type.type, type.count),
+            summarizeActivityTypes,
+          ),
+          emptyMessage: unavailableReason ?? (input.loading ? 'Loading…' : 'No activities'),
+          id: `${sourceId}/activities`,
+          kind: 'group',
+          // An authored sequence's records are its absolute-timed steps.
+          label: getAuthoredMission(revision) ? 'Timed steps' : 'Activities',
+          tooltip: summarizeActivityTypes(activityTypes).tooltip,
+        },
+      ] as SourceBrowserNode[]
+    ).filter(node => node.children?.length || !revision || !ready || input.loading),
     description: revision
       ? `${revision.source.name} · ${getRevisionVersionLabel(revision)} · ${formatRange(revision.coverage_start, revision.coverage_end)}`
       : 'Imported source',
@@ -907,6 +938,7 @@ function createSimulationDatasetSource(
   return {
     browserNodes: [
       {
+        badge: `${catalog.length}`,
         children: catalog.map(resourceType => ({
           action: { item: resourceType, sourceId, typeName: 'resource' },
           id: `${sourceId}/resource/${resourceType.name}`,
@@ -917,15 +949,16 @@ function createSimulationDatasetSource(
         emptyMessage: unavailableReason ?? (input.loading ? 'Loading…' : 'No simulated resources'),
         id: `${sourceId}/resources`,
         kind: 'group',
-        label: `Resources (${catalog.length})`,
+        label: 'Resources',
         tooltip: countLabel(catalog.length, 'resource', 'resources'),
       },
       {
+        badge: present ? `${present.reduce((total, type) => total + type.count, 0)}` : undefined,
         children: (present ?? []).map(({ count, name }) => activityItemNode(sourceId, name, count)),
         emptyMessage: unavailableReason ?? (present ? 'No simulated activities' : 'Loading…'),
         id: `${sourceId}/activities`,
         kind: 'group',
-        label: `Simulated Activities (${(present ?? []).reduce((total, type) => total + type.count, 0)})`,
+        label: 'Simulated activities',
         tooltip: present ? summarizeActivityTypes(present).tooltip : undefined,
       },
     ],
@@ -1025,9 +1058,27 @@ export function getAnalysisTimeRanges(
  * A row of every activity of one source, grouped by type: the natural first look at a plan or a simulation. Imported
  * products can hold far more than one row draws, so the page only suggests it for plans and simulations.
  */
-export function createSourceActivityRow(timelines: Timeline[], sourceId: TimelineSourceId, name: string) {
+export function createSourceActivityRow(
+  timelines: Timeline[],
+  sourceId: TimelineSourceId,
+  name: string,
+  { byParent = false }: { byParent?: boolean } = {},
+) {
   return createRow(timelines, {
-    discreteOptions: { ...ViewDefaultDiscreteOptions, displayMode: 'grouped' },
+    discreteOptions: {
+      ...ViewDefaultDiscreteOptions,
+      // A sequence's records open by parent: its steps under it, in the product's order.
+      ...(byParent
+        ? {
+            activityOptions: {
+              ...ViewDefaultActivityOptions,
+              groupBy: 'name' as const,
+              hierarchyMode: 'parent' as const,
+            },
+          }
+        : {}),
+      displayMode: 'grouped',
+    },
     layers: [createTimelineActivityLayer(timelines, { name, sourceId })],
     name,
   });

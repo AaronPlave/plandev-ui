@@ -150,7 +150,7 @@
           sourceId: of.ref.sourceId,
         },
         // About the record, at its start: not a claim about every moment of its duration. To mark the interval
-        // itself, mark it with a guide.
+        // itself, mark a time range.
         start: new Date(of.startMs).toISOString(),
         text,
       },
@@ -235,8 +235,8 @@
           size="xs"
           variant="outline"
           on:click={() => addNote(current, '')}
-          title="Add a note about this activity, saved with the analysis"
-          ><StickyNote size={12} class="mr-1" />Note</Button
+          title="Annotate this activity: say what it shows. Kept with this analysis only"
+          ><StickyNote size={12} class="mr-1" />Annotate</Button
         >
       {/if}
     </div>

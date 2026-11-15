@@ -3,6 +3,7 @@ import {
   checkGeneratedFrom,
   describeStepTime,
   getAuthoredSections,
+  seqJsonProblem,
   stepMatches,
   type AuthoredMission,
 } from './analysisSequence';
@@ -88,5 +89,23 @@ describe('checkGeneratedFrom', () => {
     expect(checkGeneratedFrom(claimed, { assigned: [], exists: true, planId: 4 }, []).plan).toBe('mismatch');
     expect(checkGeneratedFrom(claimed, { assigned: [], exists: false, planId: null }, []).sequence).toBe('missing');
     expect(checkGeneratedFrom(claimed, null, [12]).sequence).toBe('unchecked');
+  });
+});
+
+describe('seqJsonProblem', () => {
+  const command = { args: [], stem: 'NOOP', time: { tag: '2026-001T00:00:00', type: 'ABSOLUTE' }, type: 'command' };
+  it('accepts a schema-valid sequence, an empty one, and one whose conversion left out metadata', () => {
+    expect(seqJsonProblem(JSON.stringify({ id: 's', metadata: {}, steps: [command] }))).toBeNull();
+    expect(seqJsonProblem(JSON.stringify({ id: 's', metadata: {} }))).toBeNull();
+    expect(seqJsonProblem(JSON.stringify({ id: 's', steps: [] }))).toBeNull();
+  });
+  it('says what is wrong with anything else', () => {
+    expect(seqJsonProblem('// Error in adaptation')).toBe('it is not JSON');
+    expect(seqJsonProblem(JSON.stringify({ metadata: {} }))).toMatch(/id/);
+    expect(seqJsonProblem(JSON.stringify({ id: 's', steps: {} }))).toMatch(/^\/steps must be array/);
+    expect(seqJsonProblem(JSON.stringify({ id: 's', steps: [{ stem: 'X' }] }))).toMatch(/^\/steps\/0 /);
+    expect(seqJsonProblem(JSON.stringify({ id: 's', steps: [{ ...command, time: 'A2026-001' }] }))).toMatch(
+      /^\/steps\/0/,
+    );
   });
 });

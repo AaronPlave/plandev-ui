@@ -9,9 +9,9 @@
   import UploadIcon from '@nasa-jpl/stellar/icons/upload.svg?component';
   import { plan } from '../../stores/plan';
   import { getTimelineSourcesContext, planSources } from '../../stores/timelineSources';
-  import { view, viewAddFilterToRow } from '../../stores/views';
+  import { view } from '../../stores/views';
   import type { User } from '../../types/app';
-  import type { Layer, Row, TimelineItemMetadata } from '../../types/timeline';
+  import type { Layer, Row } from '../../types/timeline';
   import type {
     SourceBrowserAction,
     SourceBrowserNode,
@@ -20,15 +20,11 @@
   } from '../../types/timelineSource';
   import effects from '../../utilities/effects';
   import { queryPermissions } from '../../utilities/permissions';
-  import {
-    filterSourceBrowserNodes,
-    getImportedSourceId,
-    getLayersUsingSource,
-    getSource,
-  } from '../../utilities/timelineSources';
+  import { filterSourceBrowserNodes, getImportedSourceId, getLayersUsingSource } from '../../utilities/timelineSources';
   import { tooltip } from '../../utilities/tooltip';
   import ExternalDatasetUpload from '../ExternalDatasetUpload.svelte';
   import PlanAddSourceDialog from './PlanAddSourceDialog.svelte';
+  import { addSourceItem, dragSourceItem } from './sourceBrowserActions';
   import SourceBrowserTree from './SourceBrowserTree.svelte';
 
   const timelineSources = getTimelineSourcesContext();
@@ -97,27 +93,14 @@
     return !!(source.events?.loading || source.intervals?.loading || source.resources?.loading);
   }
 
-  function getMetadata(action: SourceBrowserAction): TimelineItemMetadata {
-    return {
-      ...(action.externalSources ? { externalSources: action.externalSources } : {}),
-      sourceId: action.sourceId,
-      sourceLabel: action.sourceId ? getSource($timelineSources, action.sourceId)?.label : undefined,
-    };
-  }
-
   function onAdd({
     detail: { action, layer, row },
   }: CustomEvent<{ action: SourceBrowserAction; layer?: Layer; row?: Row }>) {
-    viewAddFilterToRow([action.item], action.typeName, getMetadata(action), row?.id, layer);
+    addSourceItem($timelineSources, action, row, layer);
   }
 
   function onDragStart({ detail: { action, event } }: CustomEvent<{ action: SourceBrowserAction; event: DragEvent }>) {
-    if (event.dataTransfer) {
-      const payload = { items: [action.item], metadata: getMetadata(action), type: action.typeName };
-      event.dataTransfer.setData('text/plain', JSON.stringify(payload));
-      event.dataTransfer.dropEffect = 'link';
-      event.dataTransfer.effectAllowed = 'link';
-    }
+    dragSourceItem($timelineSources, action, event);
   }
 
   async function onRemove({ detail: { id } }: CustomEvent<{ id: string; label: string }>) {

@@ -555,6 +555,10 @@
                       "items": {
                         "additionalProperties": false,
                         "properties": {
+                          "description": {
+                            "description": "What the mark means: an annotation's explanation",
+                            "type": "string"
+                          },
                           "id": {
                             "$ref": "#/definitions/id"
                           },
@@ -907,6 +911,10 @@
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "description": {
+                      "description": "What the mark means: an annotation's explanation",
+                      "type": "string"
+                    },
                     "id": {
                       "$ref": "#/definitions/id"
                     },

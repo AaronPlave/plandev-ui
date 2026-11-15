@@ -10,19 +10,20 @@
   import { createEventDispatcher } from 'svelte';
   import {
     addSourceActivityRow,
+    addValueAnnotation,
     analysisAnnotations,
+    analysisInspector,
     analysisLayoutUndo,
     analysisMaxTimeRange,
     analysisPlanDirectives,
     analysisSimulationDatasets,
     analysisSourceBindings,
     analysisTimelineSources,
-    explainGuide,
-    focusedAnnotationId,
+    inspect,
     selectedAnalysisActivity,
     undoAnalysisLayout,
   } from '../../stores/analysis';
-  import { toTimelineNotes } from '../../utilities/analysisAnnotations';
+  import { noteKey, timeKey, toTimelineNotes, valueKey } from '../../utilities/analysisAnnotations';
   import { getAnalysisActivityTimes } from '../../stores/analysisActivities';
   import { viewTimeRange } from '../../stores/plan';
   import {
@@ -35,7 +36,7 @@
   } from '../../stores/views';
   import type { User } from '../../types/app';
   import type { Span, SpanUtilityMaps } from '../../types/simulation';
-  import type { MouseDown, Row, TimeRange } from '../../types/timeline';
+  import type { MouseDown, Row, TimeRange, VerticalGuide } from '../../types/timeline';
   import { getActivityDrawingId, getActivityRefFromSpan } from '../../utilities/analysis';
   import effects from '../../utilities/effects';
   import Timeline from '../timeline/Timeline.svelte';
@@ -53,7 +54,6 @@
     inspect: void;
     loadView: void;
     openAtTime: void;
-    openNotes: void;
   }>();
   const noSpanMaps: SpanUtilityMaps = {
     directiveIdToSpanIdMap: {},
@@ -82,6 +82,17 @@
   $: suggestedRows = $analysisTimelineSources.sources.filter(
     source => source.kind === 'plan' || source.kind === 'simulation',
   );
+  $: selectedNoteId =
+    $analysisInspector.kind === 'annotation' && $analysisInspector.key.startsWith('note:')
+      ? Number($analysisInspector.key.slice(5))
+      : null;
+  // Guides with an explanation say so ("¶") on the timeline.
+  $: explainedGuides = {
+    time: (timeline?.verticalGuides ?? []).flatMap(guide => (guide.description ? [guide.id] : [])),
+    value: (timeline?.rows ?? []).flatMap(row =>
+      row.horizontalGuides.flatMap(guide => (guide.description ? [`${row.id}:${guide.id}`] : [])),
+    ),
+  };
   $: selectedSpanId = $selectedAnalysisActivity ? getActivityDrawingId($selectedAnalysisActivity) : null;
 
   let activityTimesRequest = 0;
@@ -120,6 +131,16 @@
   function onMouseDown(event: CustomEvent<MouseDown>) {
     const span = event.detail.spans?.[0];
     $selectedAnalysisActivity = span ? getActivityRefFromSpan(span) : null;
+  }
+
+  /** Guides placed from the timeline are annotations: a new one opens, to be labeled and explained. */
+  function onUpdateVerticalGuides(guides: VerticalGuide[]) {
+    const before = new Set((timeline?.verticalGuides ?? []).map(({ id }) => id));
+    viewUpdateTimeline('verticalGuides', guides, timeline?.id);
+    const added = guides.find(({ id }) => !before.has(id));
+    if (added && guides.length > before.size) {
+      inspect({ key: timeKey(added.id), kind: 'annotation' });
+    }
   }
 
   function onEditRow(row: Row) {
@@ -174,7 +195,7 @@
           planStartTimeYmd=""
           {readOnly}
           notes={toTimelineNotes($analysisAnnotations)}
-          selectedNoteId={$focusedAnnotationId}
+          {selectedNoteId}
           {timeline}
           timelineInteractionMode={$timelineInteractionMode}
           selectedActivityDirectiveId={null}
@@ -182,27 +203,13 @@
           {selectedSpanId}
           revealSelection
           guideNotes
-          on:guideNote={({ detail }) => {
-            const explained = $analysisAnnotations.some(
-              ({ guide }) =>
-                guide?.id === detail.id &&
-                guide.kind === (detail.rowId === undefined ? 'time' : 'value') &&
-                guide.row?.id === detail.rowId,
-            );
-            // Someone who can't change the analysis can read an explanation, not start one.
-            if (explained || !readOnly) {
-              explainGuide(detail, user);
-              dispatch('openNotes');
-            }
-          }}
-          explainedGuides={{
-            time: $analysisAnnotations.flatMap(({ guide }) =>
-              guide?.kind === 'time' && guide.id !== undefined ? [guide.id] : [],
-            ),
-            value: $analysisAnnotations.flatMap(({ guide }) =>
-              guide?.kind === 'value' && guide.id !== undefined ? [`${guide.row?.id}:${guide.id}`] : [],
-            ),
-          }}
+          on:guideNote={({ detail }) =>
+            inspect({
+              key: detail.rowId === undefined ? timeKey(detail.id) : valueKey(detail.rowId, detail.id),
+              kind: 'annotation',
+            })}
+          on:addValueGuide={({ detail }) => addValueAnnotation(detail)}
+          {explainedGuides}
           spanUtilityMaps={noSpanMaps}
           spansMap={{}}
           initialSpansLoading={activityTimesLoading}
@@ -212,17 +219,14 @@
           viewTimeRange={$viewTimeRange}
           on:openInspector={() => dispatch('openAtTime')}
           on:dblClick={() => dispatch('inspect')}
-          on:selectNote={({ detail }) => {
-            $focusedAnnotationId = detail;
-            dispatch('openNotes');
-          }}
+          on:selectNote={({ detail }) => inspect({ key: noteKey(detail), kind: 'annotation' })}
           on:mouseDown={onMouseDown}
           on:toggleRowExpansion={({ detail: { expanded, rowId } }) =>
             viewUpdateRow('expanded', expanded, timeline?.id, rowId)}
           on:updateRowHeight={({ detail: { newHeight, rowId, wasAutoAdjusted } }) =>
             viewUpdateRow('height', newHeight, timeline?.id, rowId, wasAutoAdjusted)}
           on:updateRows={({ detail: rows }) => viewUpdateTimeline('rows', rows, timeline?.id)}
-          on:updateVerticalGuides={({ detail }) => viewUpdateTimeline('verticalGuides', detail, timeline?.id)}
+          on:updateVerticalGuides={({ detail }) => onUpdateVerticalGuides(detail)}
           on:viewTimeRangeChanged={({ detail }) => ($viewTimeRange = detail)}
           on:editRow={({ detail }) => onEditRow(detail)}
           on:deleteRow={({ detail }) => timeline && effects.deleteTimelineRow(detail, timeline.rows, timeline.id)}

@@ -97,11 +97,11 @@
   /** Grouped rows open their tree to show the selected activity in its place (an Analysis). */
   export let revealSelection: boolean = false;
   /**
-   * Guides a note explains, marked "¶" after their label (display only): time guides by id, value guides by
-   * "rowId:guideId". The note is in the Notes panel, under the guide's name.
+   * Guides with an explanation (Analysis annotations), marked "¶" after their label (display only): time guides by
+   * id, value guides by "rowId:guideId".
    */
   export let explainedGuides: { time: number[]; value: string[] } = { time: [], value: [] };
-  /** Guide labels and the row menu open a guide's note (dispatched as `guideNote`). */
+  /** Guides are annotations: their labels and the row menu open them (`guideNote`), and rows offer `addValueGuide`. */
   export let guideNotes: boolean = false;
   export let simulation: Simulation | null = null;
   export let simulationDataset: SimulationDataset | null = null;
@@ -978,6 +978,7 @@
     {guideNotes}
     explainedValueGuides={explainedGuides.value}
     on:guideNote
+    on:addValueGuide
     {xScaleView}
     {user}
     on:toggleActivityComposition

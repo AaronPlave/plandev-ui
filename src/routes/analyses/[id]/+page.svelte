@@ -7,44 +7,32 @@
   import { Button, DropdownMenu, Resizable } from '@nasa-jpl/stellar-svelte';
   import {
     ChevronUp,
-    Crosshair,
     Ellipsis,
-    ListOrdered,
     Link,
     LayoutTemplate,
     PanelBottom,
     PanelLeft,
     PanelRight,
-    Pencil,
     Presentation,
-    StickyNote,
-    TextSearch,
   } from 'lucide-svelte';
   import type { PaneAPI } from 'paneforge';
-  import { onDestroy, tick } from 'svelte';
-  import AnalysisActivityDetails from '../../../components/analysis/AnalysisActivityDetails.svelte';
+  import { onDestroy } from 'svelte';
   import AnalysisActivityTable from '../../../components/analysis/AnalysisActivityTable.svelte';
   import AnalysisAddSourceDialog from '../../../components/analysis/AnalysisAddSourceDialog.svelte';
   import AnalysisApplyPresentationDialog from '../../../components/analysis/AnalysisApplyPresentationDialog.svelte';
-  import AnalysisAtTimePanel from '../../../components/analysis/AnalysisAtTimePanel.svelte';
+  import AnalysisInspector from '../../../components/analysis/AnalysisInspector.svelte';
   import AnalysisLoadViewDialog from '../../../components/analysis/AnalysisLoadViewDialog.svelte';
-  import AnalysisNotesPanel from '../../../components/analysis/AnalysisNotesPanel.svelte';
-  import AnalysisSequencePanel from '../../../components/analysis/AnalysisSequencePanel.svelte';
   import AnalysisSourcesPanel from '../../../components/analysis/AnalysisSourcesPanel.svelte';
   import AnalysisTimelinePanel from '../../../components/analysis/AnalysisTimelinePanel.svelte';
   import Nav from '../../../components/app/Nav.svelte';
   import PageTitle from '../../../components/app/PageTitle.svelte';
-  import TimelineEditorPanel from '../../../components/timeline/form/TimelineEditorPanel.svelte';
-  import Tab from '../../../components/ui/Tabs/Tab.svelte';
-  import TabPanel from '../../../components/ui/Tabs/TabPanel.svelte';
-  import Tabs from '../../../components/ui/Tabs/Tabs.svelte';
   import {
     addAnalysisSource,
     analysis,
-    analysisMaxTimeRange,
+    analysisInspector,
+    analysisInspectorRequests,
     analysisPlans,
     analysisSaveStatus,
-    analysisSequenceFocus,
     analysisSimulationDatasets,
     analysisSourceBindings,
     analysisSourceRevisions,
@@ -59,20 +47,19 @@
     selectedAnalysisActivity,
     showAnalysisActivityType,
     flushAnalysisSave,
-    syncAnalysisGuideNotes,
+    inspect,
+    type AnalysisInspectorTarget,
   } from '../../../stores/analysis';
-  import { view } from '../../../stores/views';
   import { timeCursorMs, viewTimeRange } from '../../../stores/plan';
   import { setTimelineSourcesContext } from '../../../stores/timelineSources';
   import { getUserStore } from '../../../stores/user';
   import { getAuthoredSequenceSources } from '../../../utilities/analysisSequence';
   import { featurePermissions } from '../../../utilities/permissions';
   import { showFailureToast, showSuccessToast } from '../../../utilities/toast';
+  import type { AnalysisActivityRef } from '../../../types/analysis';
   import type { PageData } from './$types';
 
   export let data: PageData;
-
-  type InspectorTab = 'details' | 'editor' | 'notes' | 'sequence' | 'time';
 
   const user = getUserStore();
   // The timeline, its editor and the Sources browser on this page read the analysis's sources, not a plan's.
@@ -91,8 +78,6 @@
   let sourcesOpen: boolean = true;
   let inspectorOpen: boolean = true;
   let tableOpen: boolean = true;
-  let inspectorTabs: Tabs;
-  let inspectorTab: InspectorTab = 'details';
   let timelinePanel: AnalysisTimelinePanel;
   let stopAutosave: (() => void) | null = null;
   let addSourceOpen: boolean = false;
@@ -164,18 +149,35 @@
     }
   }
 
-  function onSelectTab({ detail }: CustomEvent<{ id: unknown }>) {
-    inspectorTab = detail.id as InspectorTab;
-  }
-
-  /** Shows the inspector on a tab: only for something the user asked for, never as a side effect of selecting. */
-  function openInspector(tab: InspectorTab) {
-    if (tab === 'editor' && readOnly) {
+  /** Shows `target` in the inspector (opening it): only for something the user asked for. */
+  function openInspector(target: AnalysisInspectorTarget) {
+    if (target.kind === 'editor' && readOnly) {
       return;
     }
+    inspect(target);
+  }
+
+  /** Selects an activity and brings it into view; the inspector shows it unless asked to stay where it is. */
+  function select(ref: AnalysisActivityRef, startMs: number, endMs: number, show: boolean = true) {
+    keepInspector = !show;
+    $selectedAnalysisActivity = ref;
+    timelinePanel?.reveal(startMs, endMs);
+  }
+
+  // A newly selected activity is what the inspector shows, except in At Time (a mode the person chose) or when the
+  // selection was made from the inspector to stay there (a step of the sequence shown).
+  let keepInspector = false;
+  let lastSelected: AnalysisActivityRef | null = null;
+  $: if ($selectedAnalysisActivity !== lastSelected) {
+    lastSelected = $selectedAnalysisActivity;
+    if (lastSelected && !keepInspector && $analysisInspector.kind !== 'time') {
+      inspect({ kind: 'selection' });
+    }
+    keepInspector = false;
+  }
+  // Asked to show something: the inspector opens if it was closed.
+  $: if ($analysisInspectorRequests) {
     inspectorPane?.expand();
-    // After the tab list updates: a tab offered only for some sources (Sequence) registers when they load.
-    tick().then(() => inspectorTabs?.selectTab(tab));
   }
 
   $: if (data.initialAnalysis && data.initialAnalysis.id !== $analysis?.id) {
@@ -184,30 +186,15 @@
     const context = fromLink.range ? fromLink : { ...readLastVisit(data.initialAnalysis.id), ...fromLink };
     openAnalysis(data.initialAnalysis, $user, context).then(() => {
       stopAutosave = autosaveAnalysis($user);
-      if (context.noteId !== undefined) {
-        openInspector('notes');
-      } else if (context.activity) {
-        openInspector('details');
-      } else if (
-        getAuthoredSequenceSources($analysisSourceBindings, $analysisSourceRevisions).length &&
-        !$view?.definition.plan.timelines.some(timeline => timeline.rows.length)
-      ) {
-        // A sequence with nothing on the timeline (no absolute times) is investigated in its inspector.
-        openInspector('sequence');
+      const [sequence] = getAuthoredSequenceSources($analysisSourceBindings, $analysisSourceRevisions);
+      if (sequence && !context.activity && $analysisInspector.kind === 'selection') {
+        // An analysis of a sequence opens on the sequence: with no absolute times, it is all there is to see.
+        openInspector({ kind: 'sequence', sourceId: sequence.binding.id });
       }
     });
   }
-  $: hasSequence = getAuthoredSequenceSources($analysisSourceBindings, $analysisSourceRevisions).length > 0;
-  // "Show in sequence", from wherever it is offered, opens the inspector there (the panel reads the focus).
-  $: if ($analysisSequenceFocus) {
-    openInspector('sequence');
-  }
   $: if ($analysis) {
     rememberVisit($analysis.id, $viewTimeRange, $timeCursorMs);
-  }
-  // Notes on guides follow the guides as they are dragged, renamed or deleted.
-  $: if ($view) {
-    syncAnalysisGuideNotes();
   }
   $: readOnly = !$analysis || $user === null || !featurePermissions.analysis.canUpdate($user, $analysis);
   // Said wherever an edit is not offered, so a disabled control is not a mystery.
@@ -368,11 +355,10 @@
                   {readOnly}
                   user={$user}
                   on:addSource={({ detail }) => openAddSource(detail)}
-                  on:editRow={() => openInspector('editor')}
+                  on:editRow={() => openInspector({ kind: 'editor' })}
                   on:loadView={() => openLayout('use')}
-                  on:inspect={() => openInspector('details')}
-                  on:openAtTime={() => openInspector('time')}
-                  on:openNotes={() => openInspector('notes')}
+                  on:inspect={() => openInspector({ kind: 'selection' })}
+                  on:openAtTime={() => openInspector({ kind: 'time' })}
                 />
               </Resizable.Pane>
               <Resizable.Handle />
@@ -395,14 +381,7 @@
                   user={$user}
                   viewTimeRange={$viewTimeRange}
                   refreshKey={($analysisPlans ?? []).map(plan => `${plan.id}:${plan.revision}`).join()}
-                  on:select={({ detail: { endMs, ref, startMs } }) => {
-                    $selectedAnalysisActivity = ref;
-                    // The editor says nothing about an activity; the other tabs stay where the user left them.
-                    if (inspectorOpen && inspectorTab === 'editor') {
-                      inspectorTabs?.selectTab('details');
-                    }
-                    timelinePanel?.reveal(startMs, endMs);
-                  }}
+                  on:select={({ detail: { endMs, ref, startMs } }) => select(ref, startMs, endMs)}
                   on:showOnTimeline={({ detail }) => showAnalysisActivityType(detail.sourceId, detail.type)}
                   on:zoom={({ detail }) => timelinePanel?.zoomTo(detail.startMs, detail.endMs)}
                 />
@@ -427,85 +406,25 @@
         onExpand={() => ensureDefaultSize(inspectorPane, INSPECTOR_DEFAULT_SIZE)}
         bind:pane={inspectorPane}
       >
-        <Tabs bind:this={inspectorTabs} class="analysis-inspector" on:select-tab={onSelectTab}>
-          <svelte:fragment slot="tab-list">
-            <Tab class="flex items-center gap-1.5 text-xs" tabId="details"><TextSearch size={14} />Activity</Tab>
-            <!-- Always registered (Tabs pairs tabs and panels by registration order); shown only with a sequence. -->
-            <Tab class="items-center gap-1.5 text-xs {hasSequence ? 'flex' : 'hidden'}" tabId="sequence"
-              ><ListOrdered size={14} />Sequence</Tab
-            >
-            <Tab class="flex items-center gap-1.5 text-xs" tabId="time"><Crosshair size={14} />At Time</Tab>
-            <Tab class="flex items-center gap-1.5 text-xs" tabId="notes"><StickyNote size={14} />Notes</Tab>
-            <Tab class="flex items-center gap-1.5 text-xs" tabId="editor" disabled={readOnly}
-              ><Pencil size={14} />Timeline Editor</Tab
-            >
-          </svelte:fragment>
-          <TabPanel panelId="details">
-            <AnalysisActivityDetails
-              bindings={$analysisSourceBindings}
-              datasets={$analysisSimulationDatasets}
-              {readOnly}
-              revisions={$analysisSourceRevisions}
-              selected={$selectedAnalysisActivity}
-              {sourceLabels}
-              user={$user}
-              on:inspectAt={() => {
-                openInspector('time');
-                timelinePanel?.reveal($timeCursorMs ?? 0, $timeCursorMs ?? 0);
-              }}
-              on:select={({ detail: { endMs, ref, startMs } }) => {
-                $selectedAnalysisActivity = ref;
-                timelinePanel?.reveal(startMs, endMs);
-              }}
-              on:zoom={({ detail }) => timelinePanel?.zoomTo(detail.startMs, detail.endMs)}
-            />
-          </TabPanel>
-          <TabPanel panelId="sequence">
-            <AnalysisSequencePanel
-              bindings={$analysisSourceBindings}
-              datasets={$analysisSimulationDatasets}
-              {readOnly}
-              revisions={$analysisSourceRevisions}
-              selected={$selectedAnalysisActivity}
-              user={$user}
-              on:select={({ detail: { endMs, ref, startMs } }) => {
-                $selectedAnalysisActivity = ref;
-                timelinePanel?.reveal(startMs, endMs);
-              }}
-            />
-          </TabPanel>
-          <TabPanel panelId="time">
-            <AnalysisAtTimePanel
-              bindings={$analysisSourceBindings}
-              {readOnly}
-              {sourceLabels}
-              user={$user}
-              on:reveal={({ detail }) => timelinePanel?.reveal(detail, detail)}
-              on:selectActivity={({ detail: { endMs, ref, startMs } }) => {
-                $selectedAnalysisActivity = ref;
-                timelinePanel?.reveal(startMs, endMs);
-              }}
-            />
-          </TabPanel>
-          <TabPanel panelId="notes">
-            <AnalysisNotesPanel
-              bindings={$analysisSourceBindings}
-              {readOnly}
-              {readOnlyReason}
-              {sourceLabels}
-              user={$user}
-              on:goTo={({ detail: { endMs, ref, startMs } }) => {
-                if (ref) {
-                  $selectedAnalysisActivity = ref;
-                }
-                timelinePanel?.zoomTo(startMs, endMs);
-              }}
-            />
-          </TabPanel>
-          <TabPanel panelId="editor" disabled={readOnly}>
-            <TimelineEditorPanel gridSection="RightTop" showHeader={false} timeBounds={$analysisMaxTimeRange} />
-          </TabPanel>
-        </Tabs>
+        <AnalysisInspector
+          bindings={$analysisSourceBindings}
+          datasets={$analysisSimulationDatasets}
+          {readOnly}
+          {readOnlyReason}
+          revisions={$analysisSourceRevisions}
+          selected={$selectedAnalysisActivity}
+          {sourceLabels}
+          user={$user}
+          on:goTo={({ detail: { endMs, ref, startMs } }) => {
+            if (ref) {
+              select(ref, startMs, endMs, false);
+            }
+            timelinePanel?.zoomTo(startMs, endMs);
+          }}
+          on:reveal={({ detail }) => timelinePanel?.reveal(detail.startMs, detail.endMs)}
+          on:select={({ detail: { endMs, inspect: show, ref, startMs } }) => select(ref, startMs, endMs, show ?? true)}
+          on:zoom={({ detail }) => timelinePanel?.zoomTo(detail.startMs, detail.endMs)}
+        />
       </Resizable.Pane>
     </Resizable.PaneGroup>
   </div>
@@ -550,29 +469,6 @@
 />
 
 <style>
-  /*
-   * The panels in these tabs scroll their own body, which needs a height to scroll within: the tab panel is the
-   * pane's height (the Tabs' own auto row would grow to the content instead, and the pane would only clip it).
-   */
-  :global(div.analysis-inspector.tabs) {
-    grid-template-rows: min-content minmax(0, 1fr);
-  }
-
-  :global(.analysis-inspector) {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  :global(.analysis-inspector .tab-panels) {
-    min-height: 0;
-  }
-
-  :global(.analysis-inspector .tab-panel) {
-    display: grid;
-    /* A panel is the pane's width: long content scrolls or truncates inside it, never widens it. */
-    grid-template-columns: minmax(0, 1fr);
-    min-height: 0;
-  }
-
   .analysis-page {
     display: flex;
     flex-direction: column;

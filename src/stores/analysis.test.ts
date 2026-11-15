@@ -4,6 +4,7 @@ import type { Analysis, AnalysisDefinition } from '../types/analysis';
 import type { User } from '../types/app';
 import type { Row } from '../types/timeline';
 import { createAnalysisDefinition, createSourceActivityRow } from '../utilities/analysis';
+import { generateDefaultView } from '../utilities/view';
 import { resolveResourceLayerSource } from '../utilities/timelineSources';
 
 const effects = vi.hoisted(() => ({
@@ -241,6 +242,16 @@ describe('analysis store', () => {
     stop();
   });
 
+  it("never saves a view that is not the analysis's own into it (another page's, or a default view)", async () => {
+    vi.useFakeTimers();
+    await openAnalysis(savedAnalysis(definitionWithRows()), user);
+    const stop = autosaveAnalysis(user);
+    view.set({ ...generateDefaultView(), created_at: 'another page' });
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(effects.updateAnalysis).not.toHaveBeenCalled();
+    stop();
+  });
+
   it('removing a source removes the rows only it filled and keeps the rest of a shared row', async () => {
     await openAnalysis(savedAnalysis(definitionWithRows()), user);
     selectedAnalysisActivity.set({ activityId: 5, sourceId: 'source-1' });
@@ -352,7 +363,7 @@ describe('analysis store', () => {
       expect(showAnalysisSequence('source-2', ['SEQUENCE'])?.id).not.toBe(row.id); // another source's: its own row
     });
 
-    it('focuses a row on one sequence by its key, apart from the row of all sequences, and reuses it', async () => {
+    it('focuses a row on one sequence by its key, apart from the row of all sequences, and refocuses it', async () => {
       await openAnalysis(savedAnalysis(definitionWithRows()), user);
       const all = showAnalysisSequence('source-1', ['SEQUENCE', 'COMMAND'])!;
       const focused = showAnalysisSequence('source-1', ['SEQUENCE', 'COMMAND'], { key: 'seq:a', name: 'a' })!;
@@ -360,7 +371,13 @@ describe('analysis store', () => {
       expect(focused.name).toContain('Sequence a');
       expect(focused.layers[0]).toMatchObject({ filter: { activity: { within: ['seq:a'] } } });
       expect(showAnalysisSequence('source-1', ['COMMAND'], { key: 'seq:a', name: 'a' })?.id).toBe(focused.id);
-      expect(showAnalysisSequence('source-1', ['COMMAND'], { key: 'seq:b', name: 'b' })?.id).not.toBe(focused.id);
+      // Focusing another sequence points the focus row at it: one focus row, not one per sequence.
+      expect(showAnalysisSequence('source-1', ['SEQUENCE', 'COMMAND'], { key: 'seq:b', name: 'b' })?.id).toBe(
+        focused.id,
+      );
+      const refocused = get(view)?.definition.plan.timelines[0].rows.find(({ id }) => id === focused.id);
+      expect(refocused?.layers[0]).toMatchObject({ filter: { activity: { within: ['seq:b'] } } });
+      expect(refocused?.name).toContain('Sequence b');
       expect(showAnalysisSequence('source-1', ['COMMAND'])?.id).toBe(all.id);
     });
   });
@@ -582,7 +599,12 @@ describe('analyzing a SeqDev workspace sequence', () => {
   beforeEach(() => {
     effects.getAnalysisSourceUsage.mockResolvedValue([]);
     effects.createAnalysis.mockResolvedValue(31);
-    effects.getOrCreateSourceByOrigin.mockResolvedValue({ id: 9, name: 'ws/seqs/s.seq.json', owner: 'test', revisions: [] });
+    effects.getOrCreateSourceByOrigin.mockResolvedValue({
+      id: 9,
+      name: 'ws/seqs/s.seq.json',
+      owner: 'test',
+      revisions: [],
+    });
   });
   afterEach(() => {
     vi.clearAllMocks();
@@ -607,7 +629,12 @@ describe('analyzing a SeqDev workspace sequence', () => {
     expect(target).toEqual({ owner: 'test', sourceId: 9 });
     expect(adapter).toBe('seq_json');
     expect(metadata).toEqual({
-      workspaceFile: { inputHash: await sha256(file.input), path: 'seqs/s.seq.json', workspaceId: 2, workspaceName: 'ws' },
+      workspaceFile: {
+        inputHash: await sha256(file.input),
+        path: 'seqs/s.seq.json',
+        workspaceId: 2,
+        workspaceName: 'ws',
+      },
     });
     const [, definition] = effects.createAnalysis.mock.calls[0] as unknown as [
       string,
@@ -624,9 +651,20 @@ describe('analyzing a SeqDev workspace sequence', () => {
   it('reuses the revision of the same bytes from the same input, and snapshots anything else as a new one', async () => {
     const workspaceFile = { inputHash: await sha256(file.input), path: file.path, workspaceId: 2, workspaceName: 'ws' };
     const revisions = [
-      { activityCount: 0, content_hash: await sha256(file.input), id: 44, metadata: { workspaceFile }, status: 'success' },
+      {
+        activityCount: 0,
+        content_hash: await sha256(file.input),
+        id: 44,
+        metadata: { workspaceFile },
+        status: 'success',
+      },
     ];
-    effects.getOrCreateSourceByOrigin.mockResolvedValue({ id: 9, name: 'ws/seqs/s.seq.json', owner: 'test', revisions });
+    effects.getOrCreateSourceByOrigin.mockResolvedValue({
+      id: 9,
+      name: 'ws/seqs/s.seq.json',
+      owner: 'test',
+      revisions,
+    });
     await analyzeWorkspaceSequence(file, user, async () => {});
     expect(effects.importSourceRevision).not.toHaveBeenCalled();
     expect(
@@ -646,7 +684,11 @@ describe('analyzing a SeqDev workspace sequence', () => {
     const output = '{"id":"s2","steps":[]}';
     const run = vi.fn(async () => output);
     const conversion = { adaptationId: 7, commandDictionaryId: 1, language: 'SeqN', run };
-    await analyzeWorkspaceSequence({ ...file, conversion, input: '@ID "s2"', path: 's2.seqN.txt' }, user, async () => {});
+    await analyzeWorkspaceSequence(
+      { ...file, conversion, input: '@ID "s2"', path: 's2.seqN.txt' },
+      user,
+      async () => {},
+    );
     expect(run).toHaveBeenCalledWith('@ID "s2"');
     const [uploaded, , , , metadata] = imported();
     expect(await readText(uploaded)).toBe(output);
@@ -680,9 +722,14 @@ describe('analyzing a SeqDev workspace sequence', () => {
   });
 
   it('imports nothing when the conversion fails or is not a sequence', async () => {
-    const failing = { adaptationId: null, commandDictionaryId: null, language: 'SeqN', run: async () => {
-      throw new Error('bad token');
-    } };
+    const failing = {
+      adaptationId: null,
+      commandDictionaryId: null,
+      language: 'SeqN',
+      run: async () => {
+        throw new Error('bad token');
+      },
+    };
     expect(await analyzeWorkspaceSequence({ ...file, conversion: failing }, user, async () => {})).toBeNull();
     const garbage = { ...failing, run: async () => '// Error in adaptation' };
     expect(await analyzeWorkspaceSequence({ ...file, conversion: garbage }, user, async () => {})).toBeNull();

@@ -183,7 +183,16 @@ export type AnalysisPlan = {
   model_id: number;
   name: string;
   revision: number;
+  /** The plan's simulation results, newest first: listed under the plan, each addable as a source of its own. */
+  simulations?: { simulation_datasets: AnalysisPlanSimulationDataset[] }[];
   start_time: string;
+};
+
+export type AnalysisPlanSimulationDataset = {
+  id: number;
+  simulation_end_time: string | null;
+  simulation_start_time: string | null;
+  status: string;
 };
 
 /** A plan's current directive, read-only, at its anchor-resolved approximate start. */

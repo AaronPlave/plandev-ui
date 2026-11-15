@@ -39,6 +39,7 @@
     type PresentationIssue,
     type RoleMapping,
   } from '../../utilities/analysisPresentation';
+  import { listAnnotations } from '../../utilities/analysisAnnotations';
   import { showSuccessToast } from '../../utilities/toast';
   import DataGrid from '../ui/DataGrid/DataGrid.svelte';
 
@@ -89,6 +90,8 @@
 
   let filter: string = '';
   let includeTimeGuides: boolean = false;
+  /** The annotations (marks) to save with the layout, by key; null until the save form opens. */
+  let layoutAnnotations: Set<string> | null = null;
   let loaded: AnalysisPresentation | null = null;
   let loading: boolean = false;
   let mapping: RoleMapping = {};
@@ -143,6 +146,11 @@
   ];
   $: timeGuideCount = loaded?.timeline.verticalGuides.length ?? 0;
   $: currentRows = current?.rows.length ?? 0;
+  // Marks that could go with a saved layout: value marks (thresholds, ranges) usually can, time marks rarely do.
+  $: markChoices = listAnnotations(current, []).filter(item => item.kind === 'time' || item.kind === 'value');
+  $: if (saving !== null && layoutAnnotations === null) {
+    layoutAnnotations = new Set(markChoices.filter(item => item.kind === 'value').map(({ key }) => key));
+  }
 
   type RowStatus = { id: number; name: string; notes: string[]; status: 'attention' | 'ready' | 'unavailable' };
 
@@ -178,6 +186,7 @@
     resourceRenames = {};
     saveName = '';
     saving = null;
+    layoutAnnotations = null;
     selectedId = null;
     showDetails = false;
   }
@@ -246,7 +255,7 @@
 
   async function save() {
     saving = true;
-    const id = await saveAnalysisLayoutAsView(saveName.trim(), user);
+    const id = await saveAnalysisLayoutAsView(saveName.trim(), user, layoutAnnotations ?? new Set());
     saving = null;
     if (id !== null) {
       open = false;
@@ -274,7 +283,8 @@
       <Dialog.Header>
         <Dialog.Title>Save This Layout as a View</Dialog.Title>
         <Dialog.Description>
-          Its rows, sections, axes, styles and guides, to use in any analysis. Notes stay with this analysis.
+          Its rows, sections, axes and styles, to use in any analysis. Annotations stay with this analysis unless chosen
+          below; annotations about activities always stay.
         </Dialog.Description>
       </Dialog.Header>
       <input
@@ -284,6 +294,37 @@
         bind:value={saveName}
         on:keydown={event => event.key === 'Enter' && saveName.trim() && save()}
       />
+      {#if markChoices.length && layoutAnnotations}
+        {@const chosen = layoutAnnotations}
+        <fieldset class="flex max-h-[240px] flex-col gap-1 overflow-auto text-xs">
+          <legend class="mb-1 text-muted-foreground">Annotations to include (with their explanations)</legend>
+          {#each markChoices as item (item.key)}
+            <label class="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={chosen.has(item.key)}
+                on:change={event => {
+                  const next = new Set(chosen);
+                  if (event.currentTarget.checked) {
+                    next.add(item.key);
+                  } else {
+                    next.delete(item.key);
+                  }
+                  layoutAnnotations = next;
+                }}
+              />
+              <span class="truncate">{item.label || 'Unlabeled'}</span>
+              <span class="text-muted-foreground"
+                >{item.kind === 'value'
+                  ? `value ${item.values?.join(' – ')} on ${item.row?.name}`
+                  : item.endMs !== undefined
+                    ? 'time range'
+                    : 'time'}</span
+              >
+            </label>
+          {/each}
+        </fieldset>
+      {/if}
       <Dialog.Footer>
         <Button variant="outline" on:click={() => (saving = null)}>Back</Button>
         <Button disabled={!saveName.trim() || saving} on:click={save}>{saving ? 'Saving…' : 'Save View'}</Button>
@@ -421,8 +462,9 @@
         {#if timeGuideCount}
           <label class="flex items-center gap-2 text-muted-foreground">
             <input type="checkbox" bind:checked={includeTimeGuides} />
-            Also bring its {timeGuideCount} time guide{timeGuideCount === 1 ? '' : 's'}: they mark times in its data,
-            without their notes
+            Also bring its {timeGuideCount} time annotation{timeGuideCount === 1 ? '' : 's'}{loaded.kind === 'analysis'
+              ? ': their labels and times only, not what they say'
+              : ''}
           </label>
         {/if}
       </div>
@@ -430,8 +472,8 @@
         {#if currentRows}
           Replaces this analysis's {currentRows} row{currentRows === 1 ? '' : 's'}; you can undo it.
         {/if}
-        This analysis keeps its sources, notes and time guides.{loaded.noteCount
-          ? ` The ${loaded.noteCount} note${loaded.noteCount === 1 ? '' : 's'} of "${loaded.name}" stay there.`
+        This analysis keeps its sources and annotations.{loaded.kind === 'analysis'
+          ? ` What "${loaded.name}" says in its annotations stays there.`
           : ''}
       </div>
       <Dialog.Footer>

@@ -2657,6 +2657,14 @@ const gql = {
         model_id
         name
         revision
+        simulations {
+          simulation_datasets(order_by: { id: desc }) {
+            id
+            simulation_end_time
+            simulation_start_time
+            status
+          }
+        }
         start_time
       }
     }

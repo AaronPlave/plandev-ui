@@ -5,6 +5,7 @@ import type { User } from '../../types/app';
 import { sha256 } from '../../utilities/analysisSequence';
 
 const effects = vi.hoisted(() => ({
+  getAnalysisActivities: vi.fn(async () => [{ activity_id: 12, name: 'Lunch bite 1' }]),
   getSequenceProvenance: vi.fn(),
   getSourceActivityLinks: vi.fn(async () => []),
   readWorkspaceFileQuietly: vi.fn(),
@@ -75,26 +76,25 @@ describe('the Sequence inspector', () => {
     vi.clearAllMocks();
   });
 
-  it('lists a sequence with no absolute times in order, says why none of it is on the timeline, and makes up no time', async () => {
+  it('lists a sequence with no absolute times in order, says once that none of it is on the timeline, and makes up no time', async () => {
     render(AnalysisSequencePanel, { bindings, revisions: [await revision()], user });
-    expect(screen.getByText(/None of its steps has an absolute time/)).toBeTruthy();
-    expect(screen.getByText('Steps (2)')).toBeTruthy();
+    expect(screen.getByText(/none on the timeline \(no absolute times\)/)).toBeTruthy();
     const rows = screen.getAllByRole('listitem').map(item => item.textContent?.replace(/\s+/g, ' ').trim());
     expect(rows).toEqual(['1 ECHO "TEST1" C', '2 FSW_CMD R 00:00:01']);
-    await waitFor(() => expect(screen.getByText('The file is unchanged since this snapshot.')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/The file is unchanged since/)).toBeTruthy());
     expect(screen.getByText(/converted from SeqN by the built-in conversion/)).toBeTruthy();
     // Opened, a step says what its tag means, and that it is not on the timeline.
     await fireEvent.click(screen.getByText('ECHO'));
     expect(screen.getByText(/When the previous step completes/)).toBeTruthy();
-    expect(screen.getByText(/it has no absolute time/)).toBeTruthy();
+    expect(screen.getByText(/no absolute time$/)).toBeTruthy();
     // Nothing generated it: no plan is claimed.
-    expect(screen.queryByText('Generated from')).toBeNull();
+    expect(screen.queryByLabelText('Generated from')).toBeNull();
   });
 
   it('says when the file has changed since, and opens it in SeqDev as it is now', async () => {
     effects.readWorkspaceFileQuietly.mockResolvedValue(`${input}C NOOP\n`);
     render(AnalysisSequencePanel, { bindings, revisions: [await revision()], user });
-    await waitFor(() => expect(screen.getByText(/The file has changed since this snapshot/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('The SeqDev file has changed since this snapshot.')).toBeTruthy());
     expect(screen.getByRole('link', { name: /Open in SeqDev/ }).getAttribute('href')).toBe(
       '/workspaces/2?sequenceId=seqs%2Fban.seqN.txt',
     );
@@ -106,7 +106,7 @@ describe('the Sequence inspector', () => {
     expect(screen.queryByRole('link', { name: /Open in SeqDev/ })).toBeNull();
   });
 
-  it("checks a generated sequence's claims against PlanDev, and attributes steps only as they say", async () => {
+  it('says "verified" only for the exact saved expansion output, and names the activity each step came from', async () => {
     effects.getSequenceProvenance.mockResolvedValue({
       assigned: [12],
       exists: true,
@@ -115,12 +115,24 @@ describe('the Sequence inspector', () => {
     });
     const generatedFrom = { planId: 3, seqId: 'testDescription', simulationDatasetId: 1 };
     render(AnalysisSequencePanel, { bindings, revisions: [await revision({ generatedFrom })], user });
-    await waitFor(() => expect(screen.getByText(/PlanDev confirms sequence testDescription/)).toBeTruthy());
-    expect(screen.getByText(/of plan 3/)).toBeTruthy();
-    expect(screen.getByText(/its latest generated output, unedited/)).toBeTruthy();
-    expect(screen.getByText(/1 simulated activity contributed steps/)).toBeTruthy();
+    expect(screen.getByLabelText('Generated from').textContent).toMatch(/Generated from plan 3 · Simulation 1/);
+    await waitFor(() => expect(screen.getByText(/1 activity contributed · Verified/)).toBeTruthy());
     await fireEvent.click(screen.getByText('FSW_CMD'));
-    expect(screen.getByText(/simulated activity 12 of simulation dataset 1/)).toBeTruthy();
-    expect(screen.getByText(/assigned to this sequence\)/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('Lunch bite 1')).toBeTruthy());
+    expect(screen.queryByText('not assigned now')).toBeNull();
+  });
+
+  it('keeps a claim a claim when the snapshot differs from the latest output, and says what disagrees', async () => {
+    effects.getSequenceProvenance.mockResolvedValue({
+      assigned: [],
+      exists: true,
+      generated: { created_at: '2026-11-15T00:00:00Z', expanded_template: `${input}C MORE\n`, id: 4 },
+      planId: 3,
+    });
+    const generatedFrom = { planId: 3, seqId: 'testDescription', simulationDatasetId: 1 };
+    render(AnalysisSequencePanel, { bindings, revisions: [await revision({ generatedFrom })], user });
+    await waitFor(() => expect(screen.getByText(/Differs from its latest generated output/)).toBeTruthy());
+    expect(screen.queryByText(/Verified/)).toBeNull();
+    expect(screen.getByText(/1 of the activities its steps name is not assigned to testDescription now/)).toBeTruthy();
   });
 });
