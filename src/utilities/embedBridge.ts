@@ -25,7 +25,8 @@ export type EmbedContext = {
 
 export type EmbedRequest =
   | { type: 'ready' }
-  | { timeMs: number; type: 'setTime' }
+  /** endMs: also frame [timeMs, endMs] on the timeline (e.g. a constraint violation window). */
+  | { endMs?: number; timeMs: number; type: 'setTime' }
   | { directiveId: number | null; spanId: number | null; type: 'select' }
   | { planId: number; type: 'openPlan' }
   | { simulationDatasetId: number; type: 'showSimulation' };
@@ -56,7 +57,12 @@ export function parseEmbedRequest(data: unknown): EmbedRequest | null {
     case 'ready':
       return { type: 'ready' };
     case 'setTime':
-      return typeof m.timeMs === 'number' && Number.isFinite(m.timeMs) ? { timeMs: m.timeMs, type: 'setTime' } : null;
+      if (typeof m.timeMs !== 'number' || !Number.isFinite(m.timeMs)) {
+        return null;
+      }
+      return typeof m.endMs === 'number' && Number.isFinite(m.endMs) && m.endMs >= m.timeMs
+        ? { endMs: m.endMs, timeMs: m.timeMs, type: 'setTime' }
+        : { timeMs: m.timeMs, type: 'setTime' };
     case 'select':
       return { directiveId: idOrNull(m.directiveId), spanId: idOrNull(m.spanId), type: 'select' };
     case 'openPlan':

@@ -18,6 +18,16 @@ describe('embedBridge', () => {
       type: 'setTime',
     });
     expect(parseEmbedRequest({ protocol: EMBED_PROTOCOL, timeMs: NaN, type: 'setTime' })).toBeNull();
+    expect(parseEmbedRequest({ endMs: 9, protocol: EMBED_PROTOCOL, timeMs: 5, type: 'setTime' })).toEqual({
+      endMs: 9,
+      timeMs: 5,
+      type: 'setTime',
+    });
+    // A window that ends before it starts is only a time.
+    expect(parseEmbedRequest({ endMs: 1, protocol: EMBED_PROTOCOL, timeMs: 5, type: 'setTime' })).toEqual({
+      timeMs: 5,
+      type: 'setTime',
+    });
     expect(parseEmbedRequest({ protocol: EMBED_PROTOCOL, spanId: 3, type: 'select' })).toEqual({
       directiveId: null,
       spanId: 3,

@@ -53,6 +53,20 @@
     }
   }
 
+  /**
+   * Frames [startMs, endMs] on the timeline when it is not already shown at a readable size: the window
+   * fills the middle third of the view.
+   */
+  function frameWindow(startMs: number, endMs: number) {
+    const { end, start } = $viewTimeRange;
+    const visible = startMs >= start && endMs <= end;
+    if (visible && endMs - startMs >= (end - start) / 50) {
+      return;
+    }
+    const pad = Math.max(endMs - startMs, 10 * 60 * 1000);
+    viewTimeRange.set({ end: endMs + pad, start: startMs - pad });
+  }
+
   /** Scrolls the timeline, keeping its zoom, so that `timeMs` is visible. */
   function reveal(timeMs: number | null | undefined) {
     if (timeMs == null || !Number.isFinite(timeMs)) {
@@ -75,7 +89,11 @@
       post();
     } else if (request?.type === 'setTime') {
       timeCursorMs.set(request.timeMs);
-      reveal(request.timeMs);
+      if (request.endMs !== undefined) {
+        frameWindow(request.timeMs, request.endMs);
+      } else {
+        reveal(request.timeMs);
+      }
     } else if (request?.type === 'select') {
       const span = request.spanId !== null ? $spansMap?.[request.spanId] : undefined;
       const directive = request.directiveId !== null ? $activityDirectivesMap?.[request.directiveId] : undefined;
