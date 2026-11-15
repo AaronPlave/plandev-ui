@@ -216,6 +216,8 @@ export type Span = SpanDB & {
   sourceActivityId?: number;
   /** Activities from a source other than the Plan: the source they come from. */
   sourceId?: string;
+  /** Imported records: the product's own key for it (what parents and layouts name it by). */
+  sourceKey?: string;
   startMs: number;
   /** Imported records: its place among its parent's steps, when the product gives one (not its time). */
   step?: number;

@@ -5154,6 +5154,75 @@ const effects = {
     }
   },
 
+  /**
+   * The user's own source for one origin (e.g. a workspace file), with its revisions (newest first), created (named
+   * `name`) when there is none yet. Origins are unique per owner, so it never adopts another user's source, nor one
+   * that only shares a name; a concurrent create of the same origin loses the race and reads the winner's. Null
+   * (reported) when it can be neither read nor created.
+   */
+  async getOrCreateSourceByOrigin(
+    origin: string,
+    name: string,
+    sourceType: string,
+    user: User | null,
+  ): Promise<{
+    id: number;
+    name: string;
+    owner: UserId | null;
+    revisions: {
+      activityCount: number;
+      content_hash: string | null;
+      id: number;
+      metadata: Record<string, unknown> | null;
+      status: string;
+    }[];
+  } | null> {
+    type Row = {
+      id: number;
+      name: string;
+      owner: UserId | null;
+      revisions: (SourceRevisionStatusRow & {
+        content_hash: string | null;
+        metadata: Record<string, unknown> | null;
+      })[];
+    };
+    const find = async () => {
+      const data = await reqHasura<Row[]>(gql.GET_SOURCE_BY_ORIGIN, { origin, owner: user?.id ?? '' }, user);
+      const [source] = data.sources ?? [];
+      return source ? { ...source, revisions: source.revisions.map(revision => toRevisionStatus(revision)) } : null;
+    };
+    try {
+      const found = await find();
+      if (found) {
+        return found;
+      }
+      if (!queryPermissions.CREATE_SOURCE_REVISION(user)) {
+        throwPermissionError('import a source');
+      }
+      try {
+        const data = await reqHasura<{ id: number }>(
+          gql.CREATE_SOURCE,
+          { source: { name, origin, source_type: sourceType } },
+          user,
+        );
+        if (data.source) {
+          return { id: data.source.id, name, owner: user?.id ?? null, revisions: [] };
+        }
+      } catch (e) {
+        // Lost a race with another create of the same origin (the unique index refused this one): use the winner.
+        const winner = await find();
+        if (winner) {
+          return winner;
+        }
+        throw e;
+      }
+      throw Error(`Unable to create source "${name}"`);
+    } catch (e) {
+      catchError('log', 'Unable to read or create the source', e as Error);
+      return null;
+    }
+  },
+
   async getParcel(id: number, user: User | null): Promise<Parcel | null> {
     try {
       const data = await reqHasura<Parcel>(gql.GET_PARCEL, { id }, user);
@@ -5732,6 +5801,57 @@ const effects = {
     return null;
   },
 
+  /** The sequences a simulated activity is assigned to (by seq id), in one simulation dataset; null on failure. */
+  async getSequenceAssignments(
+    simulationDatasetId: number,
+    simulatedActivityId: number,
+    user: User | null,
+  ): Promise<string[] | null> {
+    try {
+      const data = await reqHasura<{ seq_id: string }[]>(
+        gql.GET_SEQUENCE_ASSIGNMENTS,
+        { simulatedActivityId, simulationDatasetId },
+        user,
+      );
+      return (data.assignments ?? []).map(({ seq_id }) => seq_id);
+    } catch (e) {
+      catchError('log', 'Unable to read the sequences the activity is assigned to', e as Error);
+      return null;
+    }
+  },
+
+  /**
+   * What PlanDev itself records about a generated sequence (a seq id in a simulation dataset): whether that sequence
+   * exists and the plan its simulation is of, the simulated activities assigned to it, and its latest expansion
+   * output. Null on failure.
+   */
+  async getSequenceProvenance(
+    simulationDatasetId: number,
+    seqId: string,
+    user: User | null,
+  ): Promise<{
+    assigned: number[];
+    exists: boolean;
+    generated: { created_at: string; expanded_template: string; id: number } | null;
+    planId: number | null;
+  } | null> {
+    try {
+      const data = await reqHasura<any>(gql.GET_SEQUENCE_PROVENANCE, { seqId, simulationDatasetId }, user);
+      const [sequence] = (data.sequences ?? []) as { simulation_dataset: { simulation: { plan_id: number } | null } }[];
+      return {
+        assigned: ((data.assignments ?? []) as { simulated_activity_id: number }[]).map(
+          ({ simulated_activity_id }) => simulated_activity_id,
+        ),
+        exists: !!sequence,
+        generated: (data.generated ?? [])[0] ?? null,
+        planId: sequence?.simulation_dataset?.simulation?.plan_id ?? null,
+      };
+    } catch (e) {
+      catchError('log', "Unable to read the sequence's provenance", e as Error);
+      return null;
+    }
+  },
+
   async getSourceActivities(
     revisionId: number,
     types: string[] | null,
@@ -5812,38 +5932,6 @@ const effects = {
     } catch (e) {
       catchError('log', 'Unable to retrieve source formats', e as Error);
       return [];
-    }
-  },
-
-  /** A source by its exact name, with its revisions (newest first): undefined when there is none, null on failure. */
-  async getSourceByName(
-    name: string,
-    user: User | null,
-  ): Promise<
-    | {
-        id: number;
-        name: string;
-        owner: UserId | null;
-        revisions: { activityCount: number; content_hash: string | null; id: number; status: string }[];
-      }
-    | undefined
-    | null
-  > {
-    try {
-      type Row = {
-        id: number;
-        name: string;
-        owner: UserId | null;
-        revisions: (SourceRevisionStatusRow & { content_hash: string | null })[];
-      };
-      const data = await reqHasura<Row[]>(gql.GET_SOURCE_BY_NAME, { name }, user);
-      const [source] = data.sources ?? [];
-      return source
-        ? { ...source, revisions: source.revisions.map(revision => toRevisionStatus(revision)) }
-        : undefined;
-    } catch (e) {
-      catchError('log', 'Unable to retrieve the source', e as Error);
-      return null;
     }
   },
 
@@ -7411,6 +7499,18 @@ const effects = {
       false,
       signal,
     );
+  },
+
+  /**
+   * A workspace file's current content, read quietly (for comparing with a snapshot of it): null when it can't be
+   * read now, which is not told apart from it being deleted or moved.
+   */
+  async readWorkspaceFileQuietly(workspaceId: number, filePath: string, user: User | null): Promise<string | null> {
+    try {
+      return (await WorkspaceApi.getFileContent(workspaceId, filePath, user)).content;
+    } catch {
+      return null;
+    }
   },
 
   async removePresetFromActivityDirective(

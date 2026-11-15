@@ -35,6 +35,7 @@ import {
   getRevisionUsage,
   getSourceDeletionImpact,
   getSourceUsage,
+  spansWithin,
   splitSourceRevisions,
   withSourceIdentity,
   type AnalysisSourcesInput,
@@ -794,5 +795,17 @@ describe('getSourceDeletionImpact', () => {
     const text = getSourceDeletionImpact([{ name: 'A1' }, { name: 'A2' }], [{ name: 'P1' }]);
     expect(text).toContain('These analyses "A1", "A2"');
     expect(text).toContain('The plan "P1" has it attached');
+  });
+});
+
+describe('spansWithin', () => {
+  const span = (id: number, key: string, parent: number | null) =>
+    ({ parent_id: parent, sourceKey: key, span_id: id }) as unknown as Span;
+  it('keeps the records with the keys and their descendants, through parents only', () => {
+    const all = [span(1, 'A', null), span(2, 'A.1', 1), span(3, 'A.1.x', 2), span(4, 'B', null), span(5, 'B.1', 4)];
+    expect(spansWithin(all, all, ['A']).map(s => s.span_id)).toEqual([1, 2, 3]);
+    expect(spansWithin(all, all, ['A.1']).map(s => s.span_id)).toEqual([2, 3]);
+    // A parent not loaded ends the chain: nothing is attributed by guess.
+    expect(spansWithin([span(3, 'A.1.x', 2)], [span(3, 'A.1.x', 2)], ['A'])).toEqual([]);
   });
 });

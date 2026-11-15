@@ -1941,6 +1941,47 @@ const gql = {
     }
   `,
 
+  GET_SEQUENCE_ASSIGNMENTS: `#graphql
+    query GetSequenceAssignments($simulationDatasetId: Int!, $simulatedActivityId: Int!) {
+      assignments: ${Queries.SEQUENCE_TO_SIMULATED_ACTIVITIES}(
+        where: {
+          simulation_dataset_id: { _eq: $simulationDatasetId }
+          simulated_activity_id: { _eq: $simulatedActivityId }
+        }
+      ) {
+        seq_id
+      }
+    }
+  `,
+
+  GET_SEQUENCE_PROVENANCE: `#graphql
+    query GetSequenceProvenance($simulationDatasetId: Int!, $seqId: String!) {
+      sequences: ${Queries.SEQUENCE}(
+        where: { seq_id: { _eq: $seqId }, simulation_dataset_id: { _eq: $simulationDatasetId } }
+      ) {
+        simulation_dataset {
+          simulation {
+            plan_id
+          }
+        }
+      }
+      assignments: ${Queries.SEQUENCE_TO_SIMULATED_ACTIVITIES}(
+        where: { seq_id: { _eq: $seqId }, simulation_dataset_id: { _eq: $simulationDatasetId } }
+      ) {
+        simulated_activity_id
+      }
+      generated: ${Queries.EXPANDED_TEMPLATES}(
+        where: { seq_id: { _eq: $seqId }, simulation_dataset_id: { _eq: $simulationDatasetId } }
+        order_by: { id: desc }
+        limit: 1
+      ) {
+        created_at
+        expanded_template
+        id
+      }
+    }
+  `,
+
   GET_SIMULATION_DATASET_ID: `#graphql
     query GetSimulationDatasetId($datasetId: Int!) {
       ${Queries.SIMULATION_DATASETS}(where: {dataset_id: {_eq: $datasetId}}) {
@@ -2026,9 +2067,9 @@ const gql = {
     }
   `,
 
-  GET_SOURCE_BY_NAME: `#graphql
-    query GetSourceByName($name: String!) {
-      sources: ${Queries.SOURCES}(where: { name: { _eq: $name } }, limit: 1) {
+  GET_SOURCE_BY_ORIGIN: `#graphql
+    query GetSourceByOrigin($origin: String!, $owner: String!) {
+      sources: ${Queries.SOURCES}(where: { origin: { _eq: $origin }, owner: { _eq: $owner } }) {
         id
         name
         owner
@@ -2042,6 +2083,7 @@ const gql = {
           }
           content_hash
           id
+          metadata
           status
         }
       }

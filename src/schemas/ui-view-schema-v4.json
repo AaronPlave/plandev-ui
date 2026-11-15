@@ -131,6 +131,13 @@
                 "$ref": "#/definitions/dynamicFilter"
               },
               "type": "object"
+            },
+            "within": {
+              "description": "Imported records only: keep the records with these source keys and their descendants (by the parent each names)",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
             }
           },
           "type": "object"

@@ -1,4 +1,4 @@
-import { debounce, isEqual } from 'lodash-es';
+import { debounce, isEqual, pick } from 'lodash-es';
 import { SearchParameters } from '../enums/searchParameters';
 import { derived, get, writable, type Readable, type Writable } from 'svelte/store';
 import type {
@@ -36,6 +36,7 @@ import {
   simulationSpanToActivity,
   withSourceIdentity,
 } from '../utilities/analysis';
+import { sha256 } from '../utilities/analysisSequence';
 import { ANNOTATION_COLOR, syncGuideNotes } from '../utilities/analysisAnnotations';
 import type { WatchedResource } from '../utilities/analysisAtTime';
 import { getSourceCatalog, type SourceCatalog } from '../utilities/analysisPresentation';
@@ -92,6 +93,11 @@ export const analysisSimulationTypeCounts: Writable<Record<number, { count: numb
 /** Everything the analysis's sources cover: how far the timeline can zoom out. */
 export const analysisMaxTimeRange: Writable<TimeRange> = writable({ end: 0, start: 0 });
 export const selectedAnalysisActivity: Writable<AnalysisActivityRef | null> = writable(null);
+/**
+ * Asks the page to show an authored sequence in its Sequence inspector: the source, and the step to open (an
+ * AuthoredEntry id). Set by whatever offers "show in sequence"; the page opens the tab.
+ */
+export const analysisSequenceFocus: Writable<{ entryId?: string; sourceId: string } | null> = writable(null);
 /**
  * Resources the At Time inspector was asked to watch, each of one source (by the analysis's own binding id) and its
  * name: the same name in two sources is two entries. Page state, not saved with the analysis; it lives here because the
@@ -410,6 +416,7 @@ export function closeAnalysis() {
   analysisSimulationDatasets.set([]);
   analysisSimulationTypeCounts.set({});
   selectedAnalysisActivity.set(null);
+  analysisSequenceFocus.set(null);
   analysisCompareReference.set(null);
   analysisAnnotations.set([]);
   focusedAnnotationId.set(null);
@@ -702,17 +709,23 @@ function appendRootRow(timeline: Timeline, row: Row) {
 }
 
 /**
- * Shows a sequence (or the sequence a step is in) on the timeline: a row of the source's records of `types` (the
- * sequence's own kinds and its steps'), grouped by name and opened by parent, so its steps sit under it in the
- * product's order. A row that already shows those types that way is reused, not duplicated. The selection, revealed
- * in the row's tree, does the rest. Only the presentation changes; the data is only read.
+ * Shows sequences on the timeline: a row of the source's records of `types` (the sequences' own kinds and their
+ * steps'), grouped by name and opened by parent, so steps sit under their sequence in the product's order. With
+ * `focus`, the row holds only that sequence and what descends from it (by the parents records name, never by type or
+ * time); without, every sequence of the source. A row that already shows the same thing is reused, not duplicated.
+ * The selection, revealed in the row's tree, does the rest. Only the presentation changes; the data is only read.
  */
-export function showAnalysisSequence(sourceId: string, types: string[]): Row | undefined {
+export function showAnalysisSequence(
+  sourceId: string,
+  types: string[],
+  focus?: { key: string; name: string },
+): Row | undefined {
   const timeline = get(view)?.definition.plan.timelines[0];
   if (!timeline || !types.length) {
     return undefined;
   }
   const wanted = [...new Set(types)].sort();
+  const within = focus ? [focus.key] : undefined;
   const existing = timeline.rows.find(
     row =>
       row.discreteOptions?.displayMode === 'grouped' &&
@@ -721,6 +734,7 @@ export function showAnalysisSequence(sourceId: string, types: string[]): Row | u
         layer =>
           layer.sourceId === sourceId &&
           isActivityLayer(layer) &&
+          isEqual(layer.filter.activity?.within, within) &&
           wanted.every(type => layer.filter.activity?.static_types?.includes(type)),
       ),
   );
@@ -733,15 +747,15 @@ export function showAnalysisSequence(sourceId: string, types: string[]): Row | u
         activityOptions: { ...ViewDefaultActivityOptions, groupBy: 'name', hierarchyMode: 'parent' },
         displayMode: 'grouped',
       },
-      height: 320,
+      height: focus ? 200 : 320,
       layers: [
         createTimelineActivityLayer([timeline], {
-          filter: { activity: { static_types: wanted } },
-          name: wanted.join(' + '),
+          filter: { activity: { static_types: wanted, ...(within ? { within } : {}) } },
+          name: focus ? focus.name : wanted.join(' + '),
           sourceId,
         }),
       ],
-      name: `Sequences · ${sourceLabel}`,
+      name: focus ? `Sequence ${focus.name} · ${sourceLabel}` : `Sequences · ${sourceLabel}`,
     });
   if (!existing) {
     appendRootRow(timeline, row);
@@ -1373,22 +1387,46 @@ export async function analyzeRevision(
 
 /** A SeqDev workspace file, as "Analyze sequence" reads it. */
 export type WorkspaceSequenceFile = {
-  /** The seqJSON read: the file's own bytes, or, for a file in another language, the adaptation's conversion. */
-  content: string;
-  /** Set when `content` is a conversion: the language of the file it was converted from. */
-  convertedFrom?: string;
+  /**
+   * How the file's language becomes seqJSON, when it is not seqJSON itself: the adaptation's own conversion, run here
+   * on exactly `input` (never on whatever output an editor last displayed).
+   */
+  conversion?: {
+    /** The uploaded adaptation that converts, or null for the built-in SeqN conversion. */
+    adaptationId: number | null;
+    /** The command dictionary the conversion reads, when there is one. */
+    commandDictionaryId: number | null;
+    /** The file's language, e.g. "SeqN". */
+    language: string;
+    run: (input: string) => string | undefined | Promise<string | undefined>;
+  };
+  /** The file's saved content. */
+  input: string;
   path: string;
   workspaceId: number;
   workspaceName: string;
 };
 
+/** Why `content` can't be imported as a seqJSON sequence, or null when it can. */
+function seqJsonProblem(content: string | undefined): string | null {
+  try {
+    const parsed = JSON.parse(content ?? '');
+    return parsed && typeof parsed === 'object' && typeof parsed.id === 'string' ? null : 'it has no sequence id';
+  } catch {
+    return 'it is not JSON';
+  }
+}
+
 /**
- * "Analyze sequence" on a seqJSON file in a SeqDev workspace. Workspace files keep no versions, so the analysis reads
- * a snapshot: the file's bytes, imported as a revision of a source named for the workspace and path. The same bytes
- * analyzed again reuse their revision (by content hash); changed bytes become a new revision, which an analysis of
- * the old one offers as an update and never takes on its own. Later edits in SeqDev change nothing analyzed. A file
- * moved or renamed is another source: the workspace keeps no identity across a move. Returns the analysis's id, or
- * null (reported) when the import or the analysis failed.
+ * "Analyze sequence" on a file in a SeqDev workspace. Workspace files keep no versions, so the analysis reads a
+ * snapshot: `input`, or its conversion to seqJSON run here on exactly `input`, imported as a revision of the user's
+ * source for that file. The source is found by its origin, the workspace's id and the file's path, among the user's
+ * own sources only: never by a name (workspace names repeat, and change), never another user's, and never by content.
+ * A file moved or renamed is another source, since the workspace keeps no identity across a move. The same input
+ * converting to the same bytes reuses their revision; anything else is a new revision, which an analysis of an older
+ * one offers as an update and never takes on its own. Each revision keeps what it was made from: the workspace, path,
+ * the input's hash and, for a conversion, the language, adaptation and dictionary. Returns the analysis's id, or null
+ * (reported) when the conversion, the import or the analysis failed.
  */
 export async function analyzeWorkspaceSequence(
   file: WorkspaceSequenceFile,
@@ -1396,39 +1434,77 @@ export async function analyzeWorkspaceSequence(
   wait: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms)),
 ): Promise<number | null> {
   const name = `${file.workspaceName}/${file.path}`;
-  const bytes = new TextEncoder().encode(file.content);
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
-  const contentHash = `sha256:${[...digest].map(byte => byte.toString(16).padStart(2, '0')).join('')}`;
-  const source = await effects.getSourceByName(name, user);
+  let content: string | undefined = file.input;
+  if (file.conversion) {
+    try {
+      content = await file.conversion.run(file.input);
+    } catch (e) {
+      showFailureToast(`The Sequence Could Not Be Converted To seqJSON: ${(e as Error).message}`);
+      return null;
+    }
+  }
+  const problem = seqJsonProblem(content);
+  if (content === undefined || problem !== null) {
+    showFailureToast(
+      file.conversion
+        ? `The Conversion To seqJSON Is Not A Sequence (${problem})`
+        : `The File Is Not A seqJSON Sequence (${problem})`,
+    );
+    return null;
+  }
+  const [inputHash, contentHash] = await Promise.all([sha256(file.input), sha256(content)]);
+  const source = await effects.getOrCreateSourceByOrigin(
+    `workspace:${file.workspaceId}:${file.path}`,
+    name,
+    'seq_json',
+    user,
+  );
   if (source === null) {
     showFailureToast('The Sequence Could Not Be Analyzed');
     return null;
   }
-  let revision = source?.revisions.find(r => r.content_hash === contentHash && r.status === 'success') ?? null;
-  let sourceId = source?.id;
+  const { conversion } = file;
+  const workspaceFile = {
+    inputHash,
+    path: file.path,
+    workspaceId: file.workspaceId,
+    workspaceName: file.workspaceName,
+    ...(conversion
+      ? {
+          conversion: {
+            adaptationId: conversion.adaptationId,
+            commandDictionaryId: conversion.commandDictionaryId,
+            from: conversion.language,
+          },
+        }
+      : {}),
+  };
+  // The same bytes, made the same way from the same input: a revision of other input is another snapshot.
+  let revision: { activityCount: number; id: number; status: string } | null =
+    source.revisions.find(
+      r =>
+        r.content_hash === contentHash &&
+        r.status === 'success' &&
+        isEqual(
+          pick((r.metadata as { workspaceFile?: object } | null)?.workspaceFile ?? {}, 'conversion', 'inputHash'),
+          pick(workspaceFile, 'conversion', 'inputHash'),
+        ),
+    ) ?? null;
   if (!revision) {
     const imported = await effects.importSourceRevision(
       new File(
-        [bytes],
-        `${(file.path.split('/').pop() || 'sequence').replace(/\.seq\.json$/, '').replace(/\.[^.]*$/, '')}.seq.json`,
+        [content],
+        `${file.path.split('/').pop()?.split('.')[0] || 'sequence'}.seq.json`,
         { type: 'application/json' },
       ),
-      source ? { owner: source.owner, sourceId: source.id } : { sourceName: name },
+      { owner: source.owner, sourceId: source.id },
       'seq_json',
       user,
-      {
-        workspaceFile: {
-          path: file.path,
-          workspaceId: file.workspaceId,
-          workspaceName: file.workspaceName,
-          ...(file.convertedFrom ? { convertedFrom: file.convertedFrom } : {}),
-        },
-      },
+      { workspaceFile },
     );
     if (!imported) {
       return null;
     }
-    sourceId = imported.sourceId;
     // ponytail: polls the import for up to a minute; a seqJSON file ingests in well under a second.
     for (let tries = 0; tries < 120; tries++) {
       revision = await effects.getSourceRevisionStatus(imported.revisionId, user);
@@ -1444,7 +1520,7 @@ export async function analyzeWorkspaceSequence(
       return null;
     }
   }
-  return analyzeRevision({ id: sourceId as number, name }, revision, user);
+  return analyzeRevision({ id: source.id, name: source.name }, revision, user);
 }
 
 /**

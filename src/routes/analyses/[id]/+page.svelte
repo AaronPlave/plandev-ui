@@ -9,6 +9,7 @@
     ChevronUp,
     Crosshair,
     Ellipsis,
+    ListOrdered,
     Link,
     LayoutTemplate,
     PanelBottom,
@@ -20,7 +21,7 @@
     TextSearch,
   } from 'lucide-svelte';
   import type { PaneAPI } from 'paneforge';
-  import { onDestroy } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import AnalysisActivityDetails from '../../../components/analysis/AnalysisActivityDetails.svelte';
   import AnalysisActivityTable from '../../../components/analysis/AnalysisActivityTable.svelte';
   import AnalysisAddSourceDialog from '../../../components/analysis/AnalysisAddSourceDialog.svelte';
@@ -28,6 +29,7 @@
   import AnalysisAtTimePanel from '../../../components/analysis/AnalysisAtTimePanel.svelte';
   import AnalysisLoadViewDialog from '../../../components/analysis/AnalysisLoadViewDialog.svelte';
   import AnalysisNotesPanel from '../../../components/analysis/AnalysisNotesPanel.svelte';
+  import AnalysisSequencePanel from '../../../components/analysis/AnalysisSequencePanel.svelte';
   import AnalysisSourcesPanel from '../../../components/analysis/AnalysisSourcesPanel.svelte';
   import AnalysisTimelinePanel from '../../../components/analysis/AnalysisTimelinePanel.svelte';
   import Nav from '../../../components/app/Nav.svelte';
@@ -42,6 +44,7 @@
     analysisMaxTimeRange,
     analysisPlans,
     analysisSaveStatus,
+    analysisSequenceFocus,
     analysisSimulationDatasets,
     analysisSourceBindings,
     analysisSourceRevisions,
@@ -62,13 +65,14 @@
   import { timeCursorMs, viewTimeRange } from '../../../stores/plan';
   import { setTimelineSourcesContext } from '../../../stores/timelineSources';
   import { getUserStore } from '../../../stores/user';
+  import { getAuthoredSequenceSources } from '../../../utilities/analysisSequence';
   import { featurePermissions } from '../../../utilities/permissions';
   import { showFailureToast, showSuccessToast } from '../../../utilities/toast';
   import type { PageData } from './$types';
 
   export let data: PageData;
 
-  type InspectorTab = 'details' | 'editor' | 'notes' | 'time';
+  type InspectorTab = 'details' | 'editor' | 'notes' | 'sequence' | 'time';
 
   const user = getUserStore();
   // The timeline, its editor and the Sources browser on this page read the analysis's sources, not a plan's.
@@ -170,7 +174,8 @@
       return;
     }
     inspectorPane?.expand();
-    inspectorTabs?.selectTab(tab);
+    // After the tab list updates: a tab offered only for some sources (Sequence) registers when they load.
+    tick().then(() => inspectorTabs?.selectTab(tab));
   }
 
   $: if (data.initialAnalysis && data.initialAnalysis.id !== $analysis?.id) {
@@ -183,8 +188,19 @@
         openInspector('notes');
       } else if (context.activity) {
         openInspector('details');
+      } else if (
+        getAuthoredSequenceSources($analysisSourceBindings, $analysisSourceRevisions).length &&
+        !$view?.definition.plan.timelines.some(timeline => timeline.rows.length)
+      ) {
+        // A sequence with nothing on the timeline (no absolute times) is investigated in its inspector.
+        openInspector('sequence');
       }
     });
+  }
+  $: hasSequence = getAuthoredSequenceSources($analysisSourceBindings, $analysisSourceRevisions).length > 0;
+  // "Show in sequence", from wherever it is offered, opens the inspector there (the panel reads the focus).
+  $: if ($analysisSequenceFocus) {
+    openInspector('sequence');
   }
   $: if ($analysis) {
     rememberVisit($analysis.id, $viewTimeRange, $timeCursorMs);
@@ -414,6 +430,10 @@
         <Tabs bind:this={inspectorTabs} class="analysis-inspector" on:select-tab={onSelectTab}>
           <svelte:fragment slot="tab-list">
             <Tab class="flex items-center gap-1.5 text-xs" tabId="details"><TextSearch size={14} />Activity</Tab>
+            <!-- Always registered (Tabs pairs tabs and panels by registration order); shown only with a sequence. -->
+            <Tab class="items-center gap-1.5 text-xs {hasSequence ? 'flex' : 'hidden'}" tabId="sequence"
+              ><ListOrdered size={14} />Sequence</Tab
+            >
             <Tab class="flex items-center gap-1.5 text-xs" tabId="time"><Crosshair size={14} />At Time</Tab>
             <Tab class="flex items-center gap-1.5 text-xs" tabId="notes"><StickyNote size={14} />Notes</Tab>
             <Tab class="flex items-center gap-1.5 text-xs" tabId="editor" disabled={readOnly}
@@ -438,6 +458,20 @@
                 timelinePanel?.reveal(startMs, endMs);
               }}
               on:zoom={({ detail }) => timelinePanel?.zoomTo(detail.startMs, detail.endMs)}
+            />
+          </TabPanel>
+          <TabPanel panelId="sequence">
+            <AnalysisSequencePanel
+              bindings={$analysisSourceBindings}
+              datasets={$analysisSimulationDatasets}
+              {readOnly}
+              revisions={$analysisSourceRevisions}
+              selected={$selectedAnalysisActivity}
+              user={$user}
+              on:select={({ detail: { endMs, ref, startMs } }) => {
+                $selectedAnalysisActivity = ref;
+                timelinePanel?.reveal(startMs, endMs);
+              }}
             />
           </TabPanel>
           <TabPanel panelId="time">
@@ -524,12 +558,18 @@
     grid-template-rows: min-content minmax(0, 1fr);
   }
 
+  :global(.analysis-inspector) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   :global(.analysis-inspector .tab-panels) {
     min-height: 0;
   }
 
   :global(.analysis-inspector .tab-panel) {
     display: grid;
+    /* A panel is the pane's width: long content scrolls or truncates inside it, never widens it. */
+    grid-template-columns: minmax(0, 1fr);
     min-height: 0;
   }
 

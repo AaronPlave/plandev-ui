@@ -34,6 +34,7 @@
   import effects from '../../utilities/effects';
   import { convertUsToDurationString, formatDate } from '../../utilities/time';
   import AnalysisActivityComparison from './AnalysisActivityComparison.svelte';
+  import AnalysisGeneratedLinks from './AnalysisGeneratedLinks.svelte';
   import AnalysisRecordStructure from './AnalysisRecordStructure.svelte';
 
   export let bindings: AnalysisSourceBinding[] = [];
@@ -290,6 +291,7 @@
         <dd>{value}</dd>
       {/each}
     </dl>
+    <AnalysisGeneratedLinks {bindings} details={current} {revisions} {user} />
     {#if current.related}
       <AnalysisRecordStructure
         details={current}

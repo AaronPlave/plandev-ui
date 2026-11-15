@@ -9,8 +9,10 @@
   import { Badge, Button } from '@nasa-jpl/stellar-svelte';
   import { CalendarRange, Database, Info, Pencil, Play, X } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
+  import { getAuthoredMission } from '../../utilities/analysisSequence';
   import {
     analysisPlans,
+    analysisSequenceFocus,
     analysisSimulationDatasets,
     analysisSourceRecovery,
     analysisSourceRevisions,
@@ -36,7 +38,6 @@
   import { getIntervalInMs } from '../../utilities/time';
   import { getSource } from '../../utilities/timelineSources';
   import SourceBrowser from '../sources/SourceBrowser.svelte';
-  import AnalysisAuthoredSequence from './AnalysisAuthoredSequence.svelte';
 
   export let bindings: AnalysisSourceBinding[] = [];
   export let registry: TimelineSourceRegistry;
@@ -297,8 +298,16 @@
                 <dt>Content hash</dt>
                 <dd class="truncate" title={revision.content_hash}>{revision.content_hash}</dd>
               {/if}
-              {#if revision.metadata?.product?.mission?.kind === 'authored sequence'}
-                <AnalysisAuthoredSequence mission={revision.metadata.product.mission} />
+              {@const mission = getAuthoredMission(revision)}
+              {#if mission}
+                <dt>Sequence</dt>
+                <dd>
+                  {mission.sequenceId} · {mission.steps.length} steps
+                  <button
+                    class="text-primary underline"
+                    on:click={() => ($analysisSequenceFocus = { sourceId: binding.id })}>Inspect</button
+                  >
+                </dd>
               {/if}
             {:else if info.dataset}
               {@const dataset = info.dataset}

@@ -15,7 +15,7 @@
     UserSequence,
   } from '@nasa-jpl/plandev-sequence-languages';
   import { Button, Checkbox, Resizable, Select } from '@nasa-jpl/stellar-svelte';
-  import { analyzeWorkspaceSequence } from '../../../stores/analysis';
+  import { analyzeWorkspaceSequence, type WorkspaceSequenceFile } from '../../../stores/analysis';
   import type { EditorView } from 'codemirror';
   import { capitalize, startCase } from 'lodash-es';
   import { Folder, ListX, LoaderCircle, TriangleAlert } from 'lucide-svelte';
@@ -692,9 +692,11 @@
     // load a user sequencing adaptation from the DB, and execute it in the page's JS context.
     // adaptation is a user-provided JS module w/ functions that hook into editor functionality to provide linting, etc.
 
+    loadedAdaptationId = undefined;
     if (!id) {
       // not passing an ID means we want to intentionally reset to the default adaptation
       resetSequenceAdaptation();
+      loadedAdaptationId = null;
       return;
     }
 
@@ -705,6 +707,7 @@
         addWorkspaceAdaptationLog(log.level as LogLevel, log.args);
       });
       setSequenceLanguages(adaptation);
+      loadedAdaptationId = id;
       logMessage('log', `Loaded adaptation "${metadata.name}" (ID=${id}).`, {
         duration: performance.now() - startTime,
       });
@@ -856,6 +859,9 @@
   }
 
   let analyzingSequence: boolean = false;
+  let destroyed: boolean = false;
+  /** The adaptation in use: its id, null for the built-in one, undefined while one loads (or failed to). */
+  let loadedAdaptationId: number | null | undefined = undefined;
   /** Whether the editor's current output is seqJSON (what the default adaptation converts a sequence file to). */
   $: outputIsSeqJson = (() => {
     try {
@@ -866,7 +872,11 @@
     }
   })();
 
-  /** Opens an Analysis of the active seqJSON file as saved now (a snapshot; later edits change nothing analyzed). */
+  /**
+   * Opens an Analysis of the active sequence file as saved now (a snapshot; later edits change nothing analyzed). A
+   * sequence in another language is converted afresh from exactly the saved content, by the loaded adaptation, never
+   * read from the editor's debounced output, which may still be of an earlier edit.
+   */
   async function onAnalyzeSequence() {
     const ws = $workspace ?? initialWorkspace;
     const fullPath = $activeDocumentPath;
@@ -876,12 +886,37 @@
     if ($activeDocumentIsDirty && !(await saveBeforeOperation('analyzing'))) {
       return;
     }
-    analyzingSequence = true;
+    // Saving awaits: the operator may have switched files, or the save may not have taken.
+    if ($activeDocumentPath !== fullPath || $activeDocumentIsDirty) {
+      showFailureToast('The Sequence Was Not Analyzed: Its File Changed Before It Was Saved');
+      return;
+    }
+    const input = $activeDocument.currentContent;
     const converted = !fullPath.endsWith('.seq.json');
+    let conversion: WorkspaceSequenceFile['conversion'];
+    if (converted) {
+      const adaptationId = $parcel?.sequence_adaptation_id ?? null;
+      const commandDictionaryId = $parcel?.command_dictionary_id ?? null;
+      // The conversion reads the adaptation and dictionary: one not loaded yet would convert with the wrong ones.
+      if (adaptationId !== loadedAdaptationId || (commandDictionaryId !== null && !commandDictionary)) {
+        showFailureToast('The Sequence Was Not Analyzed: Its Adaptation Or Dictionary Is Still Loading');
+        return;
+      }
+      const output = $sequenceAdaptation.outputs[0];
+      const context = phoenixContext;
+      const fileName = $activeDocument.fileName ?? '';
+      conversion = {
+        adaptationId,
+        commandDictionaryId,
+        language: $sequenceAdaptation.input.name,
+        run: async text => output?.toOutputFormat?.(text, context, fileName),
+      };
+    }
+    analyzingSequence = true;
     const id = await analyzeWorkspaceSequence(
       {
-        content: converted ? (selectedSequenceOutput ?? '') : $activeDocument.currentContent,
-        ...(converted ? { convertedFrom: $sequenceAdaptation.input.name } : {}),
+        ...(conversion ? { conversion } : {}),
+        input,
         path: fullPath.startsWith(`${ws.name}/`) ? fullPath.slice(ws.name.length + 1) : fullPath,
         workspaceId: ws.id,
         workspaceName: ws.name,
@@ -889,7 +924,8 @@
       $user,
     );
     analyzingSequence = false;
-    if (id !== null) {
+    // Left the page while it imported: the analysis exists (in Analyses), but don't pull the operator back to it.
+    if (id !== null && !destroyed) {
       goto(`${base}/analyses/${id}`);
     }
   }
@@ -1669,6 +1705,7 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
     resetSequenceAdaptation();
     activeDocument.reset();
     resetWorkspaceErrorStores();

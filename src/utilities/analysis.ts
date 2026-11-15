@@ -92,6 +92,8 @@ export type ImportedActivityRecord = {
   parameters: Record<string, unknown>;
   /** The id of the record the product names as its parent, when that resolves to a record of the same revision. */
   parentId?: number;
+  /** The product's own key for it. */
+  source_key?: string;
   start_time: string;
   /** Its place among its parent's steps, when the product gives one. */
   step?: number | null;
@@ -113,6 +115,7 @@ export function importedActivityToSpan(sourceId: TimelineSourceId, activity: Imp
     sourceActivityId: activity.id,
     sourceId,
     span_id: getActivityDrawingId({ activityId: activity.id, sourceId }),
+    ...(activity.source_key !== undefined ? { sourceKey: activity.source_key } : {}),
     startMs,
     start_offset: '',
     ...(typeof activity.step === 'number' ? { step: activity.step } : {}),
@@ -1054,6 +1057,30 @@ export function findActivityTypeRow(timelines: Timeline[], sourceId: TimelineSou
         return !filter?.dynamic_type_filters?.length && !filter?.other_filters?.length;
       }),
     );
+}
+
+/**
+ * The spans that are, or descend from (through the parents they name, among `all`), a record with one of `keys`: a
+ * layer's `within` narrowing. A parent that isn't loaded ends the chain.
+ */
+export function spansWithin(spans: Span[], all: Span[], keys: string[]): Span[] {
+  const wanted = new Set(keys);
+  const byId = new Map(all.map(span => [span.span_id, span]));
+  const memo = new Map<number, boolean>();
+  const inside = (span: Span | undefined, depth: number): boolean => {
+    if (!span || depth > 64) {
+      return false;
+    }
+    let known = memo.get(span.span_id);
+    if (known === undefined) {
+      known =
+        (span.sourceKey !== undefined && wanted.has(span.sourceKey)) ||
+        (span.parent_id !== null && inside(byId.get(span.parent_id), depth + 1));
+      memo.set(span.span_id, known);
+    }
+    return known;
+  };
+  return spans.filter(span => inside(span, 0));
 }
 
 /* Removing a source. */

@@ -92,6 +92,7 @@
     spanInView,
     type TimelineLockStatus,
   } from '../../utilities/timeline';
+  import { spansWithin } from '../../utilities/analysis';
   import {
     createStaticResourceSubscription,
     getLayerResourceRequestKey,
@@ -652,13 +653,15 @@
           for (const span of request.spans) {
             sourceSpans.push(span);
           }
-          const { spans: matchingSpans } = applyActivityLayerFilter(
+          const { spans: filteredSpans } = applyActivityLayerFilter(
             layer.filter.activity,
             [],
             request.spans,
             getSource($timelineSources, request.sourceId)?.intervals?.catalog ?? [],
             {},
           );
+          const within = layer.filter.activity?.within;
+          const matchingSpans = within?.length ? spansWithin(filteredSpans, request.spans, within) : filteredSpans;
           matchingSpans.forEach(span => {
             if (!seenSpanIds[span.span_id]) {
               idToColorMaps.spans[span.span_id] = layer.activityColor;

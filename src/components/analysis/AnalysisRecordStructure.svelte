@@ -150,6 +150,12 @@
     ? [details.type, ...[...structure.steps, ...structure.ancestors, ...structure.siblings].map(record => record.type)]
     : [];
   $: isSequence = details.type === 'SEQUENCE' || structure?.steps.length;
+  /** The sequence "show on timeline" focuses on: this one, or the one this step is in. */
+  $: focus = structure?.steps.length
+    ? { key: details.key, name: details.name }
+    : structure?.ancestors.length
+      ? { key: structure.ancestors.at(-1)?.source_key ?? '', name: structure.ancestors.at(-1)?.name ?? '' }
+      : null;
   $: siblingIndex = structure?.siblings.findIndex(record => record.source_key === details.key) ?? -1;
   $: siblingWindow =
     structure && siblingIndex >= 0 && !showAllSiblings
@@ -183,15 +189,22 @@
       </div>
     {/if}
 
-    {#if !readOnly && (structure.steps.length || structure.ancestors.length)}
+    {#if !readOnly && focus}
+      {@const target = focus}
       <div class="facts">
         <button
           class="link"
-          title="Reveal {structure.steps.length
+          title="A timeline row of {structure.steps.length
             ? 'this sequence'
-            : 'this step in its sequence'} in a timeline row of its source's sequences, steps in order"
+            : `${target.name}, the sequence this step is in,`} and what descends from it, steps in order"
+          on:click={() => showAnalysisSequence(details.ref.sourceId, [...new Set(sequenceTypes)], target)}
+          >Show {structure.steps.length ? 'this sequence' : 'its sequence'} on timeline</button
+        >
+        <button
+          class="link muted"
+          title="A timeline row of every sequence of this source, steps in order"
           on:click={() => showAnalysisSequence(details.ref.sourceId, [...new Set(sequenceTypes)])}
-          >Show {structure.steps.length ? 'sequence' : 'in its sequence'} on timeline</button
+          >all sequences of the source</button
         >
       </div>
     {/if}

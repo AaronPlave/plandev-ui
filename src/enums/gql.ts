@@ -211,6 +211,7 @@ export enum Queries {
   SEQUENCE_FILTER = 'sequence_filter',
   SEQUENCE_TEMPLATE = 'sequence_template',
   SEQUENCE_TO_SIMULATED_ACTIVITY = 'sequence_to_simulated_activity_by_pk',
+  SEQUENCE_TO_SIMULATED_ACTIVITIES = 'sequence_to_simulated_activity',
   SET_RESOLUTION = 'set_resolution',
   SET_RESOLUTIONS = 'set_resolution_bulk',
   SIMULATE = 'simulate',

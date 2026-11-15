@@ -53,6 +53,11 @@ export type ActivityLayerFilter = {
     string,
     DynamicFilter<Pick<typeof ActivityFilterField, 'Tags' | 'Parameter' | 'SchedulingGoalId' | 'Name'>>[]
   >;
+  /**
+   * Imported records only: narrows the layer to the records with these source keys and their descendants (by the
+   * parent each names). Keys, not ids, so a layout reused on another revision of the product keeps its meaning.
+   */
+  within?: string[];
 };
 
 /** One external source, identified as in the external-event domain: a source key within a derivation group. */
