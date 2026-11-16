@@ -164,6 +164,78 @@ export type SpanTimeBounds = {
   start: number;
 };
 
+/**
+ * A mark on a timeline, and what it means: one concept for what were guides (a time, a time range, a value, a value
+ * range drawn across or on the rows) and notes (an explanation of a time, a record, or a finding with no mark).
+ *
+ * Where an annotation is drawn is its `anchor`; everything else is what it says. A guide is an annotation with a time
+ * or value anchor and no description; a note on a record is a record anchor with one; a general finding has no anchor
+ * to draw. Plan pages and Analyses share the shape. Who it belongs to follows where it is saved: a view's timeline,
+ * or an analysis's (whose own timeline is a view definition). `reusable` says whether it goes with the presentation
+ * when that is reused elsewhere.
+ */
+export type Annotation = {
+  anchor: AnnotationAnchor;
+  /** The mark's color; a default when absent. */
+  color?: string;
+  createdAt?: string;
+  createdBy?: string;
+  /** What it means, in words. Absent for a plain mark. */
+  description?: string;
+  /** Unique among the annotations of a timeline. */
+  id: number;
+  /** Its title, drawn with its mark. */
+  label: string;
+  /** How the label is drawn (font, alignment, hidden), as guides were. */
+  labelStyle?: Omit<Label, 'color' | 'text'>;
+  /** The id of the Analysis note it was made from, so a link to that note still opens it. */
+  legacyNoteId?: number;
+  /**
+   * Part of the presentation: saved with a layout and brought when the layout is used elsewhere (a nominal limit, a
+   * reference line, a phase boundary). Absent or false: it belongs to where it was made (an investigation's finding)
+   * and never travels on its own. A record annotation is never reusable: it is about one source's data.
+   */
+  reusable?: boolean;
+  updatedAt?: string;
+};
+
+export type AnnotationAnchor =
+  /** A time, or a time range, across every row. DOY times, as the timeline's other times. */
+  | { end?: string; kind: 'time'; start: string }
+  /**
+   * A value, or a value range, on one axis of one row. `rowId` is null once the row is no longer on the timeline (a
+   * layout replaced it): the annotation keeps what it marked, and says where it was.
+   */
+  | { kind: 'value'; rowId: number | null; rowName?: string; units?: string; y: number; y2?: number; yAxisId: number }
+  /** One record of one source (an activity, a command, a span, a directive), drawn at its start. */
+  | { kind: 'record'; record: AnnotationRecord; start?: string }
+  /** A finding with nothing to draw. */
+  | { kind: 'general' };
+
+/** The record a record annotation is about, as it was when annotated: its identity is never re-derived. */
+export type AnnotationRecord = {
+  /** The record's id within its source. */
+  activityId?: number;
+  /**
+   * The data it was written against (an analysis source's identity: a revision, a simulation, a plan), so the
+   * annotation stays attributable, and recognisably about other data, after its source is pointed elsewhere.
+   */
+  data: string;
+  /** Its identity in its source: a source key, a span id, a directive id. */
+  key?: string;
+  /** What it is: a record (activity, command, span, directive), or a resource. */
+  kind: 'activity' | 'resource';
+  /** Its name, as last seen. */
+  name: string;
+  /** What it is, in an operator's terms ("Plan directive", "Reported command"…), as last seen. */
+  recordKind?: string;
+  /** The analysis source (binding id) it was read from. */
+  sourceId: string;
+  /** That source's name when it was annotated. */
+  sourceLabel: string;
+};
+
+/** How a value or value-range annotation is drawn on a row (see getHorizontalGuides). */
 export type HorizontalGuide = {
   /** What the mark means (an Analysis annotation's explanation); absent for a plain guide. */
   description?: string;
@@ -346,17 +418,16 @@ export type ResourceLayerFilter = string;
 export type ActivityOptions = {
   // Whether or not to display only directives, only spans, or both in the row
   composition: 'directives' | 'spans' | 'both';
-
-  // If 'directive' the activities are grouped starting with directive types, if 'flat' activities are grouped by type
-  // regardless of hierarchy, if 'parent' only activities whose parent is not in the row start a group, and each
-  // opens onto its children (imported records the product links by parent, a simulation's span tree).
-  hierarchyMode: 'directive' | 'flat' | 'parent';
-
   /**
    * What activities are grouped by in grouped mode. 'type' (absent means this) puts every SEQUENCE in one group;
    * 'name' gives each distinct name its own group, for sources whose type is a record kind and whose name says which.
    */
   groupBy?: 'name' | 'type';
+
+  // If 'directive' the activities are grouped starting with directive types, if 'flat' activities are grouped by type
+  // regardless of hierarchy, if 'parent' only activities whose parent is not in the row start a group, and each
+  // opens onto its children (imported records the product links by parent, a simulation's span tree).
+  hierarchyMode: 'directive' | 'flat' | 'parent';
 };
 
 // included in Discrete, bearing exclusive properties for drawing ExternalEvents
@@ -432,8 +503,13 @@ export type Row = {
   autoAdjustHeight: boolean;
   discreteOptions: DiscreteOptions;
   expanded: boolean;
+  /**
+   * Made by an Analysis's "Show this sequence" to show whichever sequence is focused next: focusing another sequence
+   * points this row at it instead of adding a row. Any edit of what the row shows (its layers, name, axes, options)
+   * makes it the person's own row, which is never repointed.
+   */
+  followsFocus?: boolean;
   height: number;
-  horizontalGuides: HorizontalGuide[];
   id: number;
   layers: Layer[];
   name: string;
@@ -468,15 +544,17 @@ export type TimelineSection = {
 };
 
 export type Timeline = {
+  /** Its marks and findings: what were vertical and horizontal guides, and an Analysis's notes. */
+  annotations: Annotation[];
   id: number;
   items: TimelineItemRef[];
   marginLeft: number;
   marginRight: number;
   rows: Row[];
   sections: TimelineSection[];
-  verticalGuides: VerticalGuide[];
 };
 
+/** How a time or time-range annotation is drawn across the rows (see getVerticalGuides). */
 export type VerticalGuide = {
   /** What the mark means (an Analysis annotation's explanation); absent for a plain guide. */
   description?: string;

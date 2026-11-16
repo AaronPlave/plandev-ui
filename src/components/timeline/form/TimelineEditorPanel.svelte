@@ -92,8 +92,15 @@
     toTimelineDropEdge,
   } from '../../../utilities/timeline';
   import {
+    getHorizontalGuides,
+    getVerticalGuides,
+    setHorizontalGuides,
+    setVerticalGuides,
+  } from '../../../utilities/annotations';
+  import {
     findLegacyResourceType,
     findResourceType,
+    getDefaultLayerSourceId,
     getSource,
     PLAN_SOURCE_ID,
   } from '../../../utilities/timelineSources';
@@ -161,10 +168,10 @@
   $: sectionsById = new Map(sections.map(section => [section.id, section]));
 
   $: timelines = $view?.definition.plan.timelines || [];
-  $: verticalGuides = selectedTimeline?.verticalGuides || [];
+  $: verticalGuides = getVerticalGuides(selectedTimeline);
   $: selectedRow = rows.find(row => row.id === $selectedRowId);
   $: selectedSection = sections.find(section => section.id === $selectedSectionId);
-  $: horizontalGuides = selectedRow?.horizontalGuides || [];
+  $: horizontalGuides = selectedRow ? getHorizontalGuides(selectedTimeline, selectedRow.id) : [];
   $: yAxes = selectedRow?.yAxes || [];
   $: layers = selectedRow?.layers || [];
   $: if (layers) {
@@ -251,15 +258,21 @@
   // TODO move to a util?
   function createTimelineLayer(chartType: Layer['chartType']): Layer {
     switch (chartType) {
-      // New resource layers read the Plan's simulation until another source is chosen
+      // New layers read the Plan (an analysis's first source with such data) until another source is chosen
       case 'line':
-        return createTimelineLineLayer(timelines, yAxes, { sourceId: PLAN_SOURCE_ID });
+        return createTimelineLineLayer(timelines, yAxes, {
+          sourceId: getDefaultLayerSourceId($timelineSources, 'resources'),
+        });
       case 'x-range':
-        return createTimelineXRangeLayer(timelines, yAxes, { sourceId: PLAN_SOURCE_ID });
+        return createTimelineXRangeLayer(timelines, yAxes, {
+          sourceId: getDefaultLayerSourceId($timelineSources, 'resources'),
+        });
       case 'externalEvent':
         return createTimelineExternalEventLayer(timelines);
-      default:
-        return createTimelineActivityLayer(timelines);
+      default: {
+        const sourceId = getDefaultLayerSourceId($timelineSources, 'intervals');
+        return createTimelineActivityLayer(timelines, sourceId && sourceId !== PLAN_SOURCE_ID ? { sourceId } : {});
+      }
     }
   }
 
@@ -450,14 +463,28 @@
     viewUpdateRow('yAxes', reordered);
   }
 
+  // Guides are drawn annotations: editing one edits its annotation (see utilities/annotations).
+  function updateVerticalGuides(guides: VerticalGuide[]) {
+    if (selectedTimeline) {
+      viewUpdateTimeline('annotations', setVerticalGuides(selectedTimeline.annotations, guides), selectedTimeline.id);
+    }
+  }
+
+  function updateHorizontalGuides(guides: HorizontalGuide[]) {
+    const timeline = $view?.definition.plan.timelines.find(({ id }) => id === selectedTimeline?.id);
+    if (timeline && selectedRow) {
+      viewUpdateTimeline('annotations', setHorizontalGuides(timeline.annotations, selectedRow, guides), timeline.id);
+    }
+  }
+
   function handleDeleteVerticalGuideClick(verticalGuide: VerticalGuide) {
     const filteredVerticalGuides = verticalGuides.filter(guide => guide.id !== verticalGuide.id);
-    viewUpdateTimeline('verticalGuides', filteredVerticalGuides, $selectedTimelineId);
+    updateVerticalGuides(filteredVerticalGuides);
   }
 
   function handleDeleteHorizontalGuideClick(horizontalGuide: HorizontalGuide) {
     const filteredHorizontalGuides = horizontalGuides.filter(guide => guide.id !== horizontalGuide.id);
-    viewUpdateRow('horizontalGuides', filteredHorizontalGuides);
+    updateHorizontalGuides(filteredHorizontalGuides);
   }
 
   /**
@@ -499,7 +526,7 @@
       }
       return { ...guide, [name]: value };
     });
-    viewUpdateRow('horizontalGuides', newHorizontalGuides);
+    updateHorizontalGuides(newHorizontalGuides);
   }
 
   function onVerticalGuideInput(event: CustomEvent<GuideRowChange>, verticalGuide: VerticalGuide) {
@@ -521,7 +548,7 @@
       }
       return { ...guide, [name]: value };
     });
-    viewUpdateTimeline('verticalGuides', newVerticalGuides, $selectedTimelineId);
+    updateVerticalGuides(newVerticalGuides);
   }
 
   function handleUpdateLayerProperty(property: string, value: string | number | boolean | object | null, layer: Layer) {
@@ -564,14 +591,20 @@
     };
     const declarationOf = (id: string | null | undefined, name: string | undefined) =>
       id ? findResourceType(registry, id, name) : findLegacyResourceType(legacy, name);
-    const rebound = rebindResourceLayer(timelines, { horizontalGuides, layers, yAxes }, layer, {
-      previousResourceType: declarationOf(layer.sourceId, layer.filter.resource),
-      resourceName,
-      resourceType: declarationOf(sourceId, resourceName),
-      sourceId: sourceId ?? undefined,
-      sourceLabel: getSource(registry, sourceId)?.label,
-    });
+    const { horizontalGuides: guides, ...rebound } = rebindResourceLayer(
+      timelines,
+      { horizontalGuides, layers, yAxes },
+      layer,
+      {
+        previousResourceType: declarationOf(layer.sourceId, layer.filter.resource),
+        resourceName,
+        resourceType: declarationOf(sourceId, resourceName),
+        sourceId: sourceId ?? undefined,
+        sourceLabel: getSource(registry, sourceId)?.label,
+      },
+    );
     viewUpdateRowProperties(rebound);
+    updateHorizontalGuides(guides);
   }
 
   function handleUpdateResourceLayerFilter(resourceName: string, layer: Layer) {
@@ -632,7 +665,7 @@
     }
     const yAxesWithScaleDomains = $yAxesWithScaleDomainsCache[selectedRow.id];
     const newHorizontalGuide = createHorizontalGuide(timelines, yAxesWithScaleDomains);
-    viewUpdateRow('horizontalGuides', [...horizontalGuides, newHorizontalGuide]);
+    updateHorizontalGuides([...horizontalGuides, newHorizontalGuide]);
   }
 
   function handleRemoveAllHorizontalGuidesClick() {
@@ -649,7 +682,7 @@
     const centerDateDoy = getDoyTime(new Date(centerTime));
 
     const newVerticalGuide = createVerticalGuide(timelines, centerDateDoy);
-    viewUpdateTimeline('verticalGuides', [...verticalGuides, newVerticalGuide], $selectedTimelineId);
+    updateVerticalGuides([...verticalGuides, newVerticalGuide]);
   }
 
   function handleRemoveAllVerticalGuidesClick() {

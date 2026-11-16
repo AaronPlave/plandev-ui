@@ -3,7 +3,9 @@ import type {
   AnalysisActivityRef,
   AnalysisActivityRow,
   AnalysisDefinition,
+  AnalysisExternalEvent,
   AnalysisPlan,
+  AnalysisPlanExternalDataset,
   AnalysisPlanDirective,
   AnalysisSimulationDataset,
   AnalysisSourceBinding,
@@ -27,6 +29,7 @@ import type {
   TimelineSourceId,
 } from '../types/timelineSource';
 import { ViewDefaultActivityOptions, ViewDefaultDiscreteOptions } from '../constants/view';
+import { removeValueAnnotations } from './annotations';
 import { getIntervalInMs } from './time';
 import { createRow, createTimeline, createTimelineActivityLayer, isActivityLayer } from './timeline';
 import {
@@ -94,6 +97,8 @@ export type ImportedActivityRecord = {
   parameters: Record<string, unknown>;
   /** The id of the record the product names as its parent, when that resolves to a record of the same revision. */
   parentId?: number;
+  /** What the adapter says the record is (`metadata.recordKind`). */
+  record_kind?: unknown;
   /** The product's own key for it. */
   source_key?: string;
   start_time: string;
@@ -101,6 +106,38 @@ export type ImportedActivityRecord = {
   step?: number | null;
   type: string;
 };
+
+/**
+ * What a record is, in an operator's terms: a plan's directive and a simulation's span are told apart from each other
+ * and from what a product reported or a sequence authored, so nothing is called just "Activity" when more is known.
+ */
+export function getRecordKindLabel(
+  sourceKind: AnalysisSourceBinding['kind'],
+  recordKind?: unknown,
+  type?: string,
+): string {
+  if (sourceKind === 'plan') {
+    return 'Plan directive';
+  }
+  if (sourceKind === 'simulation') {
+    return 'Simulated span';
+  }
+  switch (recordKind) {
+    case 'authored_step':
+      return 'Authored command';
+    case 'authored_sequence':
+      return 'Authored sequence';
+    case 'sequence_command':
+      return 'Reported command';
+    case 'sequence_history':
+      return 'Reported sequence';
+    case 'timed_record':
+    case 'before_timed_record':
+      return type === 'ERROR' ? 'Reported error' : type === 'WARNING' ? 'Reported warning' : 'Reported record';
+    default:
+      return 'Imported activity';
+  }
+}
 
 export function importedActivityToSpan(sourceId: TimelineSourceId, activity: ImportedActivityRecord): Span {
   const startMs = Date.parse(activity.start_time);
@@ -115,6 +152,7 @@ export function importedActivityToSpan(sourceId: TimelineSourceId, activity: Imp
     name: activity.name,
     parent_id:
       activity.parentId === undefined ? null : getActivityDrawingId({ activityId: activity.parentId, sourceId }),
+    recordKind: getRecordKindLabel('imported', activity.record_kind, activity.type),
     sourceActivityId: activity.id,
     sourceId,
     span_id: getActivityDrawingId({ activityId: activity.id, sourceId }),
@@ -137,6 +175,7 @@ export function simulationSpanToActivity(sourceId: TimelineSourceId, span: Span)
     ...span,
     attributes,
     parent_id: span.parent_id === null ? null : getActivityDrawingId({ activityId: span.parent_id, sourceId }),
+    recordKind: 'Simulated span',
     sourceActivityId: span.span_id,
     sourceId,
     span_id: getActivityDrawingId({ activityId: span.span_id, sourceId }),
@@ -162,12 +201,62 @@ export function planDirectiveToSpan(sourceId: TimelineSourceId, directive: Analy
     endUnknown: true,
     name: directive.name || directive.type,
     parent_id: null,
+    recordKind: 'Plan directive',
     sourceActivityId: directive.id,
     sourceId,
     span_id: getActivityDrawingId({ activityId: directive.id, sourceId }),
     startMs,
     start_offset: '',
     type: directive.type,
+  };
+}
+
+const EXTERNAL_EVENT_ID_BASE = 2 ** 31;
+
+/**
+ * A plan's activity ids are its directives' (below 2^31). An external event has none of its own (it is identified by
+ * derivation group, source key, type and key), so it gets a stable id at or above 2^31 from that identity: it never
+ * collides with a directive, fits the drawing ids, and is the same every time the event is read.
+ * ponytail: 31-bit FNV-1a; a collision between two events of one plan is possible in principle, not at plan scale.
+ */
+export function getExternalEventId(
+  event: Pick<AnalysisExternalEvent, 'derivation_group_name' | 'event_key' | 'event_type_name' | 'source_key'>,
+): number {
+  const text = `${event.derivation_group_name}\u0000${event.source_key}\u0000${event.event_type_name}\u0000${event.event_key}`;
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return EXTERNAL_EVENT_ID_BASE + (hash & 0x7fffffff);
+}
+
+/** Whether a plan source's activity id is an external event's (see getExternalEventId), not a directive's. */
+export function isExternalEventId(activityId: number): boolean {
+  return activityId >= EXTERNAL_EVENT_ID_BASE;
+}
+
+/** An external event of a plan's linked derivation groups, as an activity of the analysis source that reads the plan. */
+export function externalEventToSpan(sourceId: TimelineSourceId, event: AnalysisExternalEvent): Span {
+  const startMs = Date.parse(event.start_time);
+  const durationMs = getIntervalInMs(event.duration);
+  const id = getExternalEventId(event);
+  return {
+    attributes: { arguments: event.attributes as Span['attributes']['arguments'], computedAttributes: {} },
+    dataset_id: -1,
+    duration: '',
+    durationMs,
+    endMs: startMs + durationMs,
+    name: event.event_key,
+    parent_id: null,
+    recordKind: 'External event',
+    sourceActivityId: id,
+    sourceId,
+    sourceKey: `${event.derivation_group_name}/${event.source_key}/${event.event_key}`,
+    span_id: getActivityDrawingId({ activityId: id, sourceId }),
+    startMs,
+    start_offset: '',
+    type: event.event_type_name,
   };
 }
 
@@ -407,6 +496,8 @@ export type AnalysisSourcesInput = {
   bindings: AnalysisSourceBinding[];
   /** True while the revisions and datasets the bindings name are loading. */
   loading: boolean;
+  /** The external events of each bound plan's linked derivation groups, by plan id; absent while they load. */
+  planExternalEvents?: Record<number, AnalysisExternalEvent[]>;
   /** Directive types present in each bound plan now, by plan id; absent while they load. */
   planTypeCounts: Record<number, { count: number; name: string }[]>;
   plans: AnalysisPlan[];
@@ -435,6 +526,14 @@ export type AnalysisSourcesInput = {
     plan: AnalysisPlan,
     context: TimelineResourceSubscriptionContext,
   ) => TimelineActivitySubscription;
+  /** A profile of one of a plan's external datasets, at the plan's start plus the dataset's offset. */
+  subscribePlanExternalProfile?: (
+    binding: AnalysisSourceBinding,
+    plan: AnalysisPlan,
+    dataset: AnalysisPlanExternalDataset,
+    name: string,
+    context: TimelineResourceSubscriptionContext,
+  ) => TimelineResourceSubscription;
   subscribeSimulationActivities: (
     binding: AnalysisSourceBinding,
     dataset: AnalysisSimulationDataset,
@@ -748,8 +847,9 @@ export function createAnalysisSources(input: AnalysisSourcesInput): TimelineSour
 }
 
 /**
- * A plan's current activity directives. Live: the rows follow the plan as it changes. Read-only, with no
- * resources (a plan's resources are its simulations' results, which are their own sources).
+ * A plan, live: its current activity directives, and what the plan has from outside it: the external events of the
+ * derivation groups linked to it (as records of their own kind), and the profiles of its plan-level external datasets
+ * (its external resources). Read-only. Its simulations' results are their own sources.
  */
 function createPlanSource(
   input: AnalysisSourcesInput,
@@ -760,25 +860,81 @@ function createPlanSource(
   const { label, name } = getAnalysisSourceNames(binding, { plan });
   const unavailableReason = !plan && !input.plansLoading ? 'The plan no longer exists' : undefined;
   const present = plan ? input.planTypeCounts[plan.id] : undefined;
+  const events = plan ? input.planExternalEvents?.[plan.id] : undefined;
   const modelTypes = plan?.mission_model?.activity_types ?? [];
+  const directiveCount = present?.reduce((total, type) => total + type.count, 0);
+  // Each external event type, by derivation group, with how many events.
+  const eventGroups = new Map<string, Map<string, number>>();
+  (events ?? []).forEach(event => {
+    const types = eventGroups.get(event.derivation_group_name) ?? new Map<string, number>();
+    types.set(event.event_type_name, (types.get(event.event_type_name) ?? 0) + 1);
+    eventGroups.set(event.derivation_group_name, types);
+  });
+  const eventTypes = [...new Set((events ?? []).map(event => event.event_type_name))].sort();
+  // A profile name is the plan's resource; the first dataset that has it provides it.
+  const datasets = plan?.external_datasets ?? [];
+  const profiles = new Map<string, { dataset: AnalysisPlanExternalDataset; type: ResourceType }>();
+  datasets.forEach(dataset =>
+    dataset.dataset?.profiles.forEach(profile => {
+      if (!profiles.has(profile.name)) {
+        profiles.set(profile.name, { dataset, type: { name: profile.name, schema: profile.type.schema } });
+      }
+    }),
+  );
+  const catalog = [...profiles.values()].map(({ type }) => type);
   return {
     browserNodes: [
       {
-        badge: present ? `${present.reduce((total, type) => total + type.count, 0)}` : undefined,
-        children: groupBrowserNodes(
-          sourceId,
-          'activity',
-          present ?? [],
-          () => 'Activity directives',
-          type => activityItemNode(sourceId, type.name, type.count),
-          summarizeActivityTypes,
+        badge: directiveCount !== undefined ? `${directiveCount}` : undefined,
+        children: (present ?? []).map(type =>
+          activityItemNode(sourceId, type.name, type.count, ['directive', 'directives']),
         ),
-        emptyMessage: unavailableReason ?? (present ? 'No activities' : 'Loading…'),
+        emptyMessage: unavailableReason ?? (present ? 'No activity directives' : 'Loading…'),
         id: `${sourceId}/activities`,
         kind: 'group',
-        label: 'Current activities',
-        tooltip: present ? summarizeActivityTypes(present).tooltip : undefined,
+        label: 'Activity directives',
+        tooltip: present ? summarizeActivityTypes(present, ['directive', 'directives']).tooltip : undefined,
       },
+      ...(eventGroups.size
+        ? [
+            {
+              badge: `${events?.length ?? 0}`,
+              children: [...eventGroups.entries()].map(([group, types]) => ({
+                badge: `${[...types.values()].reduce((total, count) => total + count, 0)}`,
+                children: [...types.entries()]
+                  .sort(([a], [b]) => a.localeCompare(b))
+                  .map(([type, count]) => activityItemNode(sourceId, type, count, ['event', 'events'])),
+                id: `${sourceId}/events/${group}`,
+                kind: 'group' as const,
+                label: group,
+                tooltip: 'Derivation group linked to the plan',
+              })),
+              id: `${sourceId}/events`,
+              kind: 'group' as const,
+              label: 'External events',
+              tooltip: 'External events of the derivation groups linked to the plan, as derived',
+            },
+          ]
+        : []),
+      ...(catalog.length
+        ? [
+            {
+              badge: `${catalog.length}`,
+              children: catalog.map(resourceType => ({
+                action: { item: resourceType, sourceId, typeName: 'resource' as const },
+                id: `${sourceId}/resource/${resourceType.name}`,
+                kind: 'item' as const,
+                label: resourceType.name,
+                tags: [resourceType.schema.type],
+                tooltip: `External dataset ${profiles.get(resourceType.name)?.dataset.dataset_id}`,
+              })),
+              id: `${sourceId}/resources`,
+              kind: 'group' as const,
+              label: 'External resources',
+              tooltip: "Profiles of the plan's external datasets (not tied to a simulation)",
+            },
+          ]
+        : []),
     ],
     description: plan
       ? `Plan "${name}": its current activity directives, live`
@@ -786,12 +942,19 @@ function createPlanSource(
     group: 'Plans',
     id: sourceId,
     intervals: {
-      catalog: (present ?? []).map(
-        type => modelTypes.find(({ name }) => name === type.name) ?? toIntervalType(type.name),
-      ),
+      catalog: [
+        ...(present ?? []).map(type => modelTypes.find(({ name }) => name === type.name) ?? toIntervalType(type.name)),
+        ...eventTypes.map(type => toIntervalType(type)),
+      ],
       hasDirectives: false,
       loading: input.plansLoading || !present,
-      present: present ?? [],
+      present: [
+        ...(present ?? []),
+        ...eventTypes.map(type => ({
+          count: (events ?? []).filter(event => event.event_type_name === type).length,
+          name: type,
+        })),
+      ],
       // The plan changes under the key: its subscription follows it, so rows never need to resubscribe.
       revisionKey: plan ? `plan:${plan.id}` : getUnavailableKey(unavailableReason),
       subscribe: (_request, context) =>
@@ -801,6 +964,25 @@ function createPlanSource(
     },
     kind: 'plan',
     label,
+    ...(catalog.length && plan
+      ? {
+          resources: {
+            catalog,
+            loading: false,
+            revisionKey: `plan:${plan.id}`,
+            subscribe: (resourceName: string, context: TimelineResourceSubscriptionContext) => {
+              const found = profiles.get(resourceName);
+              return found && input.subscribePlanExternalProfile
+                ? input.subscribePlanExternalProfile(binding, plan, found.dataset, resourceName, context)
+                : createStaticResourceSubscription({
+                    error: `${resourceName} is not in this plan's external datasets`,
+                    loading: false,
+                    resource: null,
+                  });
+            },
+          },
+        }
+      : {}),
   };
 }
 
@@ -870,8 +1052,8 @@ function createImportedRevisionSource(
           emptyMessage: unavailableReason ?? (input.loading ? 'Loading…' : 'No activities'),
           id: `${sourceId}/activities`,
           kind: 'group',
-          // An authored sequence's records are its absolute-timed steps.
-          label: getAuthoredMission(revision) ? 'Timed steps' : 'Activities',
+          // An authored sequence's records that have an absolute time: its steps, and the sequence's own interval.
+          label: getAuthoredMission(revision) ? 'Timeline records' : 'Activities',
           tooltip: summarizeActivityTypes(activityTypes).tooltip,
         },
       ] as SourceBrowserNode[]
@@ -1142,27 +1324,25 @@ export function spansWithin(spans: Span[], all: Span[], keys: string[]): Span[] 
  * they are.
  */
 export function removeSourceFromTimelines(timelines: Timeline[], sourceId: TimelineSourceId): Timeline[] {
-  return timelines.map(timeline => ({
-    ...timeline,
-    rows: timeline.rows.flatMap(row => {
+  return timelines.map(timeline => {
+    let annotations = timeline.annotations;
+    const rows = timeline.rows.flatMap(row => {
       const removed = row.layers.filter(layer => layer.sourceId === sourceId);
       if (!removed.length) {
         return [row];
       }
       const layers = row.layers.filter(layer => layer.sourceId !== sourceId);
       if (!layers.length) {
+        annotations = removeValueAnnotations(annotations, row.id);
         return [];
       }
       const keptAxes = new Set(layers.map(layer => layer.yAxisId));
-      const droppedAxes = new Set(removed.map(layer => layer.yAxisId).filter(id => !keptAxes.has(id)));
-      return [
-        {
-          ...row,
-          horizontalGuides: row.horizontalGuides.filter(guide => !droppedAxes.has(guide.yAxisId)),
-          layers,
-          yAxes: row.yAxes.filter(axis => !droppedAxes.has(axis.id)),
-        },
-      ];
-    }),
-  }));
+      const droppedAxes = new Set(
+        removed.map(layer => layer.yAxisId).filter((id): id is number => id !== null && !keptAxes.has(id)),
+      );
+      annotations = removeValueAnnotations(annotations, row.id, droppedAxes);
+      return [{ ...row, layers, yAxes: row.yAxes.filter(axis => !droppedAxes.has(axis.id)) }];
+    });
+    return { ...timeline, annotations, rows };
+  });
 }

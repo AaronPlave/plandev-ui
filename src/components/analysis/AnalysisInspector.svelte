@@ -1,21 +1,24 @@
 <svelte:options immutable={true} />
 
 <!--
-  The analysis's one inspector: what is selected, in its own terms. An activity shows its details (an authored
-  sequence's step shows in its sequence, the one place a step is inspected); a source, a sequence or an annotation
-  shows itself. At Time is a mode beside it (what every source says at the cursor), and the row editor opens here when
-  a row is edited, until Done. Back returns to what was shown before.
+  The analysis's inspector, in four tabs. Inspect shows what is selected or followed to, in its own terms: a record (an
+  authored sequence's step shows in its sequence), a source, a sequence; Back returns along what was followed. At Time
+  is what every source says at the cursor; Annotations lists them and edits the one opened; the Timeline Editor edits
+  the selected row.
 -->
 <script lang="ts">
-  import { Button } from '@nasa-jpl/stellar-svelte';
-  import { ArrowLeft, Crosshair, StickyNote, TextSearch } from 'lucide-svelte';
+  import { Button, Tabs } from '@nasa-jpl/stellar-svelte';
+  import { ArrowLeft } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
   import {
+    analysisAnnotationFocus,
     analysisInspector,
     analysisInspectorHistory,
+    analysisInspectorTab,
     analysisMaxTimeRange,
     inspect,
     inspectBack,
+    type AnalysisInspectorTab,
   } from '../../stores/analysis';
   import { timeCursorMs } from '../../stores/plan';
   import type {
@@ -50,59 +53,62 @@
     zoom: Range;
   }>();
 
+  const tabs: { label: string; title: string; value: AnalysisInspectorTab }[] = [
+    { label: 'Inspect', title: 'What is selected: a record, a source, a sequence', value: 'inspect' },
+    { label: 'At Time', title: 'What every source says at the time cursor (and B)', value: 'time' },
+    { label: 'Annotations', title: 'Marks and findings on this analysis', value: 'annotations' },
+    { label: 'Timeline Editor', title: 'Edit the selected row', value: 'editor' },
+  ];
+
   $: target = $analysisInspector;
-  $: mode = target.kind === 'time' ? 'time' : target.kind === 'editor' ? 'editor' : 'inspect';
+  $: tab = $analysisInspectorTab;
   $: authored = getAuthoredSequenceSources(bindings, revisions);
   // An authored sequence's step is inspected in its sequence.
   $: selectedInSequence = selected ? authored.some(({ binding }) => binding.id === selected?.sourceId) : false;
+  $: previous = $analysisInspectorHistory.at(-1);
+  $: backLabel = previous ? describe(previous.target.kind, previous.target) : '';
+
+  function describe(kind: string, of: typeof target): string {
+    if (of.kind === 'source') {
+      return sourceLabels[of.sourceId] ?? 'the source';
+    }
+    if (of.kind === 'sequence') {
+      return 'the sequence';
+    }
+    return kind === 'selection' ? 'the previous record' : '';
+  }
+
+  function onTab(value: string | undefined) {
+    if (value && value !== tab && (value !== 'editor' || !readOnly)) {
+      $analysisInspectorTab = value as AnalysisInspectorTab;
+    }
+  }
 </script>
 
 <div class="inspector">
-  <div class="bar">
-    {#if mode === 'editor'}
-      <span class="flex-1 font-medium">Timeline editor</span>
-      <Button
-        size="xs"
-        variant="outline"
-        on:click={() => ($analysisInspectorHistory.length ? inspectBack() : inspect({ kind: 'selection' }))}
-        >Done</Button
-      >
-    {:else}
-      <Button
-        size="icon-sm"
-        variant="ghost"
-        aria-label="Back"
-        title="Back"
-        disabled={!$analysisInspectorHistory.length}
-        on:click={() => inspectBack()}><ArrowLeft size={14} /></Button
-      >
-      <div class="modes" role="group" aria-label="Inspector mode">
-        <button
-          class:active={mode === 'inspect'}
-          aria-pressed={mode === 'inspect'}
-          on:click={() => mode !== 'inspect' && inspect({ kind: 'selection' })}><TextSearch size={13} />Inspect</button
+  <Tabs.Root value={tab} onValueChange={onTab} class="contents">
+    <Tabs.List class="tabs" aria-label="Inspector">
+      {#each tabs as { label, title, value } (value)}
+        <Tabs.Trigger
+          {value}
+          {title}
+          disabled={value === 'editor' && readOnly}
+          class="tab h-6 gap-1 border bg-transparent px-1.5 text-xs data-[state=active]:border data-[state=inactive]:border-transparent data-[state=active]:shadow-none"
+          >{label}</Tabs.Trigger
         >
-        <button
-          class:active={mode === 'time'}
-          aria-pressed={mode === 'time'}
-          title="What every source says at the time cursor (and at B, to compare)"
-          on:click={() => inspect({ kind: 'time' })}><Crosshair size={13} />At Time</button
-        >
-      </div>
-      <span class="flex-1" />
-      <Button
-        size="icon-sm"
-        variant="ghost"
-        aria-label="Annotations"
-        title="All annotations"
-        class={target.kind === 'annotations' ? 'bg-accent' : ''}
-        on:click={() => inspect({ kind: 'annotations' })}><StickyNote size={14} /></Button
+      {/each}
+    </Tabs.List>
+  </Tabs.Root>
+  {#if tab === 'inspect' && previous}
+    <div class="back">
+      <Button size="xs" variant="ghost" class="h-5 gap-1 px-1" on:click={() => inspectBack()}
+        ><ArrowLeft size={12} />Back to {backLabel}</Button
       >
-    {/if}
-  </div>
+    </div>
+  {/if}
 
   <div class="body">
-    {#if target.kind === 'time'}
+    {#if tab === 'time'}
       <AnalysisAtTimePanel
         {bindings}
         {readOnly}
@@ -111,24 +117,26 @@
         on:reveal={({ detail }) => dispatch('reveal', { endMs: detail, startMs: detail })}
         on:selectActivity={({ detail }) => dispatch('select', { ...detail, inspect: false })}
       />
-    {:else if target.kind === 'editor'}
+    {:else if tab === 'editor'}
       <TimelineEditorPanel gridSection="RightTop" showHeader={false} timeBounds={$analysisMaxTimeRange} />
-    {:else if target.kind === 'source'}
-      <AnalysisSourceDetails {bindings} {readOnly} sourceId={target.sourceId} {user} />
-    {:else if target.kind === 'annotation' || target.kind === 'annotations'}
+    {:else if tab === 'annotations'}
       <AnalysisAnnotations
         {bindings}
-        focusKey={target.kind === 'annotation' ? target.key : null}
+        focusId={$analysisAnnotationFocus}
         {readOnly}
         {readOnlyReason}
         {sourceLabels}
+        {user}
         on:goTo
       />
+    {:else if target.kind === 'source'}
+      <AnalysisSourceDetails {bindings} {readOnly} sourceId={target.sourceId} {user} />
     {:else if target.kind === 'sequence' || selectedInSequence}
       <AnalysisSequencePanel
         {bindings}
         {datasets}
         entryId={target.kind === 'sequence' ? target.entryId : undefined}
+        explicit={target.kind === 'sequence'}
         {readOnly}
         {revisions}
         {selected}
@@ -160,44 +168,27 @@
   .inspector {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: min-content minmax(0, 1fr);
+    grid-template-rows: min-content min-content minmax(0, 1fr);
     height: 100%;
   }
 
-  .bar {
-    align-items: center;
+  .inspector :global(.tabs) {
+    background: var(--st-gray-10);
     border-bottom: 1px solid var(--st-gray-20);
+    border-radius: 0;
     display: flex;
-    font-size: 12px;
-    gap: 4px;
+    flex-wrap: nowrap;
+    gap: 2px;
+    overflow-x: auto;
+    height: auto;
+    justify-content: flex-start;
     min-height: 36px;
     padding: 4px 6px;
   }
 
-  .modes {
-    background: var(--st-gray-10);
-    border-radius: 6px;
-    display: flex;
-    padding: 2px;
-  }
-
-  .modes button {
-    align-items: center;
-    background: none;
-    border: 0;
-    border-radius: 4px;
-    color: var(--st-gray-70);
-    cursor: pointer;
-    display: flex;
-    font-size: 12px;
-    gap: 4px;
-    padding: 2px 8px;
-  }
-
-  .modes button.active {
-    background: white;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-    color: var(--st-gray-100);
+  .back {
+    border-bottom: 1px solid var(--st-gray-15);
+    padding: 2px 4px;
   }
 
   .body {

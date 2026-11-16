@@ -451,6 +451,9 @@ export function viewUpdateRow(
   viewUpdateRowProperties({ [prop]: value }, timelineId, rowId, shouldSyncChange);
 }
 
+/** What a row shows, as opposed to how it is laid out (height, expansion, pinning). */
+const ROW_CONTENT_PROPERTIES: (keyof Row)[] = ['discreteOptions', 'layers', 'name', 'yAxes'];
+
 /** Updates several properties of a row in one store update, for changes that must not be applied partially. */
 export function viewUpdateRowProperties(
   properties: Partial<Row>,
@@ -475,8 +478,11 @@ export function viewUpdateRowProperties(
                   ...timeline,
                   rows: timeline.rows.map(row => {
                     if (row.id === rowId) {
+                      // A row edited to show something else is the person's own: no longer repointed to a focus.
+                      const edited = ROW_CONTENT_PROPERTIES.some(key => key in properties);
+                      const { followsFocus: _, ...rest } = row;
                       return {
-                        ...row,
+                        ...(edited ? rest : row),
                         ...properties,
                       };
                     }

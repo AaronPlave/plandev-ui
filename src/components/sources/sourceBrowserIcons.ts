@@ -57,5 +57,8 @@ export function getSourceNodeIcon(node: SourceBrowserNode, group: string, depth:
   if (node.id.includes('/activit')) {
     return ChartGantt;
   }
+  if (node.id.includes('/events')) {
+    return CalendarClock;
+  }
   return null;
 }

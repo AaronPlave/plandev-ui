@@ -1,11 +1,16 @@
 import { derived, writable } from 'svelte/store';
-import type { AnalysisPlanDirective, AnalysisSimulationDataset, AnalysisSourceBinding } from '../types/analysis';
+import type {
+  AnalysisExternalEvent,
+  AnalysisPlanDirective,
+  AnalysisSimulationDataset,
+  AnalysisSourceBinding,
+} from '../types/analysis';
 import type { ImportedActivityRecord } from '../utilities/analysis';
 import type { User } from '../types/app';
 import type { Span } from '../types/simulation';
 import type { GqlSubscribable } from '../types/subscribable';
 import type { TimelineActivityState, TimelineActivitySubscription, TimelineSourceId } from '../types/timelineSource';
-import { planDirectiveToSpan } from '../utilities/analysis';
+import { externalEventToSpan, planDirectiveToSpan } from '../utilities/analysis';
 import effects from '../utilities/effects';
 import gql from '../utilities/gql';
 import { gqlSubscribable } from './subscribable';
@@ -40,18 +45,45 @@ export function getPlanDirectives(planId: number): GqlSubscribable<AnalysisPlanD
   return directives;
 }
 
-/** A row's view of a plan's current directives, as activities of the analysis source that reads the plan. */
+const externalEvents = new Map<string, GqlSubscribable<AnalysisExternalEvent[]>>();
+
+/**
+ * The external events of derivation groups, as derived (each event's winning version), live: one subscription per set
+ * of groups, shared by the plans linked to it. Only open while something reads it.
+ */
+export function getExternalEvents(groups: string[]): GqlSubscribable<AnalysisExternalEvent[]> {
+  const key = [...groups].sort().join('\u0000');
+  let events = externalEvents.get(key);
+  if (!events) {
+    events = gqlSubscribable<AnalysisExternalEvent[]>(gql.SUB_ANALYSIS_PLAN_EXTERNAL_EVENTS, { groups }, []);
+    externalEvents.set(key, events);
+  }
+  return events;
+}
+
+/**
+ * A row's view of a plan: its current directives, and the external events of the derivation groups linked to it, as
+ * activities of the analysis source that reads the plan.
+ */
 export function createPlanActivitySubscription(
   sourceId: TimelineSourceId,
   planId: number,
+  groups: string[],
 ): TimelineActivitySubscription {
   const directives = getPlanDirectives(planId);
+  const events = getExternalEvents(groups);
   return {
-    store: derived([directives, directives.loading, directives.error], ([$directives, $loading, $error]) => ({
-      error: $error,
-      loading: $loading,
-      spans: ($directives ?? []).map(directive => planDirectiveToSpan(sourceId, directive)),
-    })),
+    store: derived(
+      [directives, directives.loading, directives.error, events, events.loading, events.error],
+      ([$directives, $loading, $error, $events, $eventsLoading, $eventsError]) => ({
+        error: $error || (groups.length ? $eventsError : ''),
+        loading: $loading || (groups.length > 0 && $eventsLoading),
+        spans: [
+          ...($directives ?? []).map(directive => planDirectiveToSpan(sourceId, directive)),
+          ...(groups.length ? ($events ?? []) : []).map(event => externalEventToSpan(sourceId, event)),
+        ],
+      }),
+    ),
     unsubscribe: () => {},
   };
 }

@@ -3,6 +3,8 @@ import type { AnalysisSourceBinding } from '../types/analysis';
 import type { Row, Timeline } from '../types/timeline';
 import {
   applyPresentation,
+  getFocusedLayers,
+  getFocusKey,
   getInitialRoleMapping,
   getPresentationRoles,
   getRoleMatch,
@@ -23,7 +25,6 @@ function tourA(): Timeline {
     discreteOptions: {} as Row['discreteOptions'],
     expanded: true,
     height: 120,
-    horizontalGuides: [{ id: 0, label: { text: 'Upper limit' }, y: 900, yAxisId: 0 }],
     id: 0,
     layers: [
       { chartType: 'line', filter: { resource: 'Power' }, id: 0, name: 'Predicted', sourceId: 'source-1', yAxisId: 0 },
@@ -38,7 +39,6 @@ function tourA(): Timeline {
   };
   const contacts: Row = {
     ...power,
-    horizontalGuides: [],
     id: 1,
     layers: [
       {
@@ -54,12 +54,15 @@ function tourA(): Timeline {
     yAxes: [],
   };
   return createTimeline([], {
+    annotations: [
+      { anchor: { kind: 'time', start: '2030-100T14:03:00' }, id: 0, label: 'Power drop at 14:03' },
+      { anchor: { kind: 'value', rowId: 0, y: 900, yAxisId: 0 }, id: 1, label: 'Upper limit', reusable: true },
+    ],
     items: [
       { id: 0, type: 'row' },
       { id: 1, type: 'row' },
     ],
     rows: [power, contacts],
-    verticalGuides: [{ id: 0, label: { text: 'Power drop at 14:03' }, timestamp: '2030-100T14:03:00' }],
   });
 }
 
@@ -116,7 +119,6 @@ test('a mixed-source overlay maps each layer through its own role, and reports w
   const current = createTimeline([], { id: 5 });
   const mapping = { 'source-1': 'source-7', 'source-2': 'source-8', 'source-3': 'source-9' };
   const result = applyPresentation(tourA(), current, sourceCatalogs, targetCatalogs, labels, {
-    includeTimeGuides: false,
     mapping,
     resourceRenames: {},
   });
@@ -136,45 +138,23 @@ test('a mixed-source overlay maps each layer through its own role, and reports w
   // W in Tour A, kW in Tour B: kept, not converted. The axis is refreshed (its W range and label would mislabel kW)
   // and the 900 W limit is dropped rather than read as 900 kW.
   expect(result.issues.find(issue => issue.layer === 'Predicted')).toMatchObject({ effect: 'warning' });
-  expect(power.horizontalGuides).toEqual([]);
+  expect(result.timeline.annotations.some(({ anchor }) => anchor.kind === 'value')).toBe(false);
   expect(power.yAxes[0].scaleDomain).toBeUndefined();
   expect(power.yAxes[0].label.text).toBe('Power (kW) · Tour B predicted');
-  // Time guides are findings about Tour A's data: not carried unless asked.
-  expect(result.timeline.verticalGuides).toEqual([]);
+  // Which annotations come is decided when it replaces the target's timeline (mergeAnnotationsForLayout).
+  expect(result.timeline.annotations.map(({ label }) => label)).toEqual(['Power drop at 14:03']);
   expect(result.timeline.id).toBe(5);
   expect([result.kept, result.total]).toEqual([2, 4]);
 });
 
 test('a chosen rename is read instead, and an unmapped role leaves its layers out', () => {
   const result = applyPresentation(tourA(), createTimeline([]), sourceCatalogs, targetCatalogs, labels, {
-    includeTimeGuides: true,
     mapping: { 'source-1': 'source-7', 'source-2': null, 'source-3': null },
     resourceRenames: { [getResourceRenameKey('source-1', 'BatterySOC')]: 'Battery_SOC' },
   });
   expect(result.timeline.rows).toHaveLength(1);
   expect(result.timeline.rows[0].layers.map(layer => layer.filter.resource)).toEqual(['Power', 'Battery_SOC']);
   expect(result.timeline.items).toEqual([{ id: 0, type: 'row' }]);
-  expect(result.timeline.verticalGuides).toHaveLength(1);
-});
-
-test("the target keeps its own time guides; the original's come only when asked for, without clashing ids", () => {
-  const current = createTimeline([], {
-    verticalGuides: [{ id: 0, label: { text: 'Tour B contact start' }, timestamp: '2030-200T00:00:00' }],
-  });
-  const options = { mapping: { 'source-3': 'source-9' }, resourceRenames: {} };
-  const without = applyPresentation(tourA(), current, sourceCatalogs, targetCatalogs, labels, {
-    ...options,
-    includeTimeGuides: false,
-  });
-  expect(without.timeline.verticalGuides.map(({ label }) => label.text)).toEqual(['Tour B contact start']);
-  const withGuides = applyPresentation(tourA(), current, sourceCatalogs, targetCatalogs, labels, {
-    ...options,
-    includeTimeGuides: true,
-  });
-  expect(withGuides.timeline.verticalGuides.map(({ id, label }) => [id, label.text])).toEqual([
-    [0, 'Tour B contact start'],
-    [1, 'Power drop at 14:03'],
-  ]);
 });
 
 test('an activity layer none of whose types the target has is left out, not kept empty', () => {
@@ -184,7 +164,7 @@ test('an activity layer none of whose types the target has is left out, not kept
     sourceCatalogs,
     { ...targetCatalogs, 'source-9': catalog({}, ['STATION_VIEW']) },
     labels,
-    { includeTimeGuides: false, mapping: { 'source-3': 'source-9' }, resourceRenames: {} },
+    { mapping: { 'source-3': 'source-9' }, resourceRenames: {} },
   );
   expect(result.timeline.rows.find(row => row.name === 'Contacts')).toBeUndefined();
   expect(result.issues.find(issue => issue.layer === 'Contacts')).toMatchObject({
@@ -201,7 +181,7 @@ test('a source whose catalog could not be read is not checked, and says so rathe
     sourceCatalogs,
     { 'source-7': unknown, 'source-9': unknown },
     labels,
-    { includeTimeGuides: false, mapping: { 'source-1': 'source-7', 'source-3': 'source-9' }, resourceRenames: {} },
+    { mapping: { 'source-1': 'source-7', 'source-3': 'source-9' }, resourceRenames: {} },
   );
   expect(result.issues.filter(issue => issue.effect === 'unverified').map(({ layer }) => layer)).toEqual([
     'Predicted',
@@ -209,4 +189,42 @@ test('a source whose catalog could not be read is not checked, and says so rathe
     'Contacts',
   ]);
   expect(result.kept).toBe(3);
+});
+
+test('a focused layer is kept only when the target has its records; else the person remaps or clears it', () => {
+  const focused = tourA();
+  focused.rows[1].layers[0].filter.activity = { static_types: ['ALLOCATION'], within: ['SEQ_A'] };
+  focused.rows[1].layers[0].name = 'SEQ_A';
+  const current = createTimeline([], { id: 5 });
+  const mapping = { 'source-1': 'source-7', 'source-2': 'source-8', 'source-3': 'source-9' };
+  const key = getFocusKey('source-9', ['SEQ_A']);
+  const apply = (options: Partial<Parameters<typeof applyPresentation>[5]>) =>
+    applyPresentation(focused, current, sourceCatalogs, targetCatalogs, labels, {
+      mapping,
+      resourceRenames: {},
+      ...options,
+    });
+  const contacts = (timeline: Timeline) => timeline.rows.find(row => row.name === 'Contacts');
+
+  expect(getFocusedLayers(focused)).toEqual([{ name: 'SEQ_A', roleId: 'source-3', within: ['SEQ_A'] }]);
+  // Not checked yet: kept, and said to be unchecked.
+  expect(apply({}).issues.some(issue => issue.effect === 'unverified' && issue.row === 'Contacts')).toBe(true);
+  // The target has it: kept as it is.
+  expect(contacts(apply({ focusChecks: { [key]: true } }).timeline)?.layers[0].filter.activity?.within).toEqual([
+    'SEQ_A',
+  ]);
+  // It doesn't: left out, never shown empty, and the person is asked.
+  const missing = apply({ focusChecks: { [key]: false } });
+  expect(contacts(missing.timeline)).toBeUndefined();
+  expect(missing.issues.find(issue => issue.missingFocus)?.missingFocus).toEqual({
+    key,
+    name: 'SEQ_A',
+    targetId: 'source-9',
+    within: ['SEQ_A'],
+  });
+  // Cleared: every record of its types. Remapped: the chosen record.
+  const cleared = apply({ focusChecks: { [key]: false }, focusChoices: { [key]: '' } });
+  expect(contacts(cleared.timeline)?.layers[0].filter.activity).toEqual({ static_types: ['ALLOCATION'] });
+  const remapped = apply({ focusChecks: { [key]: false }, focusChoices: { [key]: 'SEQ_B' } });
+  expect(contacts(remapped.timeline)?.layers[0].filter.activity?.within).toEqual(['SEQ_B']);
 });

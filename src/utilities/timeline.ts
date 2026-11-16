@@ -91,6 +91,7 @@ import { generateRandomPastelColor } from './color';
 import { getExternalEventRowId } from './externalEvents';
 import { filterEmpty, lowercase, stringCompare } from './generic';
 import { getDoyTime } from './time';
+import { getNextAnnotationId } from './annotations';
 import { PLAN_SOURCE_ID } from './timelineSources';
 
 export enum TimelineLockStatus {
@@ -976,36 +977,13 @@ export function getNextLayerID(timelines: Timeline[]): number {
   return maxID + 1;
 }
 
-/**
- * Returns the next horizontal guide ID based on all layers in all timelines
- */
+/** Guides are annotations: their ids are annotation ids (see utilities/annotations). */
 export function getNextHorizontalGuideID(timelines: Timeline[]): number {
-  let maxID = -1;
-  timelines.forEach(timeline => {
-    timeline.rows.forEach(row => {
-      row.horizontalGuides.forEach(guide => {
-        if (guide.id > maxID) {
-          maxID = guide.id;
-        }
-      });
-    });
-  });
-  return maxID + 1;
+  return getNextAnnotationId(timelines);
 }
 
-/**
- * Returns the next vertical guide ID based on all layers in all timelines
- */
 export function getNextVerticalGuideID(timelines: Timeline[]): number {
-  let maxID = -1;
-  timelines.forEach(timeline => {
-    timeline.verticalGuides.forEach(guide => {
-      if (guide.id > maxID) {
-        maxID = guide.id;
-      }
-    });
-  });
-  return maxID + 1;
+  return getNextAnnotationId(timelines);
 }
 
 /**
@@ -1251,7 +1229,6 @@ export function createRow(timelines: Timeline[], args: Partial<Row> = {}): Row {
     discreteOptions: ViewDefaultDiscreteOptions,
     expanded: true,
     height: 160,
-    horizontalGuides: [],
     id,
     layers: [],
     name: 'Row',
@@ -1285,13 +1262,13 @@ export function createTimeline(timelines: Timeline[], args: Partial<Timeline> = 
   const id = getNextTimelineID(timelines);
 
   return {
+    annotations: [],
     id,
     items: [],
     marginLeft: 0,
     marginRight: 0,
     rows: [],
     sections: [],
-    verticalGuides: [],
     ...args,
   };
 }
@@ -1412,7 +1389,8 @@ export type ResourceLayerBinding = {
   sourceLabel?: string;
 };
 
-export type ReboundResourceRow = Pick<Row, 'horizontalGuides' | 'layers' | 'yAxes'>;
+/** A row's layers and axes, with its value annotations as guides (see getHorizontalGuides). */
+export type ReboundResourceRow = Pick<Row, 'layers' | 'yAxes'> & { horizontalGuides: HorizontalGuide[] };
 
 /**
  * Rebinds a resource layer to another source and/or resource, refreshing everything derived from the resource
@@ -1468,9 +1446,12 @@ export function rebindResourceLayer(
       chartType === 'x-range'
         ? createTimelineXRangeLayer(timelines, [], {
             ...args,
-            colorScheme: getUniqueColorSchemeForXRangeLayer(row as Row),
+            colorScheme: getUniqueColorSchemeForXRangeLayer(row as unknown as Row),
           })
-        : createTimelineLineLayer(timelines, [], { ...args, lineColor: getUniqueColorForLineLayer(row as Row) });
+        : createTimelineLineLayer(timelines, [], {
+            ...args,
+            lineColor: getUniqueColorForLineLayer(row as unknown as Row),
+          });
   }
 
   // Scale settings only carry over when the values are still the same kind of quantity. Guides are values of one
@@ -1782,7 +1763,7 @@ export function duplicateRow(row: Row, timelines: Timeline[], timelineId: number
   }
 
   const rowClone = structuredClone(row);
-  const { id, name, layers, yAxes, horizontalGuides, ...rowArgs } = rowClone;
+  const { id, name, layers, yAxes, ...rowArgs } = rowClone;
   const newRow = createRow(timelines, { ...rowArgs, name: `${name} (copy)` });
   timeline.rows.push(newRow);
 
@@ -1807,11 +1788,6 @@ export function duplicateRow(row: Row, timelines: Timeline[], timelineId: number
     } else {
       console.warn('Unable to clone row layer with chart type:', layer.chartType);
     }
-  });
-
-  horizontalGuides.forEach(guide => {
-    const { id, yAxisId, ...guideArgs } = guide;
-    newRow.horizontalGuides.push(createHorizontalGuide(timelinesClone, newRow.yAxes, guideArgs));
   });
 
   return newRow;

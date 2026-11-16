@@ -21,7 +21,9 @@ const variant = (name: string): ResourceType => ({
 
 /** A row holding one resource layer (plus optional siblings), as a view would store it. */
 function setup(resourceType: ResourceType, sourceId: string, sourceLabel: string) {
-  const timelines: Timeline[] = [{ id: 0, items: [], marginLeft: 0, marginRight: 0, rows: [], sections: [], verticalGuides: [] }];
+  const timelines: Timeline[] = [
+    { annotations: [], id: 0, items: [], marginLeft: 0, marginRight: 0, rows: [], sections: [] },
+  ];
   const { layer, yAxis } = createTimelineResourceLayer(timelines, resourceType, sourceId, sourceLabel);
   const row: Row = createRow(timelines, { layers: [layer as Layer], yAxes: [yAxis] });
   timelines[0].rows = [row];

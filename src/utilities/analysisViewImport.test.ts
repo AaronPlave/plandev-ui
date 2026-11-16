@@ -41,7 +41,6 @@ function planViewTimeline(): Timeline {
   const axis = createYAxis(timelines, { label: { text: 'Charge' }, tickCount: 9 });
   const power = createRow(timelines, {
     height: 222,
-    horizontalGuides: [{ id: 1, label: { text: 'Floor' }, y: 10, yAxisId: axis.id }],
     id: 2,
     layers: [createTimelineLineLayer(timelines, [axis], { id: 21, name: 'SOC', sourceId: 'plan' })],
     name: 'Power',
@@ -73,21 +72,25 @@ function planViewTimeline(): Timeline {
     { id: 9, type: 'section' },
     { id: 4, type: 'row' },
   ];
-  timeline.verticalGuides = [{ id: 1, label: { text: 'Launch' }, timestamp: '2030-001T00:00:00' }];
+  timeline.annotations = [
+    { anchor: { kind: 'time', start: '2030-001T00:00:00' }, id: 1, label: 'Launch' },
+    { anchor: { kind: 'value', rowId: 2, y: 10, yAxisId: axis.id }, id: 2, label: 'Floor' },
+  ];
   return timeline;
 }
 
 describe('importing a Plan view timeline into an Analysis', () => {
   const bindings = [plan, simulation, imported('source-3', 26)];
 
-  it('keeps the timeline whole, with its sections, rows, axes, guides and presentation settings', () => {
+  it('keeps the timeline whole, with its sections, rows, axes, annotations and presentation settings', () => {
     const source = planViewTimeline();
     const { omitted, timeline } = importViewTimeline(source, 0, bindings, [planSource], choose('source-1', 'source-2'));
 
     expect(timeline.id).toBe(0); // the Analysis's own timeline id
     expect(timeline.marginLeft).toBe(321);
     expect(timeline.marginRight).toBe(12);
-    expect(timeline.verticalGuides).toEqual(source.verticalGuides);
+    // A view's marks are its presentation: they come reusable.
+    expect(timeline.annotations).toEqual(source.annotations.map(annotation => ({ ...annotation, reusable: true })));
     expect(timeline.sections).toEqual(source.sections);
     // The row with only events is gone, from its place in the hierarchy as well.
     expect(timeline.rows.map(row => row.id)).toEqual([1, 2, 3]);
@@ -98,7 +101,6 @@ describe('importing a Plan view timeline into an Analysis', () => {
     const power = timeline.rows.find(row => row.id === 2) as Row;
     expect(power.height).toBe(222);
     expect(power.yAxes).toEqual(source.rows[1].yAxes);
-    expect(power.horizontalGuides).toEqual(source.rows[1].horizontalGuides);
     expect(timeline.rows[0].autoAdjustHeight).toBe(true);
     expect(omitted.map(({ layer }) => layer)).toEqual(['Events', 'DSN']);
     // The view that was read is not altered.
@@ -185,7 +187,7 @@ describe('importing a Plan view timeline into an Analysis', () => {
     expect(result.timeline.rows.find(row => row.id === 3)).toBeUndefined();
   });
 
-  it('drops an axis and its guides only when every layer that used it is left out', () => {
+  it('drops an axis and its value annotations only when every layer that used it is left out', () => {
     const timeline = planViewTimeline();
     // A second layer on the same axis, on an unavailable source: the axis stays for the layer that is kept.
     timeline.rows[1].layers.push({
@@ -198,10 +200,12 @@ describe('importing a Plan view timeline into an Analysis', () => {
     const power = kept.timeline.rows.find(row => row.id === 2) as Row;
     expect(power.layers.map(layer => layer.name)).toEqual(['SOC']);
     expect(power.yAxes).toHaveLength(1);
-    expect(power.horizontalGuides).toHaveLength(1);
+    const values = (t: Timeline) => t.annotations.filter(({ anchor }) => anchor.kind === 'value');
+    expect(values(kept.timeline)).toHaveLength(1);
     // With no simulation to read it, the resource layer is left out, and the row and axis with it.
     const dropped = importViewTimeline(timeline, 0, [plan], [], choose('source-1', null));
     expect(dropped.timeline.rows.find(row => row.id === 2)).toBeUndefined();
+    expect(values(dropped.timeline)).toEqual([]);
   });
 
   it('keeps a row that had no layers', () => {

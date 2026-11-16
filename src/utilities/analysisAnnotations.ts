@@ -1,112 +1,89 @@
 import type { TimelineNote } from '../components/timeline/TimelineNotes.svelte';
-import type { AnalysisAnnotation } from '../types/analysis';
-import type { Timeline, VerticalGuide } from '../types/timeline';
+import type { AnalysisNote, AnalysisSourceBinding } from '../types/analysis';
+import type { Annotation, Timeline } from '../types/timeline';
+import { getSourceIdentity } from './analysis';
+import { ANNOTATION_COLOR, detachValueAnnotations, getNextAnnotationId } from './annotations';
 import { getDoyTime, getUnixEpochTime } from './time';
 
 /*
- * An analysis's annotations, as one concept over two stores:
- * - a mark across the rows (a time or a time range) or on a row (a value or a value range) is a guide of the
- *   analysis's own timeline, with an optional description: it is saved with the analysis, and goes into a saved
- *   layout only when chosen;
- * - a mark on a record or a resource (and a value mark whose row was replaced) is an AnalysisAnnotation, saved with the
- *   analysis only, never with a layout.
- * Each is addressed by a key: "time:<guideId>", "value:<rowId>:<guideId>", "note:<id>".
+ * An analysis's annotations are its timeline's (types/timeline.ts Annotation): marks and findings in one list, saved
+ * with the analysis. What an Analysis adds: annotations about its sources' records, notes saved before annotations
+ * (translated when it opens), and which annotations go with a layout when it is reused.
  */
 
-export const ANNOTATION_COLOR = '#d97706';
+export { ANNOTATION_COLOR };
 
-export type AnnotationItem = {
-  color: string;
-  description: string;
-  endMs?: number;
-  key: string;
-  kind: 'record' | 'time' | 'unanchored' | 'value';
-  label: string;
-  /** For 'record' and 'unanchored': the stored annotation. */
-  note?: AnalysisAnnotation;
-  row?: { id: number; name: string };
-  startMs?: number;
-  values?: number[];
-};
-
-export function timeKey(guideId: number): string {
-  return `time:${guideId}`;
-}
-
-export function valueKey(rowId: number, guideId: number): string {
-  return `value:${rowId}:${guideId}`;
-}
-
-export function noteKey(id: number): string {
-  return `note:${id}`;
-}
-
-export type ParsedAnnotationKey =
-  | { guideId: number; kind: 'time' }
-  | { guideId: number; kind: 'value'; rowId: number }
-  | { id: number; kind: 'note' };
-
-export function parseAnnotationKey(key: string): ParsedAnnotationKey | null {
-  const [kind, a, b] = key.split(':');
-  if (kind === 'time' && a) {
-    return { guideId: Number(a), kind };
+/** An annotation's time, when it has one: a time or range, or a record's start. */
+export function getAnnotationTimes(annotation: Annotation): { endMs?: number; startMs?: number } {
+  const { anchor } = annotation;
+  if (anchor.kind === 'time') {
+    const times = [anchor.start, ...(anchor.end ? [anchor.end] : [])].map(getUnixEpochTime).sort((a, b) => a - b);
+    return { endMs: times[1], startMs: times[0] };
   }
-  if (kind === 'value' && a && b) {
-    return { guideId: Number(b), kind, rowId: Number(a) };
+  if (anchor.kind === 'record' && anchor.start) {
+    return { startMs: Date.parse(anchor.start) };
   }
-  if (kind === 'note' && a) {
-    return { id: Number(a), kind };
-  }
-  return null;
+  return {};
 }
 
-function guideTimes(guide: VerticalGuide): { endMs?: number; startMs: number } {
-  const times = [guide.timestamp, ...(guide.timestamp2 ? [guide.timestamp2] : [])].map(getUnixEpochTime).sort();
-  return { endMs: times[1], startMs: times[0] };
+/** The analysis's annotations in time order; those without a time (values, findings) after. */
+export function sortAnnotations(annotations: Annotation[]): Annotation[] {
+  return [...annotations].sort(
+    (a, b) => (getAnnotationTimes(a).startMs ?? Infinity) - (getAnnotationTimes(b).startMs ?? Infinity),
+  );
 }
 
-/** Every annotation of the analysis, in time order (value marks, which have no time, after). */
-export function listAnnotations(timeline: Timeline | undefined, notes: AnalysisAnnotation[]): AnnotationItem[] {
-  const items: AnnotationItem[] = [
-    ...(timeline?.verticalGuides ?? []).map(
-      (guide): AnnotationItem => ({
-        ...guideTimes(guide),
-        color: guide.label.color ?? ANNOTATION_COLOR,
-        description: guide.description ?? '',
-        key: timeKey(guide.id),
-        kind: 'time',
-        label: guide.label.text,
-      }),
-    ),
-    ...(timeline?.rows ?? []).flatMap(row =>
-      row.horizontalGuides.map(
-        (guide): AnnotationItem => ({
-          color: guide.label.color ?? ANNOTATION_COLOR,
-          description: guide.description ?? '',
-          key: valueKey(row.id, guide.id),
-          kind: 'value',
-          label: guide.label.text,
-          row: { id: row.id, name: row.name },
-          values: guide.y2 === undefined ? [guide.y] : [guide.y, guide.y2],
-        }),
-      ),
-    ),
-    ...notes.map(
-      (note): AnnotationItem => ({
-        color: note.color ?? ANNOTATION_COLOR,
-        description: note.text,
-        endMs: note.end ? Date.parse(note.end) : undefined,
-        key: noteKey(note.id),
-        kind: note.about ? 'record' : 'unanchored',
-        label: note.about?.name ?? note.guide?.label ?? '',
-        note,
-        row: note.guide?.row,
-        startMs: note.start ? Date.parse(note.start) : undefined,
-        values: note.guide?.values,
-      }),
-    ),
-  ];
-  return items.sort((a, b) => (a.startMs ?? Infinity) - (b.startMs ?? Infinity));
+/** What an annotation marks, in a few words. */
+export function describeAnchor(annotation: Annotation, sourceLabel?: string): string {
+  const { anchor } = annotation;
+  switch (anchor.kind) {
+    case 'time':
+      return anchor.end ? 'Time range' : 'Time';
+    case 'value': {
+      const values = `${anchor.y}${anchor.y2 !== undefined ? ` – ${anchor.y2}` : ''}${anchor.units ? ` ${anchor.units}` : ''}`;
+      const where = anchor.rowId === null ? `${anchor.rowName ?? 'a row'} (no longer shown)` : anchor.rowName;
+      return `${anchor.y2 !== undefined ? 'Value range' : 'Value'} ${values}${where ? ` · ${where}` : ''}`;
+    }
+    case 'record':
+      return `${anchor.record.recordKind ?? (anchor.record.kind === 'activity' ? 'Record' : 'Resource')} · ${sourceLabel ?? anchor.record.sourceLabel}`;
+    default:
+      return 'Finding';
+  }
+}
+
+/** Why a record annotation can't be gone to as it was written, or null when it can (or is not about a record). */
+export function getStaleReason(annotation: Annotation, bindings: AnalysisSourceBinding[]): string | null {
+  if (annotation.anchor.kind !== 'record') {
+    return null;
+  }
+  const { record } = annotation.anchor;
+  const binding = bindings.find(({ id }) => id === record.sourceId);
+  if (!binding) {
+    return `${record.sourceLabel} is no longer in this analysis.`;
+  }
+  const now = getSourceIdentity(binding);
+  return now === record.data
+    ? null
+    : `Written when ${record.sourceLabel} read ${record.data}; it now reads ${now}. Not checked against it.`;
+}
+
+/**
+ * Record annotations as flags at the record's start, in the lane under the time axis: never a band over a record's
+ * whole duration (it is about the record, not every moment of it). Time and value annotations draw as guides.
+ */
+export function toTimelineNotes(annotations: Annotation[]): TimelineNote[] {
+  return annotations.flatMap(annotation =>
+    annotation.anchor.kind === 'record' && annotation.anchor.start
+      ? [
+          {
+            color: annotation.color ?? ANNOTATION_COLOR,
+            id: annotation.id,
+            startMs: Date.parse(annotation.anchor.start),
+            text: annotation.label || annotation.description || annotation.anchor.record.name,
+          },
+        ]
+      : [],
+  );
 }
 
 function firstLine(text: string): string {
@@ -114,144 +91,137 @@ function firstLine(text: string): string {
   return line.length > 48 ? `${line.slice(0, 47)}…` : line;
 }
 
-function joinText(a: string | undefined, b: string): string {
-  return [a, b].filter(text => text?.trim()).join('\n\n');
+function joinText(a: string | undefined, b: string): string | undefined {
+  return [a, b].filter(text => text?.trim()).join('\n\n') || undefined;
 }
 
 /**
- * Notes saved before annotations were one thing, as annotations: a note explaining a guide becomes that guide's
- * description; a note on a time or an interval alone, or on a time guide no longer there, becomes a time annotation (a
- * guide) with its words; a note on a value guide no longer there stays a note (its row is gone: it has nowhere to be
- * drawn). Notes about a record or a resource are unchanged. Nothing is dropped but empty explanations of guides, and
- * nothing is made twice: a converted note is removed. Returns the inputs themselves when there is nothing to convert.
+ * Notes saved before annotations were one thing (an analysis's `definition.annotations`), as annotations of its
+ * timeline: a note about a record becomes a record annotation; a note explaining a time or value guide becomes that
+ * annotation's description (not a second annotation); a note on a time alone, or on a guide no longer there, becomes
+ * a time annotation, or a value annotation whose row is no longer shown; anything else a finding. Every note keeps
+ * its words, color, author and id (`legacyNoteId`, for links to it). The timeline itself when there are none.
  */
-export function migrateLegacyNotes(
-  notes: AnalysisAnnotation[],
-  timeline: Timeline,
-): { notes: AnalysisAnnotation[]; timeline: Timeline } {
-  const legacy = (note: AnalysisAnnotation) =>
-    !note.about && (note.guide ? note.guide.kind === 'time' || note.guide.id !== undefined : !!note.start);
-  if (!notes.some(legacy)) {
-    return { notes, timeline };
+export function notesToAnnotations(notes: AnalysisNote[], timeline: Timeline): Timeline {
+  if (!notes.length) {
+    return timeline;
   }
-  const next: Timeline = structuredClone(timeline);
-  let nextGuideId = Math.max(-1, ...next.verticalGuides.map(({ id }) => id)) + 1;
-  const kept = notes.filter(note => {
-    if (!legacy(note)) {
-      return true;
+  const annotations = [...timeline.annotations];
+  let nextId = getNextAnnotationId([timeline]);
+  const common = (note: AnalysisNote) => ({
+    ...(note.color ? { color: note.color } : {}),
+    createdAt: note.createdAt,
+    ...(note.createdBy ? { createdBy: note.createdBy } : {}),
+    legacyNoteId: note.id,
+  });
+  notes.forEach(note => {
+    const { about, guide } = note;
+    if (about) {
+      annotations.push({
+        ...common(note),
+        anchor: {
+          kind: 'record',
+          record: {
+            ...(about.activityId !== undefined ? { activityId: about.activityId } : {}),
+            data: about.data,
+            ...(about.key ? { key: about.key } : {}),
+            kind: about.kind,
+            name: about.name,
+            sourceId: about.sourceId,
+            sourceLabel: about.sourceLabel,
+          },
+          ...(note.start ? { start: note.start } : {}),
+        },
+        ...(note.text.trim() ? { description: note.text } : {}),
+        id: nextId++,
+        label: about.name,
+      });
+      return;
     }
-    const { guide } = note;
-    if (guide?.kind === 'value') {
-      const found = next.rows.find(row => row.id === guide.row?.id)?.horizontalGuides.find(({ id }) => id === guide.id);
-      if (!found) {
-        return true; // its row was replaced: kept as an unanchored note
-      }
-      found.description = joinText(found.description, note.text) || undefined;
-      return false;
-    }
-    const found = guide?.id !== undefined ? next.verticalGuides.find(({ id }) => id === guide.id) : undefined;
-    if (found) {
-      found.description = joinText(found.description, note.text) || undefined;
-      return false;
-    }
-    if (!note.start) {
-      return !!note.text.trim(); // nothing to place it at; keep the words
+    // A note explaining a guide still on the timeline: its words become that annotation's.
+    const explained =
+      guide?.kind === 'time' && guide.id !== undefined
+        ? annotations.find(({ anchor, id }) => anchor.kind === 'time' && id === guide.id)
+        : guide?.kind === 'value'
+          ? annotations.find(
+              ({ anchor }) =>
+                anchor.kind === 'value' &&
+                anchor.rowId !== null &&
+                anchor.rowId === guide.row?.id &&
+                anchor.y === guide.values?.[0],
+            )
+          : undefined;
+    if (explained) {
+      const index = annotations.indexOf(explained);
+      annotations[index] = { ...explained, description: joinText(explained.description, note.text) };
+      return;
     }
     const label = guide?.label || firstLine(note.text) || 'Note';
-    next.verticalGuides.push({
-      ...(note.text.trim() && note.text.trim() !== label ? { description: note.text } : {}),
-      id: nextGuideId++,
-      label: { color: note.color ?? ANNOTATION_COLOR, text: label },
-      timestamp: getDoyTime(new Date(note.start)),
-      ...(note.end ? { timestamp2: getDoyTime(new Date(note.end)) } : {}),
-    });
-    return false;
+    const description = note.text.trim() && note.text.trim() !== label ? note.text : undefined;
+    const base = { ...common(note), ...(description ? { description } : {}), id: nextId++, label };
+    if (guide?.kind === 'value' && guide.values?.length) {
+      annotations.push({
+        ...base,
+        anchor: {
+          kind: 'value',
+          rowId: null,
+          ...(guide.row ? { rowName: guide.row.name } : {}),
+          y: guide.values[0],
+          ...(guide.values[1] !== undefined ? { y2: guide.values[1] } : {}),
+          yAxisId: -1,
+        },
+      });
+    } else if (note.start) {
+      annotations.push({
+        ...base,
+        anchor: {
+          kind: 'time',
+          start: getDoyTime(new Date(note.start)),
+          ...(note.end ? { end: getDoyTime(new Date(note.end)) } : {}),
+        },
+      });
+    } else {
+      annotations.push({ ...base, anchor: { kind: 'general' } });
+    }
   });
-  return { notes: kept, timeline: next };
+  return { ...timeline, annotations };
+}
+
+/** Whether an annotation can go with a reused presentation: a record annotation is about one source's data. */
+export function canBeReusable(annotation: Annotation): boolean {
+  return annotation.anchor.kind !== 'record';
+}
+
+/** The annotations saved with a layout: the chosen ones (by id) that can be, marked reusable. */
+export function getLayoutAnnotations(annotations: Annotation[], include: Set<number>): Annotation[] {
+  return annotations.flatMap(annotation =>
+    include.has(annotation.id) && canBeReusable(annotation) ? [{ ...annotation, reusable: true }] : [],
+  );
 }
 
 /**
- * Annotations about records and resources as flags at the record's time, in the lane under the time axis: never a
- * band over a record's whole duration (a note is about the record, not every moment of it). Marks across or on the
- * rows are guides, which draw themselves.
+ * The annotations of an analysis whose rows are replaced by another presentation's. Its own findings (not reusable)
+ * stay; value annotations among them were on rows that are gone, so they say so instead of moving to whichever new
+ * row has the same id. Its reusable annotations were part of the presentation being replaced, and go with it. The
+ * presentation's reusable annotations come in (renumbered), when `bring`; a value annotation of a row it doesn't keep
+ * is left out.
  */
-export function toTimelineNotes(annotations: AnalysisAnnotation[]): TimelineNote[] {
-  return annotations.flatMap(({ about, color, id, start, text }) =>
-    about && start
-      ? [{ color: color ?? ANNOTATION_COLOR, id, startMs: Date.parse(start), text: text || about.name }]
+export function mergeAnnotationsForLayout(current: Annotation[], incoming: Timeline, bring: boolean): Annotation[] {
+  const own = detachValueAnnotations(
+    current.filter(annotation => !annotation.reusable),
+    new Set(),
+  );
+  if (!bring) {
+    return own;
+  }
+  const rowIds = new Set(incoming.rows.map(({ id }) => id));
+  let nextId = getNextAnnotationId([{ annotations: own }]);
+  const brought = incoming.annotations.flatMap(annotation =>
+    annotation.reusable &&
+    canBeReusable(annotation) &&
+    (annotation.anchor.kind !== 'value' || (annotation.anchor.rowId !== null && rowIds.has(annotation.anchor.rowId)))
+      ? [{ ...annotation, id: nextId++ }]
       : [],
   );
-}
-
-/** A timeline with only the chosen annotations (guides by key); the others are left out. */
-export function keepAnnotations(timeline: Timeline, include: Set<string>): Timeline {
-  return {
-    ...timeline,
-    rows: timeline.rows.map(row => ({
-      ...row,
-      horizontalGuides: row.horizontalGuides.filter(guide => include.has(valueKey(row.id, guide.id))),
-    })),
-    verticalGuides: timeline.verticalGuides.filter(guide => include.has(timeKey(guide.id))),
-  };
-}
-
-/** A timeline whose marks keep their place and label but say nothing: what another analysis concluded stays there. */
-export function withoutDescriptions(timeline: Timeline): Timeline {
-  return {
-    ...timeline,
-    rows: timeline.rows.map(row => ({
-      ...row,
-      horizontalGuides: row.horizontalGuides.map(({ description: _, ...guide }) => guide),
-    })),
-    verticalGuides: timeline.verticalGuides.map(({ description: _, ...guide }) => guide),
-  };
-}
-
-/**
- * Value annotations with an explanation on rows that `replacement` replaces: kept as unanchored annotations (their
- * words, label, row and values as they were), so replacing a layout loses no one's explanation.
- */
-export function getDisplacedValueAnnotations(
-  previous: Timeline,
-  firstId: number,
-  createdBy?: string,
-): AnalysisAnnotation[] {
-  let id = firstId;
-  return previous.rows.flatMap(row =>
-    row.horizontalGuides
-      .filter(guide => guide.description?.trim())
-      .map(guide => ({
-        color: guide.label.color,
-        createdAt: new Date().toISOString(),
-        createdBy,
-        guide: {
-          kind: 'value' as const,
-          label: guide.label.text,
-          row: { id: row.id, name: row.name },
-          values: guide.y2 === undefined ? [guide.y] : [guide.y, guide.y2],
-        },
-        id: id++,
-        text: guide.description ?? '',
-      })),
-  );
-}
-
-/** What an annotation marks, in a few words. */
-export function describeAnnotation(item: AnnotationItem, sourceLabel?: string): string {
-  switch (item.kind) {
-    case 'time':
-      return item.endMs === undefined ? 'Time' : 'Time range';
-    case 'value':
-      return `${item.values?.length === 2 ? 'Value range' : 'Value'} ${item.values?.join(' – ')} · ${item.row?.name}`;
-    case 'record': {
-      const about = item.note?.about;
-      return about
-        ? `${about.kind === 'activity' ? 'Activity' : 'Resource'} · ${sourceLabel ?? about.sourceLabel}`
-        : '';
-    }
-    default:
-      return item.values?.length
-        ? `Was on ${item.row?.name ?? 'a row'} at ${item.values.join(' – ')} (row no longer shown)`
-        : 'Not placed on the timeline';
-  }
+  return [...own, ...brought];
 }

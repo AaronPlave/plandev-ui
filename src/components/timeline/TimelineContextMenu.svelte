@@ -21,6 +21,7 @@
     Timeline,
     TimelineSection,
     TimeRange,
+    HorizontalGuide,
     VerticalGuide,
   } from '../../types/timeline';
   import {
@@ -47,6 +48,8 @@
   export let spansMap: SpansMap;
   export let spanUtilityMaps: SpanUtilityMaps;
   export let verticalGuides: VerticalGuide[];
+  /** Each row's value annotations, drawn as guides. */
+  export let horizontalGuidesByRow: Record<number, HorizontalGuide[]> = {};
   /** Offer each of the row's value guides' notes (an Analysis): explained ones as "See", the rest as "Explain". */
   export let guideNotes: boolean = false;
   export let explainedValueGuides: string[] = [];
@@ -642,9 +645,9 @@
         <ContextMenu.Separator />
       {/if}
     {/if}
-    {#if guideNotes && row && (row.horizontalGuides.length || (row.yAxes.length && !readOnly))}
+    {#if guideNotes && row && (horizontalGuidesByRow[row.id]?.length || (row.yAxes.length && !readOnly))}
       {@const guideRow = row}
-      {#each guideRow.horizontalGuides as guide (guide.id)}
+      {#each horizontalGuidesByRow[guideRow.id] ?? [] as guide (guide.id)}
         <ContextMenu.Item size="sm" on:click={() => dispatch('guideNote', { id: guide.id, rowId: guideRow.id })}>
           Annotation “{guide.label.text || 'unlabeled'}”{explainedValueGuides.includes(`${guideRow.id}:${guide.id}`)
             ? ' ¶'

@@ -1,6 +1,7 @@
 <svelte:options immutable={true} />
 
 <script lang="ts">
+  import { setVerticalGuides } from '../../utilities/annotations';
   import {
     activityDirectivesMap,
     initialActivityDirectivesLoading,
@@ -297,7 +298,10 @@
         viewUpdateRow('height', newHeight, timelineId, rowId, wasAutoAdjusted);
       }}
       on:updateVerticalGuides={({ detail: newVerticalGuides }) => {
-        viewUpdateTimeline('verticalGuides', newVerticalGuides, timelineId);
+        const timeline = $view?.definition.plan.timelines.find(({ id }) => id === timelineId);
+        if (timeline) {
+          viewUpdateTimeline('annotations', setVerticalGuides(timeline.annotations, newVerticalGuides), timelineId);
+        }
       }}
       on:viewTimeRangeChanged={({ detail: newViewTimeRange }) => {
         $viewTimeRange = newViewTimeRange;

@@ -1,13 +1,24 @@
 import type {
   AnalysisActivityRef,
+  AnalysisExternalEvent,
   AnalysisPlanDirective,
   AnalysisSimulationDataset,
   AnalysisSourceBinding,
   AnalysisSourceRevision,
 } from '../types/analysis';
+import type { ActivityType } from '../types/activity';
 import type { User } from '../types/app';
-import { getRevisionVersionLabel, getSourceIdentity } from './analysis';
+import type { FormParameter, ParametersMap } from '../types/parameter';
+import type { ValueSchema } from '../types/schema';
+import {
+  getExternalEventId,
+  getRecordKindLabel,
+  getRevisionVersionLabel,
+  getSourceIdentity,
+  isExternalEventId,
+} from './analysis';
 import effects from './effects';
+import { getFormParameters } from './parameters';
 import { getIntervalInMs, getUnixEpochTimeFromInterval } from './time';
 
 /*
@@ -28,6 +39,8 @@ export type AnalysisActivityDetails = {
   fields: [string, string][];
   /** The record's identity in its own source: a source key, a span id, a directive id. */
   key: string;
+  /** What the record is, in an operator's terms: a plan directive, a simulated span, a reported command… */
+  kind: string;
   /** Imported only: what the adapter recorded about the record (`metadata`): its parent, step, kind. */
   metadata?: Record<string, unknown>;
   name: string;
@@ -69,6 +82,7 @@ export function getPlanDirectiveDetails(
       ['Offset', directive.start_offset],
     ],
     key: `directive ${directive.id}`,
+    kind: getRecordKindLabel('plan'),
     name: directive.name || directive.type,
     parameters: directive.arguments,
     ref,
@@ -82,10 +96,53 @@ export function getPlanDirectiveDetails(
   };
 }
 
+/** One external event of a plan's linked derivation groups, in its own terms: its identity, type and attributes. */
+export function getExternalEventDetails(
+  ref: AnalysisActivityRef,
+  binding: AnalysisSourceBinding,
+  events: AnalysisExternalEvent[],
+): AnalysisActivityDetails | null {
+  const event = events.find(candidate => getExternalEventId(candidate) === ref.activityId);
+  if (!event) {
+    return null;
+  }
+  const startMs = Date.parse(event.start_time);
+  return {
+    endMs: startMs + getIntervalInMs(event.duration),
+    fields: [
+      ['Derivation group', event.derivation_group_name],
+      ['External source', event.source_key],
+      ['Event key', event.event_key],
+    ],
+    key: `${event.derivation_group_name}/${event.source_key}/${event.event_key}`,
+    kind: 'External event',
+    name: event.event_key,
+    parameters: event.attributes,
+    ref,
+    sections: [['Attributes', event.attributes]],
+    sourceIdentity: getSourceIdentity(binding),
+    startMs,
+    type: event.event_type_name,
+  };
+}
+
+/** A plan source's record: a directive, or an external event of a linked derivation group (see isExternalEventId). */
+export function getPlanRecordDetails(
+  ref: AnalysisActivityRef,
+  binding: AnalysisSourceBinding,
+  directives: AnalysisPlanDirective[],
+  events: AnalysisExternalEvent[],
+): AnalysisActivityDetails | null {
+  return isExternalEventId(ref.activityId)
+    ? getExternalEventDetails(ref, binding, events)
+    : getPlanDirectiveDetails(ref, binding, directives);
+}
+
 export type ActivityDetailsContext = {
   bindings: AnalysisSourceBinding[];
   datasets: AnalysisSimulationDataset[];
   planDirectives: Record<number, AnalysisPlanDirective[]>;
+  planExternalEvents?: Record<number, AnalysisExternalEvent[]>;
   revisions: AnalysisSourceRevision[];
   user: User | null;
 };
@@ -93,7 +150,7 @@ export type ActivityDetailsContext = {
 /** Null when the activity, or the source it names, is no longer there. */
 export async function loadAnalysisActivityDetails(
   ref: AnalysisActivityRef,
-  { bindings, datasets, planDirectives, revisions, user }: ActivityDetailsContext,
+  { bindings, datasets, planDirectives, planExternalEvents, revisions, user }: ActivityDetailsContext,
 ): Promise<AnalysisActivityDetails | null> {
   const binding = bindings.find(({ id }) => id === ref.sourceId);
   if (!binding) {
@@ -101,7 +158,12 @@ export async function loadAnalysisActivityDetails(
   }
   const sourceIdentity = getSourceIdentity(binding);
   if (binding.kind === 'plan') {
-    return getPlanDirectiveDetails(ref, binding, planDirectives[binding.planId] ?? []);
+    return getPlanRecordDetails(
+      ref,
+      binding,
+      planDirectives[binding.planId] ?? [],
+      planExternalEvents?.[binding.planId] ?? [],
+    );
   }
   if (binding.kind === 'imported') {
     const activity = await effects.getSourceActivity(binding.revisionId, ref.activityId, user);
@@ -123,6 +185,7 @@ export async function loadAnalysisActivityDetails(
         ['Product', revision ? `${revision.source.name}, ${getRevisionVersionLabel(revision)}` : ''],
       ],
       key: activity.source_key,
+      kind: getRecordKindLabel('imported', activity.metadata.recordKind, activity.type),
       metadata: activity.metadata,
       name: activity.name,
       parameters: activity.parameters,
@@ -162,6 +225,7 @@ export async function loadAnalysisActivityDetails(
       ['Simulation dataset', `${dataset.id}`],
     ],
     key: `span ${span.span_id}`,
+    kind: getRecordKindLabel('simulation'),
     name: span.type,
     parameters: (span.attributes.arguments ?? {}) as Record<string, unknown>,
     ref,
@@ -173,4 +237,46 @@ export async function loadAnalysisActivityDetails(
     startMs,
     type: span.type,
   };
+}
+
+/** A schema for a value nothing declares (an imported record's parameter), from the value itself. */
+export function inferValueSchema(value: unknown): ValueSchema {
+  if (typeof value === 'boolean') {
+    return { type: 'boolean' };
+  }
+  if (typeof value === 'number') {
+    return Number.isInteger(value) ? { type: 'int' } : { type: 'real' };
+  }
+  if (Array.isArray(value)) {
+    return { items: value.length ? inferValueSchema(value[0]) : { type: 'string' }, type: 'series' };
+  }
+  if (value && typeof value === 'object') {
+    return {
+      items: Object.fromEntries(Object.entries(value).map(([key, item]) => [key, inferValueSchema(item)])),
+      type: 'struct',
+    };
+  }
+  return { type: 'string' };
+}
+
+/**
+ * A record's values (arguments, attributes) as read-only form parameters, the way a Plan's activity forms show them:
+ * by the type's declared schema where there is one (a model's activity type), else by the values' own shape.
+ */
+export function getReadOnlyFormParameters(
+  values: Record<string, unknown> | null | undefined,
+  declared?: Pick<ActivityType, 'parameters' | 'required_parameters'> | null,
+): FormParameter[] {
+  const entries = Object.entries(values ?? {});
+  if (!entries.length) {
+    return [];
+  }
+  const parameters: ParametersMap = {};
+  entries.forEach(([name, value], index) => {
+    parameters[name] = declared?.parameters[name] ?? { order: 1000 + index, schema: inferValueSchema(value) };
+  });
+  return getFormParameters(parameters, values as never, declared?.required_parameters ?? []).map(parameter => ({
+    ...parameter,
+    valueSource: 'none',
+  }));
 }

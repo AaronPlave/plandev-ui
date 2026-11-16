@@ -167,6 +167,7 @@
   const dispatch = createEventDispatcher<{
     buildDirective: { startTime: string; type: string };
     discreteTreeExpansionChange: DiscreteTreeExpansionMap;
+    editRow: void;
     mouseDown: MouseDown;
     mouseOver: MouseOver;
     updateRowHeight: {
@@ -458,23 +459,37 @@
   // The Plan's activities (directives and simulated spans) are drawn through the existing path; other sources'
   // through their subscriptions. An activity layer bound to a source without activities shows that source as
   // unavailable instead of silently reading the Plan's activities.
-  $: planActivityLayers = activityLayers.filter(layer => resolveActivityLayerSourceId(layer) === PLAN_SOURCE_ID);
+  // Only where the Plan is a source (the Plan page): elsewhere a layer naming it has no data to read.
+  $: planSourceAvailable = !!getSource($timelineSources, PLAN_SOURCE_ID);
+  $: planActivityLayers = planSourceAvailable
+    ? activityLayers.filter(layer => resolveActivityLayerSourceId(layer) === PLAN_SOURCE_ID)
+    : [];
   $: activitySourceErrors = [
     ...new Set(
       activityLayers
-        .filter(
-          layer =>
-            resolveActivityLayerSourceId(layer) !== PLAN_SOURCE_ID &&
-            !getSource($timelineSources, layer.sourceId)?.intervals?.subscribe,
-        )
+        .filter(layer => {
+          const sourceId = resolveActivityLayerSourceId(layer);
+          return sourceId === PLAN_SOURCE_ID
+            ? !planSourceAvailable
+            : !getSource($timelineSources, sourceId)?.intervals?.subscribe;
+        })
         .map(layer => {
           const source = getSource($timelineSources, layer.sourceId);
           return source
             ? `Source "${source.label}" has no activities`
-            : getSourceUnavailableMessage(resolveActivityLayerSourceId(layer));
+            : getSourceUnavailableMessage(resolveActivityLayerSourceId(layer), $timelineSources.scope);
         }),
     ),
   ];
+  // A layer naming a source this timeline doesn't have can be pointed at one of its sources in the row's editor.
+  $: canChooseSource =
+    !!$timelineSources.scope &&
+    !$timelineSources.loading &&
+    layers.some(
+      layer =>
+        !isExternalEventLayer(layer) &&
+        !getSource($timelineSources, layer.sourceId ?? resolveActivityLayerSourceId(layer)),
+    );
   $: activityRequests = Object.values(activityRequestMap);
   $: activityRequestsLoading = activityRequests.some(request => request.loading);
   $: activityRequestNotices = [
@@ -1289,6 +1304,9 @@
       {#each hasResourceLayer ? resourceSourceErrors : [] as sourceError}
         <div class="layer-message error st-typography-label">{sourceError}</div>
       {/each}
+      {#if canChooseSource && (activitySourceErrors.length || resourceSourceErrors.length)}
+        <button class="layer-action st-typography-label" on:click={() => dispatch('editRow')}>Choose a source…</button>
+      {/if}
       {#if hasResourceLayer && resourceLoadingErrors.length}
         <div class="layer-message error st-typography-label">
           Failed to load profiles for {resourceLoadingErrors.length} layer{pluralize(resourceLoadingErrors.length)}
@@ -1557,6 +1575,24 @@
     right: 0;
     top: 0;
     z-index: 4;
+  }
+
+  .layer-action {
+    background: white;
+    border: 1px solid var(--st-gray-30);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    left: 50%;
+    padding: 1px 8px;
+    position: absolute;
+    top: calc(50% + 10px);
+    transform: translateX(-50%);
+    z-index: 4;
+  }
+
+  .layer-action:hover {
+    background: var(--st-gray-10);
   }
 
   .loading {

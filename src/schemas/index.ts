@@ -3,6 +3,7 @@ import * as v1 from './ui-view-schema-v1.json';
 import * as v2 from './ui-view-schema-v2.json';
 import * as v3 from './ui-view-schema-v3.json';
 import * as v4 from './ui-view-schema-v4.json';
+import * as v5 from './ui-view-schema-v5.json';
 
 export default {
   v0,
@@ -10,4 +11,5 @@ export default {
   v2,
   v3,
   v4,
+  v5,
 };

@@ -23,6 +23,7 @@ const effects = vi.hoisted(() => ({
 vi.mock('$env/dynamic/public', () => ({ env: {} }));
 vi.mock('$app/environment', () => ({ browser: true }));
 vi.mock('../utilities/effects', () => ({ default: effects }));
+vi.mock('../utilities/modal', () => ({ showConfirmModal: vi.fn(async () => ({ confirm: true })) }));
 vi.mock('./subscribable', () => {
   const store = <T>(value: T) => ({ subscribe: (run: (value: T) => void) => (run(value), () => {}) });
   return { gqlSubscribable: () => ({ ...store([]), error: store(''), loading: store(false) }) };
@@ -30,6 +31,7 @@ vi.mock('./subscribable', () => {
 
 const {
   addAnalysisSource,
+  addGeneralAnnotation,
   analysisSourceBindings,
   analysisWatchedResources,
   analysisSourceRecovery,
@@ -48,6 +50,7 @@ const {
   selectedAnalysisActivity,
   showAnalysisActivityType,
   showAnalysisSequence,
+  updateAnnotation,
 } = await import('./analysis');
 const { viewTimeRange } = await import('./plan');
 const { view } = await import('./views');
@@ -476,7 +479,11 @@ describe('analysis saves', () => {
     );
     return calls;
   }
-  const note = (text: string) => ({ id: 1, text }) as never;
+  // One finding, written on: what each save carries is its label.
+  const write = (text: string) =>
+    updateAnnotation(get(analysisAnnotations)[0]?.id ?? (addGeneralAnnotation(user) as number), { label: text });
+  const saved = (call: { update: any }) =>
+    call.update.definition.view.plan.timelines[0].annotations.map(({ label }: { label: string }) => label);
 
   beforeEach(async () => {
     vi.useFakeTimers();
@@ -494,14 +501,14 @@ describe('analysis saves', () => {
   it('sends one save at a time; changes made meanwhile go next, on the revision the last one returned', async () => {
     const calls = controlledSaves();
     const stop = autosaveAnalysis(user);
-    analysisAnnotations.set([note('a')]);
+    write('a');
     await vi.advanceTimersByTimeAsync(1100);
     expect(calls).toHaveLength(1);
     expect(get(analysisSaveStatus)).toBe('saving');
 
     // Typing on while the first save is slow.
-    analysisAnnotations.set([note('ab')]);
-    analysisAnnotations.set([note('abc')]);
+    write('ab');
+    write('abc');
     await vi.advanceTimersByTimeAsync(1100);
     expect(calls).toHaveLength(1); // not a second concurrent write on r0
     expect(get(analysisSaveStatus)).toBe('unsaved');
@@ -512,7 +519,8 @@ describe('analysis saves', () => {
     expect(get(analysisSaveStatus)).toBe('saving');
     expect(calls).toHaveLength(2);
     expect(calls[1].updatedAt).toBe('r1');
-    expect(calls[1].update.definition.annotations).toEqual([note('abc')]);
+    expect(saved(calls[1])).toEqual(['abc']);
+    expect(calls[1].update.definition.annotations).toBeUndefined(); // annotations travel in the view
 
     calls[1].resolve('r2');
     await vi.advanceTimersByTimeAsync(0);
@@ -524,7 +532,7 @@ describe('analysis saves', () => {
   it('serializes a rename with the autosave', async () => {
     const calls = controlledSaves();
     const stop = autosaveAnalysis(user);
-    analysisAnnotations.set([note('a')]);
+    write('a');
     await vi.advanceTimersByTimeAsync(1100);
     const renamed = renameAnalysis('Renamed', user);
     expect(calls).toHaveLength(1);
@@ -540,11 +548,11 @@ describe('analysis saves', () => {
   it("still sends a pending save on leaving, and a late reply doesn't touch the next analysis", async () => {
     const calls = controlledSaves();
     const stop = autosaveAnalysis(user);
-    analysisAnnotations.set([note('left behind')]);
+    write('left behind');
     stop();
     closeAnalysis(); // before the debounce: must not be dropped
     expect(calls).toHaveLength(1);
-    expect(calls[0].update.definition.annotations).toEqual([note('left behind')]);
+    expect(saved(calls[0])).toEqual(['left behind']);
 
     await openAnalysis({ ...savedAnalysis(createAnalysisDefinition()), id: 9, updated_at: 'other' }, user);
     calls[0].resolve('r1');
@@ -556,20 +564,20 @@ describe('analysis saves', () => {
   it('stops on a real conflict and keeps a failed save for a retry', async () => {
     const calls = controlledSaves();
     const stop = autosaveAnalysis(user);
-    analysisAnnotations.set([note('a')]);
+    write('a');
     await vi.advanceTimersByTimeAsync(1100);
     calls[0].resolve(null);
     await vi.advanceTimersByTimeAsync(0);
     expect(get(analysisSaveStatus)).toBe('error');
 
     const retried = flushAnalysisSave();
-    expect(calls[1].update.definition.annotations).toEqual([note('a')]);
+    expect(saved(calls[1])).toEqual(['a']);
     expect(calls[1].updatedAt).toBe('r0');
     calls[1].resolve('conflict');
     await retried;
     expect(get(analysisSaveStatus)).toBe('conflict');
 
-    analysisAnnotations.set([note('ab')]);
+    write('ab');
     await vi.advanceTimersByTimeAsync(1100);
     expect(calls).toHaveLength(2); // nothing is written over someone else's change
     expect(get(analysisSaveStatus)).toBe('conflict');

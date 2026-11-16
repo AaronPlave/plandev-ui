@@ -1999,6 +1999,7 @@ const gql = {
         name
         parameters
         parent: metadata(path: "parent")
+        record_kind: metadata(path: "recordKind")
         source_key
         start_time
         step
@@ -2666,6 +2667,25 @@ const gql = {
           }
         }
         start_time
+        external_datasets: datasets(where: { simulation_dataset_id: { _is_null: true } }, order_by: { dataset_id: asc }) {
+          dataset_id
+          offset_from_plan_start
+          dataset {
+            profiles(order_by: { name: asc }) {
+              name
+              type
+            }
+          }
+        }
+      }
+    }
+  `,
+
+  SUB_ANALYSIS_PLAN_DERIVATION_GROUPS: `#graphql
+    subscription SubAnalysisPlanDerivationGroups($planIds: [Int!]!) {
+      links: ${Queries.PLAN_DERIVATION_GROUP}(where: { plan_id: { _in: $planIds } }, order_by: { derivation_group_name: asc }) {
+        derivation_group_name
+        plan_id
       }
     }
   `,
@@ -2685,6 +2705,20 @@ const gql = {
         name
         start_offset
         type
+      }
+    }
+  `,
+
+  SUB_ANALYSIS_PLAN_EXTERNAL_EVENTS: `#graphql
+    subscription SubAnalysisPlanExternalEvents($groups: [String!]!) {
+      events: ${Queries.DERIVED_EVENTS}(where: { derivation_group_name: { _in: $groups } }, order_by: { start_time: asc }) {
+        attributes
+        derivation_group_name
+        duration
+        event_key
+        event_type_name
+        source_key
+        start_time
       }
     }
   `,

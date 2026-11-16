@@ -3,7 +3,14 @@
 <!--
   Renders SourceBrowserNodes. It knows nothing about the domain objects behind them: adapters in
   utilities/timelineSources.ts decide the structure, and an item's `action` says what adding it does.
+
+  Rendering is bounded: a list shows its first PAGE entries with a "Show more" row, and an item's add-to-row menu is
+  only mounted while the pointer or focus is on it, so a catalog of thousands costs a page of plain rows.
 -->
+<script lang="ts" context="module">
+  const PAGE = 100;
+</script>
+
 <script lang="ts">
   import { Button } from '@nasa-jpl/stellar-svelte';
   import CaretDownIcon from '@nasa-jpl/stellar/icons/caret_down.svg?component';
@@ -13,12 +20,14 @@
   import type { ChartType, Layer, Row } from '../../types/timeline';
   import type { SourceBrowserAction, SourceBrowserNode } from '../../types/timelineSource';
   import { getSourceNodeIcon } from './sourceBrowserIcons';
-  import { tooltip } from '../../utilities/tooltip';
   import LayerPicker from '../LayerPicker.svelte';
 
   export let depth: number = 0;
   export let expanded: Record<string, boolean> = {};
-  export let forceExpanded: boolean = false;
+  /** Depth down to which groups start open when the person hasn't opened or closed them. */
+  export let openDepth: number = 2;
+  /** While searching: the groups opened to reveal matches. Toggles while searching are kept apart (`search:<id>`). */
+  export let searchOpen: Set<string> | null = null;
   /** The top-level group these nodes are in (set by the tree itself as it nests). */
   export let group: string = '';
   export let nodes: SourceBrowserNode[] = [];
@@ -33,13 +42,39 @@
     toggle: { id: string; open: boolean };
   }>();
 
-  function isExpanded(node: SourceBrowserNode, expanded: Record<string, boolean>, forceExpanded: boolean) {
-    // Groups and sources start open down to the first level of their contents
-    return forceExpanded || (expanded[node.id] ?? depth < 2);
+  let shown: number = PAGE;
+  /** The item whose add-to-row menu is mounted (hovered, focused, or open). */
+  let active: string | null = null;
+  let pickerOpen: boolean = false;
+
+  $: visible = nodes.slice(0, shown);
+
+  function toggleKey(id: string): string {
+    return searchOpen ? `search:${id}` : id;
+  }
+
+  function isExpanded(
+    node: SourceBrowserNode,
+    expanded: Record<string, boolean>,
+    searchOpen: Set<string> | null,
+  ): boolean {
+    return searchOpen
+      ? (expanded[`search:${node.id}`] ?? searchOpen.has(node.id))
+      : (expanded[node.id] ?? depth < openDepth);
+  }
+
+  function activate(id: string) {
+    if (!pickerOpen) {
+      active = id;
+    }
   }
 
   function onItemDragStart(action: SourceBrowserAction) {
     return (event: DragEvent) => dispatch('dragstart', { action, event });
+  }
+
+  function formatBadge(badge: string): string {
+    return /^\d+$/.test(badge) ? Number(badge).toLocaleString() : badge;
   }
 
   function chartTypeFor(action: SourceBrowserAction): ChartType {
@@ -47,66 +82,77 @@
   }
 </script>
 
-{#each nodes as node (node.id)}
+{#each visible as node (node.id)}
   {@const nodeGroup = depth === 0 ? node.label : group}
   {@const NodeIcon = getSourceNodeIcon(node, nodeGroup, depth)}
   {#if node.kind === 'item' && node.action}
     {@const action = node.action}
     <div
-      class="source-browser-item st-typography-body"
-      style:padding-left={`${8 + depth * 12}px`}
+      class="tree-row item"
+      style:--depth={depth}
       draggable={!readOnly}
       role="treeitem"
       tabindex="0"
       aria-selected="false"
       data-node-id={node.id}
+      data-tree-focus
+      title={node.tooltip || undefined}
       on:dragstart={onItemDragStart(action)}
-      use:tooltip={{ content: node.tooltip ?? '', disabled: !node.tooltip, placement: 'right' }}
+      on:mouseenter={() => activate(node.id)}
+      on:focusin={() => activate(node.id)}
     >
+      <span class="caret-slot" />
       {#if NodeIcon}<NodeIcon size={13} class="icon" />{/if}
       <span class="label">{node.label}</span>
       {#each node.tags ?? [] as tag}
-        <span class="tag st-typography-label">{tag}</span>
+        <span class="tag">{tag}</span>
       {/each}
       {#if node.badge}
-        <span class="badge st-typography-label">{node.badge}</span>
+        <span class="badge">{formatBadge(node.badge)}</span>
       {/if}
       {#if !readOnly}
-        <LayerPicker
-          layerItem={action.item}
-          sourceId={action.sourceId ?? undefined}
-          {rows}
-          chartType={chartTypeFor(action)}
-          on:select={({ detail: { layer, row } }) => dispatch('add', { action, layer, row })}
-          let:builders
-        >
-          <Button {builders} variant="ghost" size="icon-sm" aria-label={`Add ${node.label} to row`}>
-            <Filter size={14} />
+        {#if active === node.id}
+          <LayerPicker
+            layerItem={action.item}
+            sourceId={action.sourceId ?? undefined}
+            {rows}
+            chartType={chartTypeFor(action)}
+            on:select={({ detail: { layer, row } }) => dispatch('add', { action, layer, row })}
+            on:visibilityChange={({ detail }) => (pickerOpen = detail)}
+            let:builders
+          >
+            <Button {builders} variant="ghost" size="icon-sm" class="add" aria-label={`Add ${node.label} to row`}>
+              <Filter size={13} />
+            </Button>
+          </LayerPicker>
+        {:else}
+          <Button variant="ghost" size="icon-sm" class="add" aria-label={`Add ${node.label} to row`} tabindex={-1}>
+            <Filter size={13} />
           </Button>
-        </LayerPicker>
-        <span class="drag"><GripVertical size={14} /></span>
+        {/if}
+        <span class="drag"><GripVertical size={13} /></span>
       {/if}
     </div>
   {:else}
-    {@const open = isExpanded(node, expanded, forceExpanded)}
-    <div class="source-browser-node-row">
+    {@const open = isExpanded(node, expanded, searchOpen)}
+    <div class="tree-row group" class:source={node.kind === 'source'} style:--depth={depth} title={node.tooltip}>
       <button
-        class="source-browser-node st-typography-medium"
-        class:source={node.kind === 'source'}
-        style:padding-left={`${4 + depth * 12}px`}
+        class="toggle"
         aria-expanded={open}
         data-node-id={node.id}
-        on:click={() => dispatch('toggle', { id: node.id, open })}
-        use:tooltip={{ content: node.tooltip ?? '', disabled: !node.tooltip, placement: 'right' }}
+        data-tree-focus
+        on:click={() => dispatch('toggle', { id: toggleKey(node.id), open })}
       >
-        {#if open}<CaretDownIcon />{:else}<CaretRightIcon />{/if}
+        <span class="caret-slot"
+          >{#if open}<CaretDownIcon />{:else}<CaretRightIcon />{/if}</span
+        >
         {#if NodeIcon}<NodeIcon size={13} class="icon" />{/if}
         <span class="label">{node.label}</span>
         {#each node.tags ?? [] as tag}
-          <span class="tag st-typography-label">{tag}</span>
+          <span class="tag">{tag}</span>
         {/each}
         {#if node.badge}
-          <span class="badge st-typography-label">{node.badge}</span>
+          <span class="badge">{formatBadge(node.badge)}</span>
         {/if}
       </button>
       {#if node.removable && !readOnly}
@@ -116,7 +162,7 @@
           aria-label={`Remove ${node.label} from plan`}
           on:click={() => dispatch('remove', { id: node.id, label: node.label })}
         >
-          <Trash2 size={14} />
+          <Trash2 size={13} />
         </Button>
       {/if}
     </div>
@@ -125,94 +171,144 @@
         <svelte:self
           depth={depth + 1}
           {expanded}
-          {forceExpanded}
           group={nodeGroup}
           nodes={node.children}
+          {openDepth}
           {readOnly}
           {rows}
+          {searchOpen}
           on:add
           on:dragstart
           on:remove
           on:toggle
         />
       {:else if node.emptyMessage}
-        <div class="empty st-typography-label" style:padding-left={`${20 + depth * 12}px`}>{node.emptyMessage}</div>
+        <div class="tree-row empty" style:--depth={depth + 1}><span class="caret-slot" />{node.emptyMessage}</div>
       {/if}
     {/if}
   {/if}
 {/each}
+{#if nodes.length > shown}
+  <button class="tree-row more" style:--depth={depth} on:click={() => (shown += PAGE)}>
+    <span class="caret-slot" />Show {Math.min(PAGE, nodes.length - shown)} more of {(
+      nodes.length - shown
+    ).toLocaleString()}…
+  </button>
+{/if}
 
 <style>
-  .source-browser-node-row {
+  /* One indentation for every row of a Sources tree: a caret slot, an icon, the label, then counts and actions. */
+  .tree-row {
     align-items: center;
     display: flex;
-    padding-right: 4px;
-  }
-
-  .source-browser-node,
-  .source-browser-item {
-    align-items: center;
-    display: flex;
+    font-size: 12px;
     gap: 4px;
-    min-height: 26px;
-    padding-right: 8px;
+    min-height: 24px;
+    padding-left: calc(4px + var(--depth, 0) * 14px);
+    padding-right: 4px;
     width: 100%;
   }
 
-  .source-browser-node {
+  .tree-row:hover {
+    background: var(--st-gray-15);
+  }
+
+  .caret-slot {
+    align-items: center;
+    display: flex;
+    flex: none;
+    justify-content: center;
+    width: 14px;
+  }
+
+  .toggle {
+    align-items: center;
     background: none;
     border: 0;
     color: var(--st-gray-80);
     cursor: pointer;
+    display: flex;
+    flex: 1;
+    gap: 4px;
+    min-width: 0;
+    padding: 0;
     text-align: left;
   }
 
-  .source-browser-node:hover,
-  .source-browser-item:hover {
-    background: var(--st-gray-15);
+  .group .toggle {
+    font-weight: 500;
   }
 
-  .source-browser-node.source {
+  .group.source .toggle {
     color: var(--st-gray-100);
   }
 
-  .source-browser-item {
-    cursor: move;
+  .item {
+    cursor: grab;
+  }
+
+  .item :global(.add) {
+    height: 20px;
+    opacity: 0;
+    width: 20px;
+  }
+
+  .item:hover :global(.add),
+  .item:focus-within :global(.add),
+  .item :global(.add[data-state='open']) {
+    opacity: 1;
   }
 
   .label {
     flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .source-browser-node :global(.icon),
-  .source-browser-item :global(.icon) {
+  .tree-row :global(.icon) {
     color: var(--st-gray-60);
     flex: none;
   }
 
   .tag {
     background: var(--st-gray-15);
-    border-radius: 4px;
+    border-radius: 3px;
     color: var(--st-gray-70);
+    flex: none;
+    font-size: 10px;
     padding: 0 4px;
   }
 
   .badge {
     color: var(--st-gray-60);
+    flex: none;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
   }
 
   .drag {
     align-items: center;
     color: var(--st-gray-50);
     display: flex;
+    opacity: 0;
+  }
+
+  .item:hover .drag {
+    opacity: 1;
   }
 
   .empty {
     color: var(--st-gray-60);
     font-style: italic;
-    min-height: 22px;
+  }
+
+  .more {
+    background: none;
+    border: 0;
+    color: var(--st-utility-blue);
+    cursor: pointer;
+    text-align: left;
   }
 </style>

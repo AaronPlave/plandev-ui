@@ -119,6 +119,8 @@ export type TimelineSource = {
 export type TimelineSourceRegistry = {
   /** True while the lists that sources are built from are still loading, so a missing source is not yet an error. */
   loading: boolean;
+  /** What the timeline is of, to say where a missing source is missing from. The Plan page's when absent. */
+  scope?: 'analysis';
   sources: TimelineSource[];
 };
 

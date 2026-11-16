@@ -552,7 +552,7 @@
     const id = span.sourceActivityId ?? span_id;
     return `
       <div class='tooltip-row-container'>
-        <div class='st-typography-bold' style='color: var(--st-gray-10); display: flex; gap: 4px;'>${SpanIcon} ${sourceLabel ? 'Activity' : 'Simulated Activity (Span)'}</div>
+        <div class='st-typography-bold' style='color: var(--st-gray-10); display: flex; gap: 4px;'>${span.recordKind === 'Plan directive' ? DirectiveIcon : SpanIcon} ${escapeHtml(span.recordKind ?? (sourceLabel ? 'Activity' : 'Simulated Activity (Span)'))}</div>
         ${
           sourceLabel
             ? `<div class='tooltip-row'>
@@ -619,10 +619,18 @@
           <span>Duration:</span>
           <span class='tooltip-value-highlight st-typography-medium'>${duration}</span>
         </div>
-        <div class='tooltip-row'>
-          <span>Id${sourceLabel ? ' (in source)' : ''}:</span>
-          <span class='tooltip-value-highlight st-typography-medium'>${id}</span>
-        </div>
+        ${
+          // An external event has no id of its own: it is known by its key in its source.
+          span.recordKind === 'External event'
+            ? `<div class='tooltip-row'>
+                <span>Key:</span>
+                <span class='tooltip-value-highlight st-typography-medium'>${escapeHtml(span.sourceKey ?? '')}</span>
+              </div>`
+            : `<div class='tooltip-row'>
+                <span>Id${sourceLabel ? ' (in source)' : ''}:</span>
+                <span class='tooltip-value-highlight st-typography-medium'>${id}</span>
+              </div>`
+        }
       </div>
     `;
   }

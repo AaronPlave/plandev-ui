@@ -1,3 +1,4 @@
+import { get } from 'svelte/store';
 import { describe, expect, test, vi } from 'vitest';
 import type { ExternalEvent } from '../types/external-event';
 import type { ExternalEventLayer, Timeline } from '../types/timeline';
@@ -28,7 +29,9 @@ describe('external event source scope', () => {
   const keys = (filter: ExternalEventLayer['filter']['externalEvent']) =>
     applyExternalEventLayerFilter(filter, events).externalEvents.map(event => event.pkey.key);
   const scope = [{ derivation_group_name: 'DG A', source_key: 'source-1' }];
-  const timelines = [{ id: 0, items: [], marginLeft: 0, marginRight: 0, rows: [], sections: [], verticalGuides: [] }] as Timeline[];
+  const timelines = [
+    { annotations: [], id: 0, items: [], marginLeft: 0, marginRight: 0, rows: [], sections: [] },
+  ] as Timeline[];
   const pass = { attribute_schema: {}, name: 'Pass' };
 
   test('a browser leaf becomes a layer that shows only its group, source and type', () => {
@@ -109,7 +112,9 @@ describe('external event source scope', () => {
 });
 
 describe('new resource layers are source-bound', () => {
-  const timelines = [{ id: 0, items: [], marginLeft: 0, marginRight: 0, rows: [], sections: [], verticalGuides: [] }] as Timeline[];
+  const timelines = [
+    { annotations: [], id: 0, items: [], marginLeft: 0, marginRight: 0, rows: [], sections: [] },
+  ] as Timeline[];
   const soc = { name: '/battery/soc', schema: { type: 'real' as const } };
 
   test('a Plan catalog (Model Resources) item binds to the Plan simulation', () => {
@@ -150,5 +155,21 @@ describe('default names of new external event rows', () => {
     expect(getDefaultRowName([pass, { attribute_schema: {}, name: 'Eclipse' }], 'externalEvent')).toBe(
       'Externalevent Row',
     );
+  });
+});
+
+describe('a row made to follow a focus', () => {
+  test('is the person own once what it shows is edited, but not when it is only resized', async () => {
+    const { selectedTimelineId, view, viewUpdateRow } = await import('./views');
+    const row = { followsFocus: true, height: 100, id: 1, layers: [], name: 'Sequence A', yAxes: [] };
+    view.set({
+      definition: { plan: { timelines: [{ annotations: [], id: 0, items: [], rows: [row], sections: [] }] } },
+    } as never);
+    selectedTimelineId.set(0);
+    const current = () => get(view)?.definition.plan.timelines[0].rows[0];
+    viewUpdateRow('height', 200, 0, 1);
+    expect(current()?.followsFocus).toBe(true);
+    viewUpdateRow('name', 'My sequence row', 0, 1);
+    expect(current()?.followsFocus).toBeUndefined();
   });
 });

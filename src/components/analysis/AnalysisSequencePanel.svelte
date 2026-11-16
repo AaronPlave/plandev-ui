@@ -49,6 +49,8 @@
   export let selected: AnalysisActivityRef | null = null;
   /** The sequence's source; the first authored sequence of the analysis when absent. */
   export let sourceId: string | undefined = undefined;
+  /** `sourceId` was asked for by name: if it isn't an authored sequence now, say so rather than show another. */
+  export let explicit: boolean = false;
   export let user: User | null;
 
   /** Entries listed per section at once; the rest on request. */
@@ -77,7 +79,7 @@
   let list: HTMLElement;
 
   $: sources = getAuthoredSequenceSources(bindings, revisions);
-  $: current = sources.find(({ binding }) => binding.id === sourceId) ?? sources[0];
+  $: current = sources.find(({ binding }) => binding.id === sourceId) ?? (explicit ? undefined : sources[0]);
   $: sections = current ? getAuthoredSections(current.mission) : [];
   $: file = getWorkspaceFileSnapshot(current?.revision);
   $: generatedFrom = current?.mission.generatedFrom ?? null;
@@ -269,7 +271,13 @@
 </script>
 
 <div class="flex h-full w-full min-w-0 max-w-full flex-col gap-2 overflow-hidden p-2 text-xs">
-  {#if !current}
+  {#if !current && explicit && sourceId}
+    <div class="p-4 text-muted-foreground" role="status">
+      {bindings.some(({ id }) => id === sourceId)
+        ? "This source's sequence can't be read now: its revision is unavailable (deleted, or still importing)."
+        : 'This sequence is no longer in the analysis: its source was removed.'}
+    </div>
+  {:else if !current}
     <div class="p-4 text-muted-foreground">
       This analysis has no authored sequence. Add a seqJSON source, or use Analyze sequence in SeqDev.
     </div>

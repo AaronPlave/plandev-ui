@@ -14,6 +14,7 @@ import type { Tag } from '../types/tags';
 import type { ValueSchema } from '../types/schema';
 import type { DiscreteTreeNode, InterpolationMode, TimeRange, Timeline, XRangeLayer } from '../types/timeline';
 import { createSpanUtilityMaps } from './activities';
+import { getHorizontalGuides, getVerticalGuides, setHorizontalGuides, setVerticalGuides } from './annotations';
 import { convertUTCToMs } from './time';
 import {
   DEFAULT_INTERPOLATION,
@@ -314,8 +315,10 @@ function populateTimelineRows(timelines: Timeline[]) {
 
 function populateTimelineVerticalGuides(timelines: Timeline[]) {
   timelines.forEach(timeline => {
-    timeline.verticalGuides.push(createVerticalGuide(timelines, ''));
-    timeline.verticalGuides.push(createVerticalGuide(timelines, ''));
+    for (let i = 0; i < 2; i++) {
+      const guides = [...getVerticalGuides(timeline), createVerticalGuide(timelines, '')];
+      timeline.annotations = setVerticalGuides(timeline.annotations, guides);
+    }
   });
 }
 
@@ -334,8 +337,10 @@ function populateTimelineLayers(timelines: Timeline[]) {
 function populateTimelineHorizontalGuides(timelines: Timeline[]) {
   timelines.forEach(timeline => {
     timeline.rows.forEach(row => {
-      row.horizontalGuides.push(createHorizontalGuide(timelines, row.yAxes));
-      row.horizontalGuides.push(createHorizontalGuide(timelines, row.yAxes));
+      for (let i = 0; i < 2; i++) {
+        const guides = [...getHorizontalGuides(timeline, row.id), createHorizontalGuide(timelines, row.yAxes)];
+        timeline.annotations = setHorizontalGuides(timeline.annotations, row, guides);
+      }
     });
   });
   return timelines;
@@ -526,8 +531,8 @@ test('createTimelineHorizontalGuides', () => {
   populateTimelineHorizontalGuides(timelines);
 
   // Check IDs
-  expect(timelines[0].rows[0].horizontalGuides[0].id).toBe(0);
-  expect(timelines[0].rows[1].horizontalGuides[0].id).toBe(2);
+  expect(getHorizontalGuides(timelines[0], timelines[0].rows[0].id)[0].id).toBe(0);
+  expect(getHorizontalGuides(timelines[0], timelines[0].rows[1].id)[0].id).toBe(2);
 });
 
 test('createVerticalGuide', () => {
@@ -535,8 +540,8 @@ test('createVerticalGuide', () => {
   populateTimelineVerticalGuides(timelines);
 
   // Check IDs
-  expect(timelines[0].verticalGuides[0].id).toBe(0);
-  expect(timelines[1].verticalGuides[0].id).toBe(2);
+  expect(getVerticalGuides(timelines[0])[0].id).toBe(0);
+  expect(getVerticalGuides(timelines[1])[0].id).toBe(2);
 });
 
 test('getYAxisBounds', () => {
@@ -604,7 +609,6 @@ test('duplicateRow', () => {
       if (lastRow) {
         expect(duplicatedRow.id).toEqual(lastRow.id + 1);
         expect(duplicatedRow.layers.length).toEqual(firstRow.layers.length);
-        expect(duplicatedRow.horizontalGuides.length).toEqual(firstRow.horizontalGuides.length);
         expect(duplicatedRow.yAxes.length).toEqual(firstRow.yAxes.length);
         expect(duplicatedRow.name).toEqual(`${firstRow.name} (copy)`);
       }

@@ -1,14 +1,15 @@
-import type { AnalysisSimulationDataset, AnalysisSourceBinding, AnalysisSourceRevision } from '../types/analysis';
+import type {
+  AnalysisPlan,
+  AnalysisSimulationDataset,
+  AnalysisSourceBinding,
+  AnalysisSourceRevision,
+} from '../types/analysis';
 import type { ResourceType } from '../types/simulation';
 import type { Layer, Row, Timeline } from '../types/timeline';
 import type { TimelineSourceId } from '../types/timelineSource';
 import { getSourceIdentity } from './analysis';
-import {
-  getNextVerticalGuideID,
-  isActivityLayer,
-  rebindResourceLayer,
-  removeRowFromTimelineHierarchy,
-} from './timeline';
+import { getHorizontalGuides, removeValueAnnotations, setHorizontalGuides } from './annotations';
+import { isActivityLayer, rebindResourceLayer, removeRowFromTimelineHierarchy } from './timeline';
 
 /*
  * Applying one Analysis's presentation to another Analysis's data. The presentation is the timeline: rows, sections,
@@ -17,8 +18,8 @@ import {
  * suggested (and said to be another revision); anything else they choose. The target's sources are never added to
  * or changed. Opening an Analysis is a different thing: that shows the data it was saved with.
  *
- * What does not travel: the original Analysis's notes (they are findings about its data) and, unless asked for, its
- * time guides (they mark times in its data). The target keeps its own time guides: they are about its data.
+ * What does not travel: the original Analysis's findings (annotations not marked part of its layout). Which
+ * annotations come and which of the target's stay is decided when the timeline is replaced (mergeAnnotationsForLayout).
  */
 
 /** What one source offers, as far as a presentation can be checked against it. Null: not known, so not checked. */
@@ -32,6 +33,8 @@ export function getSourceCatalog(
   revisions: AnalysisSourceRevision[],
   datasets: AnalysisSimulationDataset[],
   simulationTypes: Record<number, { name: string }[]> = {},
+  plan?: AnalysisPlan,
+  eventTypes: string[] = [],
 ): SourceCatalog {
   if (binding.kind === 'imported') {
     const revision = revisions.find(({ id }) => id === binding.revisionId);
@@ -59,8 +62,22 @@ export function getSourceCatalog(
         : null,
     };
   }
-  // A plan's directives can be of any type of its model, and it has no resources.
-  return { activityTypes: null, resources: new Map() };
+  // A plan: its model's types and its external events' types; its external datasets' profiles. Not known when the plan
+  // isn't (not checked).
+  if (!plan) {
+    return { activityTypes: null, resources: new Map() };
+  }
+  return {
+    activityTypes: new Set([...(plan.mission_model?.activity_types ?? []).map(({ name }) => name), ...eventTypes]),
+    resources: new Map(
+      (plan.external_datasets ?? []).flatMap(({ dataset }) =>
+        (dataset?.profiles ?? []).map(({ name, type }) => [
+          name,
+          { type: type.schema.type, unit: type.schema.metadata?.unit?.value ?? null },
+        ]),
+      ),
+    ),
+  };
 }
 
 /** A source the presentation's layers read, to be mapped to a source of the target. */
@@ -154,6 +171,8 @@ export type PresentationIssue = {
   effect: 'omitted' | 'unverified' | 'warning';
   layer: string;
   /** Set when a resource of that name is missing from the target: it can be mapped by hand. */
+  /** A layer focused on records (by their keys) the target doesn't have: the person remaps or clears the focus. */
+  missingFocus?: { key: string; name: string; targetId: TimelineSourceId; within: string[] };
   missingResource?: { name: string; roleId: TimelineSourceId; type: string | null };
   reason: string;
   row: string;
@@ -161,12 +180,34 @@ export type PresentationIssue = {
 };
 
 export type PresentationOptions = {
-  /** Bring the original's time guides. They mark times in the original's data. */
-  includeTimeGuides: boolean;
+  /**
+   * What a focused layer's records are in each target, by getFocusKey: whether they are there, read from the target
+   * (absent: not checked yet). A focus is never matched by name or type alone.
+   */
+  focusChecks?: Record<string, boolean>;
+  /** By getFocusKey: for a focus the target lacks, the person's choice: another record's key, or '' to clear it. */
+  focusChoices?: Record<string, string>;
+  /** Which target source each of the original's sources (roles) becomes. */
   mapping: RoleMapping;
   /** By getResourceRenameKey: the target resource to read where the name is missing. */
   resourceRenames: Record<string, string>;
 };
+
+/** The key of a focused layer's records in a target source, for focusChecks and focusChoices. */
+export function getFocusKey(targetId: TimelineSourceId, within: string[]): string {
+  return `${targetId}::${[...within].sort().join('|')}`;
+}
+
+/** The focused layers of a timeline (their records' keys, by the source they read), to check in each target. */
+export function getFocusedLayers(timeline: Timeline): { name: string; roleId: TimelineSourceId; within: string[] }[] {
+  return timeline.rows.flatMap(row =>
+    row.layers.flatMap(layer =>
+      isActivityLayer(layer) && layer.filter.activity?.within?.length
+        ? [{ name: layer.name, roleId: layer.sourceId ?? '', within: layer.filter.activity.within }]
+        : [],
+    ),
+  );
+}
 
 export type PresentationResult = {
   issues: PresentationIssue[];
@@ -185,7 +226,7 @@ export function applyPresentation(
   sourceCatalogs: Record<TimelineSourceId, SourceCatalog>,
   targetCatalogs: Record<TimelineSourceId, SourceCatalog>,
   targetLabels: Record<TimelineSourceId, string>,
-  { includeTimeGuides, mapping, resourceRenames }: PresentationOptions,
+  { focusChecks = {}, focusChoices = {}, mapping, resourceRenames }: PresentationOptions,
 ): PresentationResult {
   const timeline = structuredClone(source);
   const issues: PresentationIssue[] = [];
@@ -219,6 +260,35 @@ export function applyPresentation(
       }
       if (absent.length) {
         issue('warning', `${label} has no ${list}: shows the other types only`);
+      }
+      // A focus names records by their keys in the original: kept only if the target has them, else what the person
+      // chose (another record, or no focus). Never matched by name: two sequences of one name are not the same one.
+      const within = layer.filter.activity?.within;
+      if (within?.length) {
+        const key = getFocusKey(targetId, within);
+        const choice = focusChoices[key];
+        const focusOf = (next: string[] | undefined): Layer => {
+          const { within: _, ...activity } = layer.filter.activity ?? {};
+          return {
+            ...layer,
+            filter: { ...layer.filter, activity: next ? { ...activity, within: next } : activity },
+            sourceId: targetId,
+          };
+        };
+        if (focusChecks[key] === undefined) {
+          issue('unverified', `Its focus on ${layer.name} is being checked in ${label}`);
+        } else if (!focusChecks[key] && choice === undefined) {
+          issue('omitted', `${label} has no ${layer.name} (the record it focused on)`, {
+            missingFocus: { key, name: layer.name, targetId, within },
+          });
+          return null;
+        } else if (!focusChecks[key] && choice === '') {
+          issue('warning', `Focus on ${layer.name} cleared: shows every record of its types`);
+          return { layer: focusOf(undefined) };
+        } else if (!focusChecks[key] && choice) {
+          issue('warning', `Focus moved from ${layer.name} to the chosen record`);
+          return { layer: focusOf([choice]) };
+        }
       }
       return { layer: { ...layer, sourceId: targetId } };
     }
@@ -277,14 +347,19 @@ export function applyPresentation(
     });
     if (row.layers.length && !translated.length) {
       Object.assign(timeline, removeRowFromTimelineHierarchy(timeline, row.id));
+      timeline.annotations = removeValueAnnotations(timeline.annotations, row.id);
       return [];
     }
-    // An axis only omitted layers used goes with them, with its value guides.
+    // An axis only omitted layers used goes with them, with its value annotations.
     const usedAxes = new Set(translated.map(({ layer }) => layer.yAxisId));
     const keepAxis = (id: number) => usedAxes.has(id) || !row.layers.some(layer => layer.yAxisId === id);
+    timeline.annotations = removeValueAnnotations(
+      timeline.annotations,
+      row.id,
+      new Set(row.yAxes.filter(axis => !keepAxis(axis.id)).map(axis => axis.id)),
+    );
     let next: Row = {
       ...row,
-      horizontalGuides: row.horizontalGuides.filter(guide => keepAxis(guide.yAxisId)),
       layers: translated.map(({ layer }) => layer),
       yAxes: row.yAxes.filter(axis => keepAxis(axis.id)),
     };
@@ -293,27 +368,26 @@ export function applyPresentation(
     translated.forEach(({ layer, rebind }) => {
       if (rebind) {
         const targetId = layer.sourceId ?? '';
-        next = {
-          ...next,
-          ...rebindResourceLayer([timeline], next, layer, {
+        const { horizontalGuides, ...rebound } = rebindResourceLayer(
+          [timeline],
+          { ...next, horizontalGuides: getHorizontalGuides(timeline, row.id) },
+          layer,
+          {
             previousResourceType: rebind.previous,
             resourceName: rebind.next.name,
             resourceType: rebind.next,
             sourceId: targetId,
             sourceLabel: targetLabels[targetId],
-          }),
-        };
+          },
+        );
+        next = { ...next, ...rebound };
+        timeline.annotations = setHorizontalGuides(timeline.annotations, next, horizontalGuides);
       }
     });
     return [next];
   });
-  // The target's own time guides are about its data and stay; the original's come only when asked for, renumbered.
-  const incoming = includeTimeGuides ? timeline.verticalGuides : [];
-  const firstId = getNextVerticalGuideID([current]);
-  timeline.verticalGuides = [
-    ...current.verticalGuides,
-    ...incoming.map((guide, index) => ({ ...guide, id: firstId + index })),
-  ];
+  // Which annotations come, and which of the target's stay, is decided when it replaces the target's timeline
+  // (mergeAnnotationsForLayout): the target's findings stay, and the original's reusable annotations come.
   timeline.id = current.id;
   return { issues, kept, timeline, total };
 }

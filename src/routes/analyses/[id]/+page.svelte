@@ -1,6 +1,7 @@
 <svelte:options immutable={true} />
 
 <script lang="ts">
+  import { browser } from '$app/environment';
   import { base } from '$app/paths';
   import { page } from '$app/stores';
   import { debounce } from 'lodash-es';
@@ -31,6 +32,8 @@
     analysis,
     analysisInspector,
     analysisInspectorRequests,
+    analysisInspectorTab,
+    isInspected,
     analysisPlans,
     analysisSaveStatus,
     analysisSimulationDatasets,
@@ -170,7 +173,13 @@
   let lastSelected: AnalysisActivityRef | null = null;
   $: if ($selectedAnalysisActivity !== lastSelected) {
     lastSelected = $selectedAnalysisActivity;
-    if (lastSelected && !keepInspector && $analysisInspector.kind !== 'time') {
+    if (
+      lastSelected &&
+      !keepInspector &&
+      !isInspected(lastSelected) &&
+      $analysisInspectorTab !== 'time' &&
+      $analysisInspectorTab !== 'editor'
+    ) {
       inspect({ kind: 'selection' });
     }
     keepInspector = false;
@@ -180,14 +189,18 @@
     inspectorPane?.expand();
   }
 
-  $: if (data.initialAnalysis && data.initialAnalysis.id !== $analysis?.id) {
+  // Opened in the browser only: the server render has no session to read sources with, nor anything to save.
+  $: if (browser && data.initialAnalysis && data.initialAnalysis.id !== $analysis?.id) {
     stopAutosave?.();
     const fromLink = parseAnalysisOpenContext($page.url.searchParams);
     const context = fromLink.range ? fromLink : { ...readLastVisit(data.initialAnalysis.id), ...fromLink };
     openAnalysis(data.initialAnalysis, $user, context).then(() => {
       stopAutosave = autosaveAnalysis($user);
-      const [sequence] = getAuthoredSequenceSources($analysisSourceBindings, $analysisSourceRevisions);
-      if (sequence && !context.activity && $analysisInspector.kind === 'selection') {
+      const sequences = getAuthoredSequenceSources($analysisSourceBindings, $analysisSourceRevisions);
+      const [sequence] = sequences;
+      // Only an analysis of sequences alone: one with other data opens on the selection like any other.
+      const onlySequences = sequences.length === $analysisSourceBindings.length;
+      if (sequence && onlySequences && !context.activity && $analysisInspector.kind === 'selection') {
         // An analysis of a sequence opens on the sequence: with no absolute times, it is all there is to see.
         openInspector({ kind: 'sequence', sourceId: sequence.binding.id });
       }
@@ -341,7 +354,7 @@
           registry={$analysisTimelineSources}
           {readOnly}
           user={$user}
-          on:addSource={() => openAddSource()}
+          on:addSource={({ detail }) => openAddSource(detail)}
         />
       </Resizable.Pane>
       <Resizable.Handle />

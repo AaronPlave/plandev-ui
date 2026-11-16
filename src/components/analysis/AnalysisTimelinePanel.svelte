@@ -12,7 +12,7 @@
     addSourceActivityRow,
     addValueAnnotation,
     analysisAnnotations,
-    analysisInspector,
+    analysisAnnotationFocus,
     analysisLayoutUndo,
     analysisMaxTimeRange,
     analysisPlanDirectives,
@@ -23,7 +23,8 @@
     selectedAnalysisActivity,
     undoAnalysisLayout,
   } from '../../stores/analysis';
-  import { noteKey, timeKey, toTimelineNotes, valueKey } from '../../utilities/analysisAnnotations';
+  import { toTimelineNotes } from '../../utilities/analysisAnnotations';
+  import { setVerticalGuides } from '../../utilities/annotations';
   import { getAnalysisActivityTimes } from '../../stores/analysisActivities';
   import { viewTimeRange } from '../../stores/plan';
   import {
@@ -82,15 +83,14 @@
   $: suggestedRows = $analysisTimelineSources.sources.filter(
     source => source.kind === 'plan' || source.kind === 'simulation',
   );
-  $: selectedNoteId =
-    $analysisInspector.kind === 'annotation' && $analysisInspector.key.startsWith('note:')
-      ? Number($analysisInspector.key.slice(5))
-      : null;
-  // Guides with an explanation say so ("¶") on the timeline.
+  $: selectedNoteId = $analysisAnnotationFocus;
+  // Marks with an explanation say so ("¶") on the timeline.
   $: explainedGuides = {
-    time: (timeline?.verticalGuides ?? []).flatMap(guide => (guide.description ? [guide.id] : [])),
-    value: (timeline?.rows ?? []).flatMap(row =>
-      row.horizontalGuides.flatMap(guide => (guide.description ? [`${row.id}:${guide.id}`] : [])),
+    time: $analysisAnnotations.flatMap(({ anchor, description, id }) =>
+      anchor.kind === 'time' && description ? [id] : [],
+    ),
+    value: $analysisAnnotations.flatMap(({ anchor, description, id }) =>
+      anchor.kind === 'value' && anchor.rowId !== null && description ? [`${anchor.rowId}:${id}`] : [],
     ),
   };
   $: selectedSpanId = $selectedAnalysisActivity ? getActivityDrawingId($selectedAnalysisActivity) : null;
@@ -133,13 +133,21 @@
     $selectedAnalysisActivity = span ? getActivityRefFromSpan(span) : null;
   }
 
-  /** Guides placed from the timeline are annotations: a new one opens, to be labeled and explained. */
+  /** Guides placed or moved on the timeline are annotations: a new one opens, to be labeled and explained. */
   function onUpdateVerticalGuides(guides: VerticalGuide[]) {
-    const before = new Set((timeline?.verticalGuides ?? []).map(({ id }) => id));
-    viewUpdateTimeline('verticalGuides', guides, timeline?.id);
+    if (!timeline) {
+      return;
+    }
+    const before = new Set(timeline.annotations.map(({ id }) => id));
+    const annotations = setVerticalGuides(timeline.annotations, guides).map(annotation =>
+      before.has(annotation.id)
+        ? annotation
+        : { ...annotation, createdAt: new Date().toISOString(), ...(user?.id ? { createdBy: user.id } : {}) },
+    );
+    viewUpdateTimeline('annotations', annotations, timeline.id);
     const added = guides.find(({ id }) => !before.has(id));
-    if (added && guides.length > before.size) {
-      inspect({ key: timeKey(added.id), kind: 'annotation' });
+    if (added) {
+      inspect({ id: added.id, kind: 'annotation' });
     }
   }
 
@@ -203,12 +211,8 @@
           {selectedSpanId}
           revealSelection
           guideNotes
-          on:guideNote={({ detail }) =>
-            inspect({
-              key: detail.rowId === undefined ? timeKey(detail.id) : valueKey(detail.rowId, detail.id),
-              kind: 'annotation',
-            })}
-          on:addValueGuide={({ detail }) => addValueAnnotation(detail)}
+          on:guideNote={({ detail }) => inspect({ id: detail.id, kind: 'annotation' })}
+          on:addValueGuide={({ detail }) => addValueAnnotation(detail, user)}
           {explainedGuides}
           spanUtilityMaps={noSpanMaps}
           spansMap={{}}
@@ -219,7 +223,7 @@
           viewTimeRange={$viewTimeRange}
           on:openInspector={() => dispatch('openAtTime')}
           on:dblClick={() => dispatch('inspect')}
-          on:selectNote={({ detail }) => inspect({ key: noteKey(detail), kind: 'annotation' })}
+          on:selectNote={({ detail }) => inspect({ id: detail, kind: 'annotation' })}
           on:mouseDown={onMouseDown}
           on:toggleRowExpansion={({ detail: { expanded, rowId } }) =>
             viewUpdateRow('expanded', expanded, timeline?.id, rowId)}

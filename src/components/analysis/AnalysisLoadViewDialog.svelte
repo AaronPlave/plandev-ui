@@ -91,17 +91,8 @@
   }
 
   function load() {
-    // The analysis keeps its own time guides (they are about its data); the view's come after them.
-    const own = analysisTimeline?.verticalGuides ?? [];
-    const firstId = Math.max(-1, ...own.map(({ id }) => id)) + 1;
-    const timeline = result && {
-      ...result.timeline,
-      verticalGuides: [
-        ...own,
-        ...result.timeline.verticalGuides.map((guide, index) => ({ ...guide, id: firstId + index })),
-      ],
-    };
-    if (result && timeline && loaded && replaceAnalysisTimeline(timeline, user, loaded.name)) {
+    // The analysis keeps its own findings; the view's marks come with its rows (see mergeAnnotationsForLayout).
+    if (result && loaded && replaceAnalysisTimeline(result.timeline, user, loaded.name)) {
       const omitted = result.omitted.length;
       showSuccessToast(
         `Loaded the timeline of "${loaded.name}"${omitted ? `; ${omitted} layer${omitted === 1 ? '' : 's'} left out` : ''}`,

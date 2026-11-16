@@ -66,6 +66,7 @@
   } from '../../utilities/timeline';
   import { createTimelineDragActions, type TimelineDragData } from '../../utilities/timelineDragDrop';
   import TimelineNotes, { NOTES_LANE_HEIGHT, type TimelineNote } from './TimelineNotes.svelte';
+  import { getHorizontalGuidesByRow, getVerticalGuides } from '../../utilities/annotations';
   import TimelineRowItem, { type TimelineRowSharedProps } from './TimelineRowItem.svelte';
   import RowHeaderDragHandleWidth from './RowHeaderDragHandleWidth.svelte';
   import TimelineContextMenu from './TimelineContextMenu.svelte';
@@ -202,6 +203,9 @@
 
   // Everything a row needs that does not come from the row itself. Built once and spread at both
   // placements - root level and inside a section - so the two cannot drift apart.
+  // Time and value annotations are drawn as guides (see utilities/annotations).
+  $: verticalGuides = getVerticalGuides(timeline);
+  $: horizontalGuidesByRow = getHorizontalGuidesByRow(timeline);
   $: sharedRowProps = {
     activityDirectives,
     activityDirectivesMap,
@@ -731,7 +735,7 @@
       {histogramCursorTime}
       marginLeft={timeline?.marginLeft}
       {mouseOver}
-      verticalGuides={timeline?.verticalGuides}
+      {verticalGuides}
       explainedGuideIds={explainedGuides.time}
       {guideNotes}
       on:guideNote
@@ -747,7 +751,7 @@
       {readOnly}
       {simulationDataset}
       {spans}
-      verticalGuides={timeline?.verticalGuides}
+      {verticalGuides}
       {viewTimeRange}
       {xScaleView}
       on:openInspector
@@ -872,12 +876,14 @@
                           {row}
                           index={rowIndex}
                           sharedProps={sharedRowProps}
+                  horizontalGuides={horizontalGuidesByRow[row.id] ?? []}
                           discreteTreeExpansionMap={discreteTreeExpansionMapByRow[row.id]}
                           on:buildDirective={onBuildDirective}
                           on:contextMenu={onRowContextMenu}
                           on:dblClick
                           on:deleteActivityDirective
                           on:discreteTreeExpansionChange={onDiscreteTreeExpansionChange}
+                  on:editRow
                           on:mouseDown={onMouseDown}
                           on:mouseDownRowMove={onMouseDownRowMove}
                           on:mouseOver={onRowMouseOver}
@@ -919,12 +925,14 @@
                   {row}
                   index={i}
                   sharedProps={sharedRowProps}
+                  horizontalGuides={horizontalGuidesByRow[row.id] ?? []}
                   discreteTreeExpansionMap={discreteTreeExpansionMapByRow[row.id]}
                   on:buildDirective={onBuildDirective}
                   on:contextMenu={onRowContextMenu}
                   on:dblClick
                   on:deleteActivityDirective
                   on:discreteTreeExpansionChange={onDiscreteTreeExpansionChange}
+                  on:editRow
                   on:mouseDown={onMouseDown}
                   on:mouseDownRowMove={onMouseDownRowMove}
                   on:mouseOver={onRowMouseOver}
@@ -974,7 +982,8 @@
     spansMap={spansMap || {}}
     {spanUtilityMaps}
     {plan}
-    verticalGuides={timeline?.verticalGuides ?? []}
+    {verticalGuides}
+    {horizontalGuidesByRow}
     {guideNotes}
     explainedValueGuides={explainedGuides.value}
     on:guideNote

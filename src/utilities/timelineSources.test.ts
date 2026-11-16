@@ -5,12 +5,13 @@ import type { PlanSource } from '../types/importedSource';
 import type { PlanDataset, ResourceType, SimulationDataset, Span } from '../types/simulation';
 import type { SourceBrowserNode, TimelineSourceRegistry } from '../types/timelineSource';
 import {
+  collapseSingleChildGroups,
+  searchSourceBrowserNodes,
   createExternalDatasetSources,
   createExternalEventsSource,
   createImportedSources,
   createPlanSimulationSource,
   EXTERNAL_EVENTS_SOURCE_ID,
-  filterSourceBrowserNodes,
   findLegacyResourceType,
   findResourceType,
   getExternalDatasetSourceId,
@@ -253,10 +254,36 @@ describe('source browser adapters', () => {
     });
   });
 
-  test('filtering keeps matching items with their ancestors', () => {
-    const filtered = filterSourceBrowserNodes(registry.sources[0].browserNodes, 'soc');
-    expect(filtered.map(node => [node.label, node.children?.map(child => child.label)])).toEqual([
+  test('searching keeps matching items with their ancestors, which open to reveal them', () => {
+    const { nodes, open } = searchSourceBrowserNodes(registry.sources[0].browserNodes, 'soc');
+    expect(nodes.map(node => [node.label, node.children?.map(child => child.label)])).toEqual([
       ['Resources (1)', ['/battery/soc']],
+    ]);
+    expect([...open]).toEqual([nodes[0].id]);
+  });
+
+  test('a group matched by name is kept whole but closed, and matches are bounded', () => {
+    const items = Array.from({ length: 50 }, (_, i) => ({ id: `i${i}`, kind: 'item' as const, label: `x${i}` }));
+    const tree = [{ children: items, id: 'g', kind: 'group' as const, label: 'Power' }];
+    const byName = searchSourceBrowserNodes(tree, 'power');
+    expect(byName.nodes[0].children).toHaveLength(50);
+    expect(byName.open.size).toBe(0);
+    const bounded = searchSourceBrowserNodes(tree, 'x', 10);
+    expect(bounded.nodes[0].children).toHaveLength(10);
+    expect(bounded.truncated).toBe(true);
+  });
+
+  test('a group of a single group shows its contents directly', () => {
+    const tree = collapseSingleChildGroups([
+      {
+        children: [{ children: [{ id: 'c', kind: 'item', label: 'CMD' }], id: 'cat', kind: 'group', label: 'Only' }],
+        id: 'g',
+        kind: 'group',
+        label: 'Records',
+      },
+    ]);
+    expect(tree).toEqual([
+      { children: [{ id: 'c', kind: 'item', label: 'CMD' }], id: 'g', kind: 'group', label: 'Records' },
     ]);
   });
 });
@@ -331,14 +358,16 @@ describe('legacy resource resolution', () => {
 
   test('binding a legacy kW layer to the W dataset drops its 500 kW guide and resets the axis', () => {
     const context = legacyContext(datasets, 10);
-    const timelines = [{ id: 0, marginLeft: 0, marginRight: 0, rows: [], verticalGuides: [] }] as any;
+    const timelines = [{ annotations: [], id: 0, marginLeft: 0, marginRight: 0, rows: [] }] as any;
     const displayed = findLegacyResourceType(context, '/power');
     const { layer, yAxis } = createTimelineResourceLayer(timelines, displayed as ResourceType);
-    const row = createRow(timelines, {
+    const row = {
+      ...createRow(timelines, {
+        layers: [layer!],
+        yAxes: [{ ...yAxis, domainFitMode: 'manual', scaleDomain: [0, 1000] }],
+      }),
       horizontalGuides: [{ id: 0, label: { text: '500' }, y: 500, yAxisId: yAxis.id }],
-      layers: [layer!],
-      yAxes: [{ ...yAxis, domainFitMode: 'manual', scaleDomain: [0, 1000] }],
-    });
+    };
     const target = findResourceType(context.registry, 'external-dataset:50', '/power');
     const result = rebindResourceLayer(timelines, row, layer!, {
       previousResourceType: displayed,

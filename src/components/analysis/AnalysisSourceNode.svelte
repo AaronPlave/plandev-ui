@@ -1,13 +1,42 @@
 <svelte:options immutable={true} />
 
 <!--
-  One source of the analysis in the Sources tree: its name (click to inspect it), what needs saying about it (live,
-  a newer revision, a failed import, a deleted revision), the uncommon actions in a menu, and, open, its contents to
-  add to the timeline. A plan also lists its simulations: those in the analysis open like any source, the others can
-  be added from here.
+  One source of the analysis in the Sources tree. Click its name to inspect it, double-click (or the caret) to open it;
+  open, it lists what can be added to the timeline. An authored sequence lists the sequence itself first, one click
+  from its inspector. A plan lists its directives and a Simulations group: its simulations in the analysis, each a
+  source of its own nested here for navigation, and the others to browse and add. Uncommon actions are in its menu.
 -->
 <script lang="ts" context="module">
+  import type { SourceBrowserNode } from '../../types/timelineSource';
+
   export type SourceStatus = { text: string; tone: 'error' | 'muted' | 'warning' };
+
+  /** What the tree knows about each source, by binding id. */
+  export type SourceEntry = {
+    /** A file in a SeqDev workspace, to open there. */
+    file?: { href: string };
+    label: string;
+    /** The source's own page in PlanDev (its plan, or the plan of its simulation). */
+    openHref?: string;
+    openLabel?: string;
+    /** The sequence the source holds, one click from its inspector. */
+    sequence?: { name: string; steps: number };
+    status: SourceStatus | null;
+    unavailableReason?: string;
+  };
+
+  /** What the tree shows of one source: all it has, or, while searching, the paths to what matched. */
+  export type SourceTreeResult = {
+    /** While searching: groups opened to reveal matches. */
+    groupsOpen: Set<string>;
+    labelMatch: boolean;
+    nodes: SourceBrowserNode[];
+    /** While searching: open because something inside matched. */
+    open: boolean;
+    sequenceMatch: boolean;
+    /** While searching: whether anything of it (or of a simulation under it) matched. */
+    visible: boolean;
+  };
 </script>
 
 <script lang="ts">
@@ -19,72 +48,93 @@
   import { analysisInspector, inspect } from '../../stores/analysis';
   import type { AnalysisPlanSimulationDataset, AnalysisSourceBinding } from '../../types/analysis';
   import type { Layer, Row } from '../../types/timeline';
-  import type { SourceBrowserAction, TimelineSource } from '../../types/timelineSource';
-  import { filterSourceBrowserNodes } from '../../utilities/timelineSources';
+  import type { SourceBrowserAction } from '../../types/timelineSource';
   import SourceBrowserTree from '../sources/SourceBrowserTree.svelte';
 
   export let binding: AnalysisSourceBinding;
   export let depth: number = 0;
+  export let entries: Record<string, SourceEntry> = {};
   export let expanded: Record<string, boolean> = {};
-  export let filterText: string = '';
+  /** What to show of each source, by binding id. */
+  export let results: Record<string, SourceTreeResult> = {};
+  export let searching: boolean = false;
   /** A plan's simulations: each with the binding that reads it, when the analysis has one. */
   export let simulations: { binding?: AnalysisSourceBinding; dataset: AnalysisPlanSimulationDataset }[] = [];
-  /** Sources by binding id, for nested simulations. */
-  export let sources: Record<string, TimelineSource | undefined> = {};
-  export let statuses: Record<string, SourceStatus | null> = {};
-  export let labels: Record<string, string> = {};
-  /** Steps of each authored sequence, by binding id. */
-  export let sequenceSteps: Record<string, number> = {};
+  /** Shown under a plan: the plan is said by where it is. */
+  export let nested: boolean = false;
   export let readOnly: boolean = false;
   export let rows: Row[] = [];
 
   const dispatch = createEventDispatcher<{
     add: { action: SourceBrowserAction; layer?: Layer; row?: Row };
     addSimulation: number;
+    browseSimulations: void;
     dragstart: { action: SourceBrowserAction; event: DragEvent };
     remove: string;
-    rename: string;
     toggle: { id: string; open: boolean };
   }>();
 
-  /** Unattached simulations shown at once; the Add Source dialog lists them all. */
-  const SIMULATION_LIMIT = 3;
+  /** Unattached simulations listed when browsing; the Add Source dialog lists them all. */
+  const BROWSE_LIMIT = 8;
 
-  $: source = sources[binding.id];
-  $: label = labels[binding.id] ?? binding.id;
-  $: status = statuses[binding.id];
-  $: filtering = !!filterText.trim();
-  $: nodes = filterSourceBrowserNodes(source?.browserNodes ?? [], filterText);
-  $: steps = sequenceSteps[binding.id];
+  $: entry = entries[binding.id];
+  $: label =
+    nested && binding.kind === 'simulation'
+      ? `Simulation ${binding.simulationDatasetId}`
+      : (entry?.label ?? binding.id);
+  $: result = results[binding.id];
   $: attached = simulations.filter(s => s.binding);
   $: unattached = simulations.filter(s => !s.binding);
-  $: matches = !filtering || label.toLowerCase().includes(filterText.trim().toLowerCase());
-  $: open = filtering ? nodes.length > 0 || attached.length > 0 : (expanded[binding.id] ?? depth === 0);
-  $: selected =
-    ($analysisInspector.kind === 'source' || $analysisInspector.kind === 'sequence') &&
-    $analysisInspector.sourceId === binding.id;
+  $: attachedShown = searching ? attached.filter(s => s.binding && results[s.binding.id]?.visible) : attached;
+  $: key = searching ? `search:${binding.id}` : binding.id;
+  $: open = expanded[key] ?? (searching ? !!result?.open : false);
+  $: simulationsKey = `${searching ? 'search:' : ''}${binding.id}/simulations`;
+  $: simulationsOpen = expanded[simulationsKey] ?? (searching ? attachedShown.length > 0 : true);
+  $: browseOpen = !searching && !!expanded[`${binding.id}/browse`];
+  $: selected = $analysisInspector.kind === 'source' && $analysisInspector.sourceId === binding.id;
+  $: sequenceSelected = $analysisInspector.kind === 'sequence' && $analysisInspector.sourceId === binding.id;
   $: icon = binding.kind === 'plan' ? CalendarRange : binding.kind === 'simulation' ? Play : Database;
-  $: indent = 4 + depth * 12;
+  $: showSequence = entry?.sequence && (!searching || result?.labelMatch || result?.sequenceMatch);
+
+  function toggle(id: string, isOpen: boolean) {
+    dispatch('toggle', { id, open: isOpen });
+  }
 </script>
 
-{#if matches || nodes.length || attached.length}
-  <div class="source-row" class:selected style:padding-left="{indent}px" role="treeitem" aria-selected={selected}>
+{#if !searching || result?.visible}
+  <div
+    class="tree-row source"
+    class:selected
+    style:--depth={depth}
+    role="treeitem"
+    aria-selected={selected}
+    aria-expanded={open}
+  >
     <button
-      class="caret"
+      class="caret-slot"
+      tabindex={-1}
       aria-label="{open ? 'Close' : 'Open'} {label}"
-      aria-expanded={open}
-      on:click={() => dispatch('toggle', { id: binding.id, open })}
+      on:click={() => toggle(key, open)}
     >
       {#if open}<CaretDownIcon />{:else}<CaretRightIcon />{/if}
     </button>
-    <svelte:component this={icon} size={13} class="shrink-0 text-muted-foreground" />
+    <svelte:component this={icon} size={13} class="icon" />
     <button
       class="name"
-      title="{label} · show its details"
-      on:click={() => inspect({ kind: 'source', sourceId: binding.id })}>{label}</button
+      data-tree-focus
+      aria-expanded={open}
+      title="{label}{entry?.unavailableReason ? ` · ${entry.unavailableReason}` : ''}"
+      on:click={() => inspect({ kind: 'source', sourceId: binding.id })}
+      on:dblclick={() => toggle(key, open)}
+      on:keydown={event => {
+        if ((event.key === 'ArrowRight' && !open) || (event.key === 'ArrowLeft' && open)) {
+          event.preventDefault();
+          toggle(key, open);
+        }
+      }}>{label}</button
     >
-    {#if status}
-      <span class="status" data-tone={status.tone} title={status.text}>{status.text}</span>
+    {#if entry?.status}
+      <span class="status" data-tone={entry.status.tone} title={entry.status.text}>{entry.status.text}</span>
     {/if}
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild let:builder>
@@ -93,136 +143,190 @@
         </Button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Content align="end" class="text-xs">
-        <DropdownMenu.Item class="text-xs" on:click={() => inspect({ kind: 'source', sourceId: binding.id })}
-          >Details</DropdownMenu.Item
-        >
+        {#if entry?.openHref}
+          <DropdownMenu.Item class="text-xs" href={entry.openHref}>{entry.openLabel ?? 'Open'}</DropdownMenu.Item>
+        {/if}
+        {#if entry?.file}
+          <DropdownMenu.Item class="text-xs" href={entry.file.href}>Open in SeqDev</DropdownMenu.Item>
+        {/if}
         {#if !readOnly}
-          <DropdownMenu.Item class="text-xs" on:click={() => dispatch('rename', binding.id)}
+          <DropdownMenu.Item class="text-xs" on:click={() => inspect({ kind: 'source', sourceId: binding.id })}
             >Rename in this analysis…</DropdownMenu.Item
           >
           <DropdownMenu.Separator />
           <DropdownMenu.Item class="text-xs text-red-700" on:click={() => dispatch('remove', binding.id)}
-            >Remove from analysis</DropdownMenu.Item
+            >Remove from analysis…</DropdownMenu.Item
           >
         {/if}
       </DropdownMenu.Content>
     </DropdownMenu.Root>
   </div>
-  {#if source?.resources?.unavailableReason && !status}
-    <div class="problem" style:padding-left="{indent + 30}px">{source.resources.unavailableReason}</div>
-  {/if}
 
   {#if open}
-    {#if steps !== undefined && matches}
+    {#if showSequence && entry?.sequence}
       <button
-        class="sequence"
-        style:padding-left="{indent + 26}px"
+        class="tree-row sequence"
+        class:selected={sequenceSelected}
+        style:--depth={depth + 1}
+        data-tree-focus
+        title="Inspect the sequence: its steps in order, their timing and arguments"
         on:click={() => inspect({ kind: 'sequence', sourceId: binding.id })}
       >
-        <ListOrdered size={13} class="shrink-0 text-muted-foreground" />
-        <span class="flex-1 truncate">Sequence</span>
-        <span class="badge">{steps} step{steps === 1 ? '' : 's'}</span>
+        <span class="caret-slot" />
+        <ListOrdered size={13} class="icon" />
+        <span class="label">{entry.sequence.name}</span>
+        <span class="badge">{entry.sequence.steps} step{entry.sequence.steps === 1 ? '' : 's'}</span>
       </button>
     {/if}
     <SourceBrowserTree
-      depth={depth + 2}
+      depth={depth + 1}
       {expanded}
-      forceExpanded={filtering}
-      {nodes}
+      nodes={result?.nodes ?? []}
+      openDepth={0}
       {readOnly}
       {rows}
+      searchOpen={searching ? (result?.groupsOpen ?? null) : null}
       on:add
       on:dragstart
       on:toggle
     />
-    {#each attached as simulation (simulation.dataset.id)}
-      {#if simulation.binding}
-        <svelte:self
-          binding={simulation.binding}
-          depth={depth + 1}
-          {expanded}
-          {filterText}
-          {labels}
-          {readOnly}
-          {rows}
-          {sequenceSteps}
-          {sources}
-          {statuses}
-          on:add
-          on:addSimulation
-          on:dragstart
-          on:remove
-          on:rename
-          on:toggle
-        />
-      {/if}
-    {/each}
-    {#if !filtering && unattached.length}
-      {@const shown = expanded[`${binding.id}/more-simulations`] ? unattached : unattached.slice(0, SIMULATION_LIMIT)}
-      {#each shown as { dataset } (dataset.id)}
-        <div class="simulation" style:padding-left="{indent + 26}px">
-          <Play size={13} class="shrink-0 text-muted-foreground" />
-          <span class="flex-1 truncate text-muted-foreground" title="Not in this analysis">Simulation {dataset.id}</span
-          >
-          {#if dataset.status !== 'success'}
-            <span class="status" data-tone={dataset.status === 'failed' ? 'error' : 'muted'}>{dataset.status}</span>
-          {:else if !readOnly}
-            <Button size="xs" variant="ghost" class="h-5 px-1.5" on:click={() => dispatch('addSimulation', dataset.id)}
-              >Add</Button
-            >
-          {/if}
-        </div>
-      {/each}
-      {#if unattached.length > shown.length}
+    {#if !result?.nodes.length && !showSequence && entry?.unavailableReason}
+      <div class="tree-row empty" style:--depth={depth + 1}><span class="caret-slot" />{entry.unavailableReason}</div>
+    {/if}
+    {#if binding.kind === 'plan' && (attachedShown.length || (!searching && simulations.length))}
+      <div class="tree-row group" style:--depth={depth + 1}>
         <button
-          class="more"
-          style:padding-left="{indent + 45}px"
-          on:click={() => dispatch('toggle', { id: `${binding.id}/more-simulations`, open: false })}
-          >{unattached.length - shown.length} older simulation{unattached.length - shown.length === 1
-            ? ''
-            : 's'}…</button
+          class="toggle"
+          data-tree-focus
+          aria-expanded={simulationsOpen}
+          on:click={() => toggle(simulationsKey, simulationsOpen)}
         >
+          <span class="caret-slot"
+            >{#if simulationsOpen}<CaretDownIcon />{:else}<CaretRightIcon />{/if}</span
+          >
+          <Play size={13} class="icon" />
+          <span class="label">Simulations</span>
+          <span class="badge" title="{attached.length} in this analysis of {simulations.length}"
+            >{attached.length}/{simulations.length}</span
+          >
+        </button>
+      </div>
+      {#if simulationsOpen}
+        {#each attachedShown as simulation (simulation.dataset.id)}
+          {#if simulation.binding}
+            <svelte:self
+              binding={simulation.binding}
+              depth={depth + 2}
+              {entries}
+              {expanded}
+              nested
+              {readOnly}
+              {rows}
+              {results}
+              {searching}
+              on:add
+              on:addSimulation
+              on:browseSimulations
+              on:dragstart
+              on:remove
+              on:toggle
+            />
+          {/if}
+        {/each}
+        {#if !searching && unattached.length}
+          <button
+            class="tree-row more"
+            style:--depth={depth + 2}
+            data-tree-focus
+            aria-expanded={browseOpen}
+            on:click={() => toggle(`${binding.id}/browse`, browseOpen)}
+          >
+            <span class="caret-slot"
+              >{#if browseOpen}<CaretDownIcon />{:else}<CaretRightIcon />{/if}</span
+            >
+            <span class="label">Browse other simulations ({unattached.length})</span>
+          </button>
+          {#if browseOpen}
+            {#each unattached.slice(0, BROWSE_LIMIT) as { dataset } (dataset.id)}
+              <div class="tree-row" style:--depth={depth + 3}>
+                <span class="caret-slot" />
+                <Play size={13} class="icon" />
+                <span class="label text-muted-foreground">Simulation {dataset.id}</span>
+                {#if dataset.status !== 'success'}
+                  <span class="status" data-tone={dataset.status === 'failed' ? 'error' : 'muted'}
+                    >{dataset.status}</span
+                  >
+                {:else if !readOnly}
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    class="h-5 px-2"
+                    on:click={() => dispatch('addSimulation', dataset.id)}>Add</Button
+                  >
+                {/if}
+              </div>
+            {/each}
+            {#if unattached.length > BROWSE_LIMIT}
+              <button class="tree-row more" style:--depth={depth + 3} on:click={() => dispatch('browseSimulations')}>
+                <span class="caret-slot" />All {unattached.length} simulations…
+              </button>
+            {/if}
+          {/if}
+        {/if}
       {/if}
     {/if}
   {/if}
 {/if}
 
 <style>
-  .source-row,
-  .sequence,
-  .simulation {
+  .tree-row {
     align-items: center;
     display: flex;
+    font-size: 12px;
     gap: 4px;
-    min-height: 26px;
+    min-height: 24px;
+    padding-left: calc(4px + var(--depth, 0) * 14px);
     padding-right: 4px;
+    width: 100%;
   }
 
-  .source-row:hover,
-  .sequence:hover {
+  .tree-row:hover {
     background: var(--st-gray-15);
   }
 
-  .source-row.selected {
-    background: var(--st-gray-15);
+  .tree-row.selected {
+    background: var(--st-utility-blue-10, #e0ecfb);
+    box-shadow: inset 2px 0 0 var(--st-utility-blue);
   }
 
-  .caret {
+  .source {
+    min-height: 26px;
+  }
+
+  .caret-slot {
     align-items: center;
     background: none;
     border: 0;
     cursor: pointer;
     display: flex;
+    flex: none;
+    justify-content: center;
     padding: 0;
+    width: 14px;
   }
 
-  .name {
+  .tree-row :global(.icon) {
+    color: var(--st-gray-60);
+    flex: none;
+  }
+
+  .name,
+  .toggle {
     background: none;
     border: 0;
     color: var(--st-gray-100);
     cursor: pointer;
     flex: 1;
-    font-weight: 500;
     min-width: 0;
     overflow: hidden;
     padding: 0;
@@ -231,18 +335,40 @@
     white-space: nowrap;
   }
 
+  .name {
+    font-weight: 500;
+  }
+
+  .toggle {
+    align-items: center;
+    color: var(--st-gray-80);
+    display: flex;
+    font-weight: 500;
+    gap: 4px;
+  }
+
   .sequence,
   .more {
     background: none;
     border: 0;
     cursor: pointer;
     text-align: left;
-    width: 100%;
+  }
+
+  .sequence .label {
+    font-weight: 500;
   }
 
   .more {
     color: var(--st-utility-blue);
-    min-height: 22px;
+  }
+
+  .label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .status {
@@ -269,22 +395,25 @@
 
   .badge {
     color: var(--st-gray-60);
-  }
-
-  .problem {
-    color: #a8321e;
+    flex: none;
     font-size: 11px;
-    padding-bottom: 2px;
+    font-variant-numeric: tabular-nums;
   }
 
-  .source-row :global(.menu) {
+  .empty {
+    color: var(--st-gray-60);
+    font-style: italic;
+  }
+
+  .source :global(.menu) {
     height: 20px;
-    opacity: 0.4;
+    opacity: 0;
     width: 20px;
   }
 
-  .source-row:hover :global(.menu),
-  .source-row :global(.menu[data-state='open']) {
+  .source:hover :global(.menu),
+  .source:focus-within :global(.menu),
+  .source :global(.menu[data-state='open']) {
     opacity: 1;
   }
 </style>

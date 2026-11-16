@@ -2,6 +2,7 @@ import type { AnalysisSourceBinding } from '../types/analysis';
 import type { Layer, Timeline } from '../types/timeline';
 import type { TimelineSourceId } from '../types/timelineSource';
 import { isActivityLayer, isExternalEventLayer, removeRowFromTimelineHierarchy } from './timeline';
+import { removeValueAnnotations } from './annotations';
 import { PLAN_SOURCE_ID } from './timelineSources';
 
 /*
@@ -158,9 +159,10 @@ export function importViewTimeline(
     });
     if (row.layers.length && !layers.length) {
       Object.assign(timeline, removeRowFromTimelineHierarchy(timeline, row.id));
+      timeline.annotations = removeValueAnnotations(timeline.annotations, row.id);
       return [];
     }
-    // An axis only omitted layers used goes with them, with its guides.
+    // An axis only omitted layers used goes with them, with its value annotations.
     const usedAxes = new Set(layers.map(layer => layer.yAxisId));
     const droppedAxes = new Set(
       row.layers
@@ -168,16 +170,42 @@ export function importViewTimeline(
         .map(layer => layer.yAxisId)
         .filter((id): id is number => id !== null && !usedAxes.has(id)),
     );
+    if (droppedAxes.size) {
+      timeline.annotations = removeValueAnnotations(timeline.annotations, row.id, droppedAxes);
+    }
     return [
       droppedAxes.size
-        ? {
-            ...row,
-            horizontalGuides: row.horizontalGuides.filter(guide => !droppedAxes.has(guide.yAxisId)),
-            layers,
-            yAxes: row.yAxes.filter(axis => !droppedAxes.has(axis.id)),
-          }
+        ? { ...row, layers, yAxes: row.yAxes.filter(axis => !droppedAxes.has(axis.id)) }
         : { ...row, layers },
     ];
   });
+  // A Plan View's marks are its presentation: they come as reusable annotations (see mergeAnnotationsForLayout).
+  timeline.annotations = timeline.annotations.map(annotation => ({ ...annotation, reusable: true }));
   return { kept, omitted, timeline };
+}
+
+/**
+ * An analysis's own timeline with the layers that name a Plan page's plan (no source, or "plan") pointed at the
+ * analysis's source for them, where there is exactly one sensible choice (see getUnboundLayerOptions). Layers with no
+ * such choice are left as they are: they say their source is missing, and offer to choose one. The timeline itself
+ * when nothing changes.
+ */
+export function rebindUnboundLayers(timeline: Timeline, bindings: AnalysisSourceBinding[]): Timeline {
+  const { defaults } = getUnboundLayerOptions(bindings);
+  let changed = false;
+  const rows = timeline.rows.map(row => {
+    const layers = row.layers.map(layer => {
+      if (!isUnbound(layer) || isExternalEventLayer(layer)) {
+        return layer;
+      }
+      const sourceId = isActivityLayer(layer) ? defaults.activitySourceId : defaults.resourceSourceId;
+      if (!sourceId) {
+        return layer;
+      }
+      changed = true;
+      return { ...layer, sourceId };
+    });
+    return changed ? { ...row, layers } : row;
+  });
+  return changed ? { ...timeline, rows } : timeline;
 }

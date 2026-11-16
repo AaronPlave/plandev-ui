@@ -85,6 +85,6 @@ export const ViewSectionColorPresets: string[] = [ViewDefaultSectionColor, ...Vi
 
 export const ViewTimelineResourceRowsLimit = 20;
 
-export const viewSchemaVersion = 4;
+export const viewSchemaVersion = 5;
 
 export const viewSchemaVersionName = `v${viewSchemaVersion}`;

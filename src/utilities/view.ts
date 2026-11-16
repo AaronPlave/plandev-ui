@@ -19,6 +19,7 @@ import {
   isLineLayer,
   isXRangeLayer,
 } from './timeline';
+import { migrateGuidesToAnnotations } from './annotations';
 import { PLAN_SOURCE_ID } from './timelineSources';
 
 /**
@@ -531,6 +532,7 @@ export function applyViewDefinitionMigrations(viewDefinition: ViewDefinition): {
       1: migrateViewDefinitionV1toV2,
       2: migrateViewDefinitionV2toV3,
       3: migrateViewDefinitionV3toV4,
+      4: migrateViewDefinitionV4toV5,
     };
 
     // Iterate through versions between view version and latest view version
@@ -743,5 +745,24 @@ export function migrateViewDefinitionV3toV4(viewDefinition: ViewDefinition) {
       }),
     },
     version: 4,
+  };
+}
+
+export function migrateViewDefinitionV4toV5(viewDefinition: ViewDefinition) {
+  /*
+    Summary of migrations:
+    - Guides become annotations: each timeline's vertical guides and each row's horizontal guides are now
+      `timeline.annotations` (time and value anchors), with their labels, colors and descriptions. The guide fields
+      are removed. (An Analysis's notes, kept outside its view, are translated when the analysis opens.)
+  */
+  return {
+    ...viewDefinition,
+    plan: {
+      ...viewDefinition.plan,
+      timelines: viewDefinition.plan.timelines.map(timeline =>
+        migrateGuidesToAnnotations(timeline as unknown as Record<string, unknown>),
+      ) as unknown as ViewDefinition['plan']['timelines'],
+    },
+    version: 5,
   };
 }

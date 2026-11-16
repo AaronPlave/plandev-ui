@@ -4,6 +4,7 @@ import viewV0 from '../tests/mocks/view/v0/view.json';
 import viewV1 from '../tests/mocks/view/v1/view.json';
 import viewV3 from '../tests/mocks/view/v3/view.json';
 import viewV4 from '../tests/mocks/view/v4/view.json';
+import viewV5 from '../tests/mocks/view/v5/view.json';
 import {
   applyViewDefinitionMigrations,
   generateDefaultView,
@@ -79,7 +80,7 @@ describe('generateDefaultViewWithEvents', () => {
 
 describe('validateViewJSONAgainstSchema v4', () => {
   test('Should accept source-bound layers and legacy layers side by side', async () => {
-    const definition = structuredClone(viewV4) as any;
+    const definition = structuredClone(viewV5) as any;
     const row = definition.plan.timelines[0].rows.find((r: any) =>
       r.layers.some((layer: any) => layer.chartType === 'line'),
     );
@@ -93,7 +94,7 @@ describe('validateViewJSONAgainstSchema v4', () => {
 
 describe('validateViewJSONAgainstSchema v4 external event scope', () => {
   test('Should accept an external-event layer restricted to external sources', async () => {
-    const definition = structuredClone(viewV4) as any;
+    const definition = structuredClone(viewV5) as any;
     const layer = definition.plan.timelines[0].rows
       .flatMap((row: any) => row.layers)
       .find((layer: any) => layer.chartType === 'externalEvent');
@@ -106,7 +107,7 @@ describe('validateViewJSONAgainstSchema v4 external event scope', () => {
 
 describe('validateViewJSONAgainstSchema', () => {
   test('Should accept a timeline that groups rows into a section', async () => {
-    const definition = structuredClone(viewV4) as any;
+    const definition = structuredClone(viewV5) as any;
     const timeline = definition.plan.timelines[0];
     const [firstRow, secondRow] = timeline.rows;
 
@@ -125,7 +126,7 @@ describe('validateViewJSONAgainstSchema', () => {
   });
 
   test('Should reject a section that is missing required fields', async () => {
-    const definition = structuredClone(viewV4) as any;
+    const definition = structuredClone(viewV5) as any;
     definition.plan.timelines[0].sections = [{ id: 0, name: 'Incomplete' }];
 
     const { valid } = validateViewJSONAgainstSchema(definition);
@@ -135,7 +136,7 @@ describe('validateViewJSONAgainstSchema', () => {
 
 describe('validateViewJSONAgainstSchema - line layer area fill', () => {
   function getViewWithLineLayerProps(props: Record<string, unknown>) {
-    const view = structuredClone(viewV4) as any;
+    const view = structuredClone(viewV5) as any;
     const row = view.plan.timelines
       .flatMap((timeline: any) => timeline.rows)
       .find((row: any) => row.layers.some((layer: any) => layer.chartType === 'line'));
@@ -182,22 +183,27 @@ describe('migrateViewDefinition', () => {
     const { anyMigrationsApplied, error, migratedViewDefinition } = applyViewDefinitionMigrations(viewV1 as any);
     expect(anyMigrationsApplied).toBeTruthy();
     expect(error).toBeNull();
-    expect(migratedViewDefinition).to.deep.eq(viewV4);
+    expect(migratedViewDefinition).to.deep.eq(viewV5);
   });
-  test('Should migrate v3 -> v4 without binding existing layers to a source', async () => {
+  test('Should migrate v4 -> v5, guides becoming annotations', async () => {
+    const { anyMigrationsApplied, migratedViewDefinition } = applyViewDefinitionMigrations(viewV4 as any);
+    expect(anyMigrationsApplied).toBeTruthy();
+    expect(migratedViewDefinition).to.deep.eq(viewV5);
+  });
+  test('Should migrate v3 -> v5 without binding existing layers to a source', async () => {
     const { anyMigrationsApplied, error, migratedViewDefinition } = applyViewDefinitionMigrations(viewV3 as any);
     expect(anyMigrationsApplied).toBeTruthy();
     expect(error).toBeNull();
-    expect(migratedViewDefinition).to.deep.eq(viewV4);
+    expect(migratedViewDefinition).to.deep.eq(viewV5);
     const layers = migratedViewDefinition?.plan.timelines.flatMap(timeline => timeline.rows.flatMap(row => row.layers));
     expect(layers?.length).toBeGreaterThan(0);
     expect(layers?.some(layer => 'sourceId' in layer)).toBe(false);
   });
   test('Should apply no view migrations to a migration matching current version', async () => {
-    const { anyMigrationsApplied, error, migratedViewDefinition } = applyViewDefinitionMigrations(viewV4 as any);
+    const { anyMigrationsApplied, error, migratedViewDefinition } = applyViewDefinitionMigrations(viewV5 as any);
     expect(anyMigrationsApplied).toBeFalsy();
     expect(error).toBeNull();
-    expect(migratedViewDefinition).to.deep.eq(viewV4);
+    expect(migratedViewDefinition).to.deep.eq(viewV5);
   });
   test('Should return errors if migration fails', async () => {
     const invalidView = structuredClone(viewV0);
@@ -212,7 +218,7 @@ describe('migrateViewDefinition', () => {
 
 describe('y axis scale type validation', () => {
   function viewWithYAxisProps(props: Record<string, unknown>) {
-    const view = structuredClone(viewV4) as any;
+    const view = structuredClone(viewV5) as any;
     const axis = view.plan.timelines[0].rows[1].yAxes[0];
     view.plan.timelines[0].rows[1].yAxes[0] = { ...axis, ...props };
     return view;
@@ -249,7 +255,7 @@ describe('y axis scale type validation', () => {
 
   test('An axis saved before scaleType existed is still valid', () => {
     // The v3 mock carries no scaleType, so omitting it must remain legal
-    const view = structuredClone(viewV4) as any;
+    const view = structuredClone(viewV5) as any;
     expect(view.plan.timelines[0].rows[1].yAxes[0].scaleType).toBeUndefined();
     expect(validateViewJSONAgainstSchema(view).valid).toBe(true);
   });
@@ -262,7 +268,7 @@ describe('line layer style validation', () => {
    * options existed" case.
    */
   function viewWithLineLayerProps(props: Record<string, unknown>) {
-    const view = structuredClone(viewV4) as any;
+    const view = structuredClone(viewV5) as any;
     const layer = view.plan.timelines[0].rows[1].layers[0];
     view.plan.timelines[0].rows[1].layers[0] = { ...layer, ...props };
     return view;
@@ -270,21 +276,21 @@ describe('line layer style validation', () => {
 
   /** Merges the given properties into the discreteOptions of the mock view's activity row. */
   function viewWithDiscreteOptions(props: Record<string, unknown>) {
-    const view = structuredClone(viewV4) as any;
+    const view = structuredClone(viewV5) as any;
     const row = view.plan.timelines[0].rows[0];
     row.discreteOptions = { ...row.discreteOptions, ...props };
     return view;
   }
 
   function viewWithXRangeLayerProps(props: Record<string, unknown>) {
-    const view = structuredClone(viewV4) as any;
+    const view = structuredClone(viewV5) as any;
     const layer = view.plan.timelines[0].rows[2].layers[0];
     view.plan.timelines[0].rows[2].layers[0] = { ...layer, ...props };
     return view;
   }
 
   test('A view saved before the style options existed is still valid', () => {
-    const { valid, errors } = validateViewJSONAgainstSchema(viewV4 as any);
+    const { valid, errors } = validateViewJSONAgainstSchema(viewV5 as any);
     expect(errors).to.deep.equal([]);
     expect(valid).toBe(true);
   });
@@ -330,7 +336,7 @@ describe('line layer style validation', () => {
   });
 
   test('Should accept a stacked y axis, and reject a non-boolean stack', () => {
-    const view = structuredClone(viewV4) as any;
+    const view = structuredClone(viewV5) as any;
     const axis = view.plan.timelines[0].rows[1].yAxes[0];
     expect(axis.stack).toBeUndefined(); // saved before stacking existed
     expect(validateViewJSONAgainstSchema(view).valid).toBe(true);
@@ -340,42 +346,41 @@ describe('line layer style validation', () => {
     expect(validateViewJSONAgainstSchema(view).valid).toBe(false);
   });
 
-  test('Should accept a banded horizontal guide and reject a non-numeric y2', () => {
-    const view = structuredClone(viewV4) as any;
+  test('Should accept a value-range annotation and reject a non-numeric y2', () => {
+    const view = structuredClone(viewV5) as any;
     const row = view.plan.timelines[0].rows[1];
-    row.horizontalGuides = [{ id: 0, label: { text: 'nominal' }, y: 10, y2: 90, yAxisId: row.yAxes[0].id }];
+    const anchor = { kind: 'value', rowId: row.id, y: 10, y2: 90, yAxisId: row.yAxes[0].id };
+    view.plan.timelines[0].annotations = [{ anchor, id: 0, label: 'nominal' }];
     const { valid, errors } = validateViewJSONAgainstSchema(view);
     expect(errors).to.deep.equal([]);
     expect(valid).toBe(true);
 
-    // A guide with no y2 is an ordinary line guide and must stay valid
-    delete row.horizontalGuides[0].y2;
+    // A value annotation with no y2 is an ordinary line and must stay valid
+    delete (anchor as any).y2;
     expect(validateViewJSONAgainstSchema(view).valid).toBe(true);
 
-    row.horizontalGuides[0].y2 = 'top';
+    (anchor as any).y2 = 'top';
     expect(validateViewJSONAgainstSchema(view).valid).toBe(false);
   });
 
-  test('Should accept a banded vertical guide and reject a non-string timestamp2', () => {
-    const view = structuredClone(viewV4) as any;
-    const timeline = view.plan.timelines[0];
-    timeline.verticalGuides = [
-      { id: 0, label: { text: 'eclipse' }, timestamp: '2022-001T00:00:00', timestamp2: '2022-001T06:00:00' },
-    ];
+  test('Should accept a time-range annotation and reject a non-string end', () => {
+    const view = structuredClone(viewV5) as any;
+    const anchor = { end: '2022-001T06:00:00', kind: 'time', start: '2022-001T00:00:00' };
+    view.plan.timelines[0].annotations = [{ anchor, description: 'why', id: 0, label: 'eclipse' }];
     const { valid, errors } = validateViewJSONAgainstSchema(view);
     expect(errors).to.deep.equal([]);
     expect(valid).toBe(true);
 
-    // A guide with no timestamp2 is an ordinary line guide and must stay valid
-    delete timeline.verticalGuides[0].timestamp2;
+    // A time annotation with no end is an ordinary line and must stay valid
+    delete (anchor as any).end;
     expect(validateViewJSONAgainstSchema(view).valid).toBe(true);
 
-    timeline.verticalGuides[0].timestamp2 = 12345;
+    (anchor as any).end = 12345;
     expect(validateViewJSONAgainstSchema(view).valid).toBe(false);
   });
 
   test('Should accept an external event layer opacity and reject one outside 0-1', () => {
-    const view = structuredClone(viewV4) as any;
+    const view = structuredClone(viewV5) as any;
     const row = view.plan.timelines[0].rows.find((r: any) =>
       r.layers.some((l: any) => l.chartType === 'externalEvent'),
     );
@@ -400,7 +405,7 @@ describe('line layer style validation', () => {
   // The mock's rows carry neither marker field, so this is also the "row saved before markers existed"
   // case -- it has to keep validating and fall back to 'line' at render time.
   test('A row with no marker fields is still valid', () => {
-    const view = structuredClone(viewV4) as any;
+    const view = structuredClone(viewV5) as any;
     expect(view.plan.timelines[0].rows[0].discreteOptions.directiveMarker).toBeUndefined();
     expect(view.plan.timelines[0].rows[0].discreteOptions.zeroDurationMarker).toBeUndefined();
     expect(validateViewJSONAgainstSchema(view).valid).toBe(true);
@@ -512,7 +517,7 @@ describe('line layer style validation', () => {
   // The mock's x-range layer carries no map, so this is also the "layer saved before per-value colors
   // existed" case
   test('An x-range layer with no appearance map is still valid', () => {
-    const view = structuredClone(viewV4) as any;
+    const view = structuredClone(viewV5) as any;
     expect(view.plan.timelines[0].rows[2].layers[0].valueAppearance).toBeUndefined();
     expect(validateViewJSONAgainstSchema(view).valid).toBe(true);
   });

@@ -1,12 +1,12 @@
 <svelte:options immutable={true} />
 
 <!--
-  Use a Layout: the one way to bring a prepared presentation (rows, sections, layers, axes, styles, value guides) to
+  Use a Layout: the one way to bring a prepared presentation (rows, sections, layers, axes, styles, its annotations) to
   this analysis's data. A layout comes from a saved view (one saved from an analysis, or a Plan's view) or from another
   analysis. Choose it, confirm which of this analysis's sources each of its sources becomes (the same data and another
   revision of the same source are filled in, and said to be what they are), and use it. Problems are summed up in a
-  line and listed only on request. The layout it came from is only read; this analysis keeps its sources, notes and
-  time guides, and the replacement can be undone.
+  line and listed only on request. The layout it came from is only read; this analysis keeps its sources and its own
+  annotations, and the replacement can be undone.
 
   A Plan's view is handed to the Plan-view loader (`planView`), which maps the Plan's own layers instead.
 -->
@@ -16,6 +16,8 @@
   import {
     analyses,
     analysis,
+    analysisPlanExternalEvents,
+    analysisPlans,
     analysisSimulationDatasets,
     analysisSimulationTypeCounts,
     analysisSourceBindings,
@@ -27,10 +29,13 @@
     type AnalysisPresentation,
   } from '../../stores/analysis';
   import { initialViewsLoading, view, views } from '../../stores/views';
+  import type { SourceActivityLink } from '../../types/analysis';
   import type { User } from '../../types/app';
   import type { DataGridColumnDef, RowId } from '../../types/data-grid';
   import {
     applyPresentation,
+    getFocusedLayers,
+    getFocusKey,
     getInitialRoleMapping,
     getPresentationRoles,
     getResourceRenameKey,
@@ -39,7 +44,8 @@
     type PresentationIssue,
     type RoleMapping,
   } from '../../utilities/analysisPresentation';
-  import { listAnnotations } from '../../utilities/analysisAnnotations';
+  import { canBeReusable, describeAnchor } from '../../utilities/analysisAnnotations';
+  import effects from '../../utilities/effects';
   import { showSuccessToast } from '../../utilities/toast';
   import DataGrid from '../ui/DataGrid/DataGrid.svelte';
 
@@ -89,9 +95,13 @@
   ];
 
   let filter: string = '';
-  let includeTimeGuides: boolean = false;
-  /** The annotations (marks) to save with the layout, by key; null until the save form opens. */
-  let layoutAnnotations: Set<string> | null = null;
+  /** By getFocusKey: whether the target has a focused layer's records, and the records of that name it has. */
+  let focusChecks: Record<string, boolean> = {};
+  let focusCandidates: Record<string, SourceActivityLink[]> = {};
+  let focusChoices: Record<string, string> = {};
+  let bringAnnotations: boolean = true;
+  /** The annotations to save with the layout, by id; null until the save form opens. */
+  let layoutAnnotations: Set<number> | null = null;
   let loaded: AnalysisPresentation | null = null;
   let loading: boolean = false;
   let mapping: RoleMapping = {};
@@ -110,7 +120,16 @@
   $: targetCatalogs = Object.fromEntries(
     targets.map(binding => [
       binding.id,
-      getSourceCatalog(binding, $analysisSourceRevisions, $analysisSimulationDatasets, $analysisSimulationTypeCounts),
+      getSourceCatalog(
+        binding,
+        $analysisSourceRevisions,
+        $analysisSimulationDatasets,
+        $analysisSimulationTypeCounts,
+        binding.kind === 'plan' ? ($analysisPlans ?? []).find(({ id }) => id === binding.planId) : undefined,
+        binding.kind === 'plan'
+          ? [...new Set(($analysisPlanExternalEvents[binding.planId] ?? []).map(event => event.event_type_name))]
+          : [],
+      ),
     ]),
   );
   $: current = $view?.definition.plan.timelines[0];
@@ -118,12 +137,51 @@
   $: result =
     loaded && current
       ? applyPresentation(loaded.timeline, current, loaded.catalogs, targetCatalogs, sourceLabels, {
-          includeTimeGuides,
+          focusChecks,
+          focusChoices,
           mapping,
           resourceRenames,
         })
       : null;
   $: replaceable = uniqueMissing(result?.issues ?? []);
+  $: missingFocuses = [
+    ...new Map(
+      (result?.issues ?? []).flatMap(({ missingFocus }) => (missingFocus ? [[missingFocus.key, missingFocus]] : [])),
+    ).values(),
+  ];
+  $: checkFocuses(loaded, mapping);
+
+  /**
+   * Reads, for each focused layer, whether its target has the records it focused on (by their keys), and which of the
+   * target's records have the same name, to offer (never to pick).
+   */
+  async function checkFocuses(from: AnalysisPresentation | null, roles: RoleMapping) {
+    if (!from) {
+      return;
+    }
+    for (const { name, roleId, within } of getFocusedLayers(from.timeline)) {
+      const targetId = roles[roleId];
+      const target = targets.find(({ id }) => id === targetId);
+      if (!targetId || !target) {
+        continue;
+      }
+      const key = getFocusKey(targetId, within);
+      if (focusChecks[key] !== undefined) {
+        continue;
+      }
+      if (target.kind !== 'imported') {
+        // Only an imported source's records have keys: a focus can't be in a plan or a simulation.
+        focusChecks = { ...focusChecks, [key]: false };
+        continue;
+      }
+      const [found, named] = await Promise.all([
+        effects.getSourceActivityLinks(target.revisionId, { keys: within }, within.length, user),
+        effects.getSourceActivityLinks(target.revisionId, { names: [name] }, 20, user),
+      ]);
+      focusCandidates = { ...focusCandidates, [key]: named };
+      focusChecks = { ...focusChecks, [key]: found.length === within.length };
+    }
+  }
   $: rowStatuses = loaded && result ? getRowStatuses(loaded, result.issues) : [];
   $: counts = {
     attention: rowStatuses.filter(row => row.status === 'attention').length,
@@ -144,12 +202,13 @@
       .filter(({ id }) => id !== $analysis?.id)
       .map(({ id, name, owner, updated_at }): Choice => ({ id, kind: 'analysis', name, owner, updated_at })),
   ];
-  $: timeGuideCount = loaded?.timeline.verticalGuides.length ?? 0;
+  // What the layout brings: its reusable annotations (limits, reference marks), never another analysis's findings.
+  $: reusableCount = loaded?.timeline.annotations.filter(({ reusable }) => reusable).length ?? 0;
   $: currentRows = current?.rows.length ?? 0;
-  // Marks that could go with a saved layout: value marks (thresholds, ranges) usually can, time marks rarely do.
-  $: markChoices = listAnnotations(current, []).filter(item => item.kind === 'time' || item.kind === 'value');
+  // What could go with a saved layout (not record annotations), starting from what is marked part of the layout.
+  $: markChoices = (current?.annotations ?? []).filter(canBeReusable);
   $: if (saving !== null && layoutAnnotations === null) {
-    layoutAnnotations = new Set(markChoices.filter(item => item.kind === 'value').map(({ key }) => key));
+    layoutAnnotations = new Set(markChoices.filter(({ reusable }) => reusable).map(({ id }) => id));
   }
 
   type RowStatus = { id: number; name: string; notes: string[]; status: 'attention' | 'ready' | 'unavailable' };
@@ -179,7 +238,10 @@
 
   function reset() {
     filter = '';
-    includeTimeGuides = false;
+    bringAnnotations = true;
+    focusCandidates = {};
+    focusChecks = {};
+    focusChoices = {};
     loaded = null;
     loading = false;
     mapping = {};
@@ -266,7 +328,7 @@
     if (
       loaded &&
       result &&
-      replaceAnalysisTimeline(result.timeline, user, loaded.name, { dataless: result.total === 0 })
+      replaceAnalysisTimeline(result.timeline, user, loaded.name, { bringAnnotations, dataless: result.total === 0 })
     ) {
       const left = result.total - result.kept;
       showSuccessToast(
@@ -283,8 +345,8 @@
       <Dialog.Header>
         <Dialog.Title>Save This Layout as a View</Dialog.Title>
         <Dialog.Description>
-          Its rows, sections, axes and styles, to use in any analysis. Annotations stay with this analysis unless chosen
-          below; annotations about activities always stay.
+          Its rows, sections, axes and styles, to use in any analysis, with the annotations chosen below. Annotations
+          about records always stay with this analysis.
         </Dialog.Description>
       </Dialog.Header>
       <input
@@ -297,30 +359,24 @@
       {#if markChoices.length && layoutAnnotations}
         {@const chosen = layoutAnnotations}
         <fieldset class="flex max-h-[240px] flex-col gap-1 overflow-auto text-xs">
-          <legend class="mb-1 text-muted-foreground">Annotations to include (with their explanations)</legend>
-          {#each markChoices as item (item.key)}
+          <legend class="mb-1 text-muted-foreground">Annotations to include (with their descriptions)</legend>
+          {#each markChoices as item (item.id)}
             <label class="flex items-center gap-2">
               <input
                 type="checkbox"
-                checked={chosen.has(item.key)}
+                checked={chosen.has(item.id)}
                 on:change={event => {
                   const next = new Set(chosen);
                   if (event.currentTarget.checked) {
-                    next.add(item.key);
+                    next.add(item.id);
                   } else {
-                    next.delete(item.key);
+                    next.delete(item.id);
                   }
                   layoutAnnotations = next;
                 }}
               />
-              <span class="truncate">{item.label || 'Unlabeled'}</span>
-              <span class="text-muted-foreground"
-                >{item.kind === 'value'
-                  ? `value ${item.values?.join(' – ')} on ${item.row?.name}`
-                  : item.endMs !== undefined
-                    ? 'time range'
-                    : 'time'}</span
-              >
+              <span class="truncate">{item.label || 'Untitled'}</span>
+              <span class="truncate text-muted-foreground">{describeAnchor(item)}</span>
             </label>
           {/each}
         </fieldset>
@@ -433,6 +489,31 @@
               {/each}
             </ul>
           {/if}
+          {#each missingFocuses as missing (missing.key)}
+            <label class="mt-1 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
+              <span class="truncate" title="The record this row focused on isn't in {sourceLabels[missing.targetId]}"
+                >{missing.name} isn't in {sourceLabels[missing.targetId] ?? 'the source'}</span
+              >
+              <span class="text-muted-foreground">→</span>
+              <select
+                class="st-select w-full"
+                value={focusChoices[missing.key] ?? 'omit'}
+                on:change={event => {
+                  const { [missing.key]: _, ...rest } = focusChoices;
+                  focusChoices =
+                    event.currentTarget.value === 'omit' ? rest : { ...rest, [missing.key]: event.currentTarget.value };
+                }}
+              >
+                <option value="omit">Leave the row out</option>
+                <option value="">Clear the focus (show every record of its types)</option>
+                {#each focusCandidates[missing.key] ?? [] as candidate (candidate.id)}
+                  <option value={candidate.source_key}
+                    >Focus on {candidate.name} ({candidate.start_time.slice(0, 16).replace('T', ' ')})</option
+                  >
+                {/each}
+              </select>
+            </label>
+          {/each}
           {#each replaceable as missing (missing.key)}
             {@const options = renameOptions(missing.roleId, missing.type)}
             {#if options.length}
@@ -459,12 +540,10 @@
           {/each}
         </section>
 
-        {#if timeGuideCount}
+        {#if reusableCount}
           <label class="flex items-center gap-2 text-muted-foreground">
-            <input type="checkbox" bind:checked={includeTimeGuides} />
-            Also bring its {timeGuideCount} time annotation{timeGuideCount === 1 ? '' : 's'}{loaded.kind === 'analysis'
-              ? ': their labels and times only, not what they say'
-              : ''}
+            <input type="checkbox" bind:checked={bringAnnotations} />
+            Bring its {reusableCount} layout annotation{reusableCount === 1 ? '' : 's'} (limits, reference marks)
           </label>
         {/if}
       </div>
@@ -472,8 +551,9 @@
         {#if currentRows}
           Replaces this analysis's {currentRows} row{currentRows === 1 ? '' : 's'}; you can undo it.
         {/if}
-        This analysis keeps its sources and annotations.{loaded.kind === 'analysis'
-          ? ` What "${loaded.name}" says in its annotations stays there.`
+        This analysis keeps its sources and its own annotations; its layout annotations are replaced.{loaded.kind ===
+        'analysis'
+          ? ` The findings of "${loaded.name}" stay there.`
           : ''}
       </div>
       <Dialog.Footer>

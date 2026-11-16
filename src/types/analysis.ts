@@ -33,62 +33,41 @@ export type AnalysisSourceTarget =
 export type AnalysisSourceBinding = AnalysisSourceTarget & { id: TimelineSourceId; label?: string };
 
 /**
- * A note on an analysis: the explanation of a time, an interval, a record or resource, or a timeline guide. Notes are
- * findings about the data the analysis reads. They are saved with the analysis and are not part of its presentation:
- * applying the presentation to another analysis never carries them.
- *
- * Marks and explanations are kept apart: a guide (a time, a time range, a value, a value range) is the mark drawn
- * across the rows, part of the presentation; a note is what it means. A note that explains a guide names it, and
- * takes its time from it while it is there. The timeline draws a note only as a flag in its notes lane, so nothing
- * but guides shades the rows.
+ * A note as analyses saved them before annotations were one thing (`AnalysisDefinition.annotations`). Read only to be
+ * translated into the timeline's annotations when the analysis opens (see notesToAnnotations); never written.
  */
-export type AnalysisAnnotation = {
-  /** What the note is about, beyond its time. Absent for a note about a time or interval alone. */
+export type AnalysisNote = {
   about?: {
-    /** An activity's id within `data`. */
     activityId?: number;
-    /**
-     * The data the note was written against (see getSourceIdentity), so a note stays attributable, and is
-     * recognisably about other data, after its source is pointed at another revision.
-     */
     data: string;
-    /** An activity's identity in its source (a source key, a span id, a directive id). */
     key?: string;
     kind: 'activity' | 'resource';
-    /** The activity's name, or the resource's. */
     name: string;
     sourceId: TimelineSourceId;
-    /** The source's name in the analysis when the note was written. */
     sourceLabel: string;
   };
   color?: string;
   createdAt: string;
   createdBy?: string;
-  /** ISO time; present for an interval. */
   end?: string;
-  /** The timeline guide the note explains. */
-  guide?: AnalysisAnnotationGuide;
+  guide?: {
+    id?: number;
+    kind: 'time' | 'value';
+    label: string;
+    row?: { id: number; name: string };
+    values?: number[];
+  };
   id: number;
-  /** ISO time. Absent for a note on a value guide, which has no time. */
   start?: string;
   text: string;
 };
 
-export type AnalysisAnnotationGuide = {
-  /** The guide's id; absent once the guide is no longer on the timeline. The note keeps its words and its time. */
-  id?: number;
-  kind: 'time' | 'value';
-  /** The guide's label as last seen. */
-  label: string;
-  /** A value guide's row: its id, and its name as last seen. */
-  row?: { id: number; name: string };
-  /** A value guide's value, or its range, as last seen. */
-  values?: number[];
-};
-
 export type AnalysisDefinition = {
-  /** Absent in analyses saved before notes. */
-  annotations?: AnalysisAnnotation[];
+  /**
+   * Notes of analyses saved before annotations were one thing: translated into the timeline's annotations when the
+   * analysis opens, and not written again. Annotations are the view's (`view.plan.timelines[0].annotations`).
+   */
+  annotations?: AnalysisNote[];
   sources: AnalysisSourceBinding[];
   version: 1;
   /** The existing view definition shape; an analysis uses its timeline, not its plan tables or grid. */
@@ -177,6 +156,8 @@ export type SourceRecovery = { id: number; name: string; revisions: SourceRevisi
 /** A plan, as an analysis that reads its current activities needs to know it. */
 export type AnalysisPlan = {
   duration: string;
+  /** Its plan-level external datasets (not tied to a simulation): their profiles are the plan's external resources. */
+  external_datasets?: AnalysisPlanExternalDataset[];
   id: number;
   /** The types the plan's model declares, with their parameters, for filters. */
   mission_model: { activity_types: ActivityType[] } | null;
@@ -185,6 +166,24 @@ export type AnalysisPlan = {
   revision: number;
   /** The plan's simulation results, newest first: listed under the plan, each addable as a source of its own. */
   simulations?: { simulation_datasets: AnalysisPlanSimulationDataset[] }[];
+  start_time: string;
+};
+
+export type AnalysisPlanExternalDataset = {
+  dataset: { profiles: { name: string; type: { schema: ValueSchema } }[] } | null;
+  dataset_id: number;
+  /** Profile offsets are from the plan's start plus this. */
+  offset_from_plan_start: string;
+};
+
+/** An external event of a derivation group linked to a plan, as derived (the winning version of each event). */
+export type AnalysisExternalEvent = {
+  attributes: Record<string, unknown>;
+  derivation_group_name: string;
+  duration: string;
+  event_key: string;
+  event_type_name: string;
+  source_key: string;
   start_time: string;
 };
 

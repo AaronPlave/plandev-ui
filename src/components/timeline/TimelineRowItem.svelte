@@ -27,8 +27,9 @@
 
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import type { DiscreteTreeExpansionMap, MouseOver, Row } from '../../types/timeline';
+  import type { DiscreteTreeExpansionMap, HorizontalGuide, MouseOver, Row } from '../../types/timeline';
 
+  export let horizontalGuides: HorizontalGuide[] = [];
   export let discreteTreeExpansionMap: DiscreteTreeExpansionMap | undefined = undefined;
   export let index: number;
   export let row: Row;
@@ -40,6 +41,7 @@
   const dispatch = createEventDispatcher<{
     contextMenu: MouseOver;
     discreteTreeExpansionChange: { map: DiscreteTreeExpansionMap; rowId: number };
+    editRow: Row;
     mouseOver: MouseOver;
   }>();
 </script>
@@ -52,7 +54,7 @@
   discreteOptions={row.discreteOptions}
   drawHeight={row.height}
   expanded={row.expanded}
-  horizontalGuides={row.horizontalGuides}
+  {horizontalGuides}
   id={row.id}
   layers={row.layers}
   name={row.name}
@@ -70,5 +72,6 @@
   on:zoom
   on:contextMenu={e => dispatch('contextMenu', { ...e.detail, row })}
   on:discreteTreeExpansionChange={e => dispatch('discreteTreeExpansionChange', { map: e.detail, rowId: row.id })}
+  on:editRow={() => dispatch('editRow', row)}
   on:mouseOver={e => dispatch('mouseOver', { ...e.detail, row })}
 />

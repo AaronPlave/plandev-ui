@@ -212,6 +212,11 @@ export type Span = SpanDB & {
   endUnknown?: true;
   /** Activities from a source other than the Plan: their name, if they have their own. */
   name?: string;
+  /**
+   * What the record is, in an operator's terms ("Plan directive", "Simulated span", "Reported command"…), when the
+   * span stands for something other than a Plan page's simulated activity.
+   */
+  recordKind?: string;
   /** Activities from a source other than the Plan: their id within that source (span_id is then a drawing id). */
   sourceActivityId?: number;
   /** Activities from a source other than the Plan: the source they come from. */

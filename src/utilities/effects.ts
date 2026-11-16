@@ -73,7 +73,14 @@ import {
   spanUtilityMaps,
 } from '../stores/simulation';
 import { createTagError as createTagErrorStore } from '../stores/tags';
-import { applyViewUpdate, view as viewStore, viewUpdateRow, viewUpdateTimeline } from '../stores/views';
+import {
+  applyViewUpdate,
+  selectedRowId,
+  selectedTimelineId,
+  view as viewStore,
+  viewUpdateRow,
+  viewUpdateTimeline,
+} from '../stores/views';
 import type { ActionDefinition, ActionDefinitionSetInput, ActionParametersMap, ActionRun } from '../types/actions';
 import type {
   ActivityDirective,
@@ -329,6 +336,7 @@ import {
   removeRowFromTimelineHierarchy,
   ungroupAllTimelineSections,
 } from './timeline';
+import { copyRowAnnotations, getNextAnnotationId, removeValueAnnotations } from './annotations';
 import { showFailureToast, showSuccessToast } from './toast';
 import { getSearchParameterNumber, setQueryParam } from './url';
 import {
@@ -365,7 +373,7 @@ function throwPermissionError(attemptedAction: string): never {
  * so the new row lands in the same section as its neighbor. Returns false if the row it should
  * follow is not in the timeline.
  */
-function addTimelineRowAfter(timeline: Timeline, afterRow: Row, newRow: Row): boolean {
+function addTimelineRowAfter(timeline: Timeline, afterRow: Row, newRow: Row, copyAnnotations = false): boolean {
   const rows = timeline.rows ?? [];
   const rowIndex = rows.findIndex(r => r.id === afterRow.id);
   if (rowIndex < 0) {
@@ -387,6 +395,13 @@ function addTimelineRowAfter(timeline: Timeline, afterRow: Row, newRow: Row): bo
                 return {
                   ...t,
                   ...insertRowAfterInTimelineHierarchy(t, afterRow.id, newRow.id),
+                  // A copied row keeps its marks: its value annotations, on its own axes.
+                  annotations: copyAnnotations
+                    ? [
+                        ...t.annotations,
+                        ...copyRowAnnotations(t.annotations, afterRow, newRow, getNextAnnotationId([t])),
+                      ]
+                    : t.annotations,
                   rows: newRows,
                 };
               }
@@ -4035,7 +4050,16 @@ const effects = {
       true,
     );
     if (confirm) {
-      viewUpdateRow('horizontalGuides', [], timelineId, rowId);
+      const timelineKey = timelineId ?? get(selectedTimelineId);
+      const rowKey = rowId ?? get(selectedRowId);
+      const timeline = get(viewStore)?.definition.plan.timelines.find(({ id }) => id === timelineKey);
+      if (timeline) {
+        viewUpdateTimeline(
+          'annotations',
+          timeline.annotations.filter(({ anchor }) => anchor.kind !== 'value' || anchor.rowId !== rowKey),
+          timelineKey,
+        );
+      }
     }
   },
 
@@ -4088,6 +4112,8 @@ const effects = {
                     return {
                       ...timeline,
                       ...removeRowFromTimelineHierarchy(timeline, row.id),
+                      // Its value annotations go with it, as its guides did.
+                      annotations: removeValueAnnotations(timeline.annotations, row.id),
                       rows: filteredRows,
                     };
                   }
@@ -4177,7 +4203,15 @@ const effects = {
       true,
     );
     if (confirm) {
-      viewUpdateTimeline('verticalGuides', [], timelineId);
+      const timelineKey = timelineId ?? get(selectedTimelineId);
+      const timeline = get(viewStore)?.definition.plan.timelines.find(({ id }) => id === timelineKey);
+      if (timeline) {
+        viewUpdateTimeline(
+          'annotations',
+          timeline.annotations.filter(({ anchor }) => anchor.kind !== 'time'),
+          timelineKey,
+        );
+      }
     }
   },
 
@@ -4370,7 +4404,7 @@ const effects = {
 
   duplicateTimelineRow(row: Row, timeline: Timeline, timelines: Timeline[]): Row | null {
     const newRow = duplicateRow(row, timelines, timeline.id);
-    if (newRow && addTimelineRowAfter(timeline, row, newRow)) {
+    if (newRow && addTimelineRowAfter(timeline, row, newRow, true)) {
       return newRow;
     }
     return null;
@@ -4404,8 +4438,25 @@ const effects = {
                     type: 'section',
                   });
 
+                  // Each copied row keeps its value annotations, on its own axes.
+                  const originals = section.rowIds.flatMap(id => t.rows.find(r => r.id === id) ?? []);
+                  let annotations = t.annotations;
+                  duplicated.rows.forEach((copy, index) => {
+                    if (originals[index]) {
+                      annotations = [
+                        ...annotations,
+                        ...copyRowAnnotations(
+                          t.annotations,
+                          originals[index],
+                          copy,
+                          getNextAnnotationId([{ annotations }]),
+                        ),
+                      ];
+                    }
+                  });
                   return {
                     ...t,
+                    annotations,
                     items,
                     rows: [...t.rows, ...duplicated.rows],
                     sections: [...(t.sections || []), duplicated.section],
@@ -5863,9 +5914,11 @@ const effects = {
     > & {
       /** `metadata.parent`: the source key of another record of the revision, when the product named one. */
       parent: unknown;
+      /** `metadata.recordKind`: what the adapter says the record is (a reported command, an authored step…). */
+      record_kind: unknown;
     })[]
   > {
-    const data = await reqHasura<(SourceActivity & { parent: unknown })[]>(
+    const data = await reqHasura<(SourceActivity & { parent: unknown; record_kind: unknown })[]>(
       gql.GET_SOURCE_ACTIVITIES,
       { where: { revision_id: { _eq: revisionId }, ...(types ? { type: { _in: types } } : {}) } },
       user,
@@ -5889,7 +5942,7 @@ const effects = {
    */
   async getSourceActivityLinks(
     revisionId: number,
-    by: { keys: string[] } | { parent: string } | { reported: true },
+    by: { keys: string[] } | { names: string[] } | { parent: string } | { reported: true },
     limit: number,
     user: User | null,
   ): Promise<SourceActivityLink[]> {
@@ -5899,9 +5952,11 @@ const effects = {
         // reported: every record that names another as the one it was raised on (a product's warnings and errors).
         ...('keys' in by
           ? { source_key: { _in: by.keys } }
-          : 'parent' in by
-            ? { metadata: { _contains: { parent: by.parent } } }
-            : { metadata: { _has_key: 'related' } }),
+          : 'names' in by
+            ? { name: { _in: by.names } }
+            : 'parent' in by
+              ? { metadata: { _contains: { parent: by.parent } } }
+              : { metadata: { _has_key: 'related' } }),
       };
       const data = await reqHasura<SourceActivityLink[]>(gql.GET_SOURCE_ACTIVITY_LINKS, { limit, where }, user);
       return data.activities ?? [];

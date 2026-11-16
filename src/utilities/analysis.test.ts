@@ -11,6 +11,9 @@ import type { Row, Timeline } from '../types/timeline';
 import type { TimelineActivitySubscription, TimelineResourceSubscription } from '../types/timelineSource';
 import {
   bindViewToAnalysisSources,
+  externalEventToSpan,
+  getExternalEventId,
+  isExternalEventId,
   createAnalysisSources,
   createStaticActivitySubscription,
   findAnalysisToReopen,
@@ -491,18 +494,20 @@ describe('analysis sources and time', () => {
 
   it('removes a source’s layers, the rows only it filled, and the axes and guides only it used', () => {
     const row = (id: number, layers: Row['layers'], extra: Partial<Row> = {}): Row =>
-      ({ horizontalGuides: [], id, layers, name: `row ${id}`, yAxes: [], ...extra }) as unknown as Row;
+      ({ id, layers, name: `row ${id}`, yAxes: [], ...extra }) as unknown as Row;
     const layer = (id: number, sourceId: string, yAxisId: number | null = null) =>
       ({ chartType: 'line', filter: {}, id, sourceId, yAxisId }) as unknown as Row['layers'][number];
+    const value = (id: number, rowId: number, yAxisId: number) => ({
+      anchor: { kind: 'value', rowId, y: 1, yAxisId },
+      id,
+      label: '',
+    });
     const timelines = [
       {
+        annotations: [value(1, 1, 1), value(2, 1, 2), value(3, 2, 0)],
         id: 0,
         rows: [
           row(1, [layer(1, 'source-2', 1), layer(2, 'source-3', 2)], {
-            horizontalGuides: [
-              { id: 1, label: { text: '' }, y: 1, yAxisId: 1 },
-              { id: 2, label: { text: '' }, y: 1, yAxisId: 2 },
-            ],
             yAxes: [{ id: 1 }, { id: 2 }] as Row['yAxes'],
           }),
           row(2, [layer(3, 'source-3')]),
@@ -511,11 +516,11 @@ describe('analysis sources and time', () => {
         ],
       },
     ] as unknown as Timeline[];
-    const [{ rows }] = removeSourceFromTimelines(timelines, 'source-3');
+    const [{ annotations, rows }] = removeSourceFromTimelines(timelines, 'source-3');
     expect(rows.map(r => r.id)).toEqual([1, 3, 4]);
     expect(rows[0].layers.map(l => l.id)).toEqual([1]);
     expect(rows[0].yAxes.map(a => a.id)).toEqual([1]);
-    expect(rows[0].horizontalGuides.map(g => g.id)).toEqual([1]);
+    expect(annotations.map(({ id }) => id)).toEqual([1]);
     expect(rows[1]).toBe(timelines[0].rows[2]);
   });
 });
@@ -808,4 +813,25 @@ describe('spansWithin', () => {
     // A parent not loaded ends the chain: nothing is attributed by guess.
     expect(spansWithin([span(3, 'A.1.x', 2)], [span(3, 'A.1.x', 2)], ['A'])).toEqual([]);
   });
+});
+
+it('an external event has a stable id of its own, apart from any directive, and is drawn as one', () => {
+  const event = {
+    attributes: { station: 'DSS-14' },
+    derivation_group_name: 'DG',
+    duration: '05:30:00',
+    event_key: 'VIEW_1',
+    event_type_name: 'DSN_VIEW',
+    source_key: 'a.json',
+    start_time: '2031-01-01T02:00:00+00:00',
+  };
+  const id = getExternalEventId(event);
+  expect(id).toBe(getExternalEventId({ ...event }));
+  expect(isExternalEventId(id)).toBe(true);
+  expect(isExternalEventId(123)).toBe(false);
+  expect(getExternalEventId({ ...event, event_key: 'VIEW_2' })).not.toBe(id);
+  const span = externalEventToSpan('source-1', event);
+  expect(span).toMatchObject({ durationMs: 5.5 * 3_600_000, recordKind: 'External event', type: 'DSN_VIEW' });
+  expect(getActivityRefFromSpan(span)).toEqual({ activityId: id, sourceId: 'source-1' });
+  expect(getActivityRefFromDrawingId(span.span_id)).toEqual({ activityId: id, sourceId: 'source-1' });
 });

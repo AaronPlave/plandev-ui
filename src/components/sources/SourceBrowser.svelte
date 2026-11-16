@@ -20,7 +20,7 @@
   } from '../../types/timelineSource';
   import effects from '../../utilities/effects';
   import { queryPermissions } from '../../utilities/permissions';
-  import { filterSourceBrowserNodes, getImportedSourceId, getLayersUsingSource } from '../../utilities/timelineSources';
+  import { getImportedSourceId, getLayersUsingSource, searchSourceBrowserNodes } from '../../utilities/timelineSources';
   import { tooltip } from '../../utilities/tooltip';
   import ExternalDatasetUpload from '../ExternalDatasetUpload.svelte';
   import PlanAddSourceDialog from './PlanAddSourceDialog.svelte';
@@ -50,7 +50,14 @@
   $: rows = $view?.definition.plan.timelines[0]?.rows ?? [];
   // On the Plan page, an imported source is a plan_source the plan's owner can detach.
   $: canRemoveSources = showAddSource && !!$plan && queryPermissions.DELETE_PLAN_SOURCE(user, $plan);
-  $: nodes = filterSourceBrowserNodes(getBrowserNodes($timelineSources, groups, canRemoveSources), filterText);
+  $: search = searchSourceBrowserNodes(getBrowserNodes($timelineSources, groups, canRemoveSources), filterText);
+  $: searching = !!filterText.trim();
+  // Toggles made while searching are the search's own: clearing it brings back what was open before.
+  $: clearSearchToggles(filterText);
+
+  function clearSearchToggles(_text: string) {
+    expanded = Object.fromEntries(Object.entries(expanded).filter(([id]) => !id.startsWith('search:')));
+  }
 
   function getBrowserNodes(
     registry: TimelineSourceRegistry,
@@ -168,8 +175,8 @@
   <div class="source-browser-tree" role="tree" aria-label="Sources">
     <SourceBrowserTree
       {expanded}
-      forceExpanded={!!filterText.trim()}
-      {nodes}
+      nodes={search.nodes}
+      searchOpen={searching ? search.open : null}
       {readOnly}
       {rows}
       on:add={onAdd}

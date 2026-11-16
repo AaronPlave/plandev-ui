@@ -4,7 +4,7 @@ import { derived, get, writable, type Readable, type Writable } from 'svelte/sto
 import type {
   Analysis,
   AnalysisActivityRef,
-  AnalysisAnnotation,
+  AnalysisExternalEvent,
   AnalysisPlan,
   AnalysisPlanDirective,
   AnalysisSlim,
@@ -15,7 +15,7 @@ import type {
   SourceRecovery,
 } from '../types/analysis';
 import type { User, UserId } from '../types/app';
-import type { Row, TimeRange, Timeline } from '../types/timeline';
+import type { Annotation, AnnotationAnchor, AnnotationRecord, Row, TimeRange, Timeline } from '../types/timeline';
 import type { TimelineSourceRegistry } from '../types/timelineSource';
 import {
   bindViewToAnalysisSources,
@@ -39,36 +39,33 @@ import {
 import { seqJsonProblem, sha256 } from '../utilities/analysisSequence';
 import {
   ANNOTATION_COLOR,
-  getDisplacedValueAnnotations,
-  keepAnnotations,
-  migrateLegacyNotes,
-  noteKey,
-  parseAnnotationKey,
-  timeKey,
-  valueKey,
-  withoutDescriptions,
+  getLayoutAnnotations,
+  mergeAnnotationsForLayout,
+  notesToAnnotations,
 } from '../utilities/analysisAnnotations';
+import { getNextAnnotationId } from '../utilities/annotations';
+import { loadAnalysisActivityDetails } from '../utilities/analysisActivityDetails';
 import type { WatchedResource } from '../utilities/analysisAtTime';
 import { getSourceCatalog, type SourceCatalog } from '../utilities/analysisPresentation';
-import { getImportedPlanSourceIds, type ViewImportPlanSource } from '../utilities/analysisViewImport';
+import {
+  getImportedPlanSourceIds,
+  rebindUnboundLayers,
+  type ViewImportPlanSource,
+} from '../utilities/analysisViewImport';
 import effects from '../utilities/effects';
 import gql from '../utilities/gql';
 import { featurePermissions } from '../utilities/permissions';
+import { showConfirmModal } from '../utilities/modal';
 import { showFailureToast, showSuccessToast } from '../utilities/toast';
-import { getSource, toIntervalType } from '../utilities/timelineSources';
-import {
-  createHorizontalGuide,
-  createRow,
-  createTimelineActivityLayer,
-  createVerticalGuide,
-  isActivityLayer,
-} from '../utilities/timeline';
+import { findResourceType, getLayersUsingSource, getSource, toIntervalType } from '../utilities/timelineSources';
+import { createRow, createTimelineActivityLayer, isActivityLayer } from '../utilities/timeline';
 import { ViewDefaultActivityOptions, ViewDefaultDiscreteOptions } from '../constants/view';
-import { getDoyTime } from '../utilities/time';
+import { getDoyTime, getIntervalInMs } from '../utilities/time';
 import { applyViewDefinitionMigrations } from '../utilities/view';
 import {
   createLoadedActivitySubscription,
   createPlanActivitySubscription,
+  getExternalEvents,
   getPlanDirectives,
   getRevisionActivities,
   getSimulationDatasetSpans,
@@ -110,43 +107,100 @@ export const analysisSimulationTypeCounts: Writable<Record<number, { count: numb
 export const analysisMaxTimeRange: Writable<TimeRange> = writable({ end: 0, start: 0 });
 export const selectedAnalysisActivity: Writable<AnalysisActivityRef | null> = writable(null);
 /**
- * What the inspector shows. 'selection' is the selected activity (an authored sequence's record is shown in its
- * sequence); 'time' and 'editor' are modes (what the sources say at the cursor; the selected row's editor); the
- * others are one object: a source, an authored sequence (and a step of it to open), an annotation, or the list of all
- * annotations. Page state, never saved.
+ * The inspector's tabs: Inspect (what is selected or followed to: an activity, a source, a sequence), At Time (what
+ * every source says at the cursor), Annotations (the list, and the one being edited), and the Timeline Editor (the
+ * selected row). Page state, never saved.
  */
-export type AnalysisInspectorTarget =
-  | { key: string; kind: 'annotation' }
-  | { kind: 'annotations' }
-  | { kind: 'editor' }
+export type AnalysisInspectorTab = 'annotations' | 'editor' | 'inspect' | 'time';
+/** What Inspect shows. 'selection' is the selected activity (an authored sequence's record is shown in its sequence). */
+export type AnalysisInspectTarget =
   | { entryId?: string; kind: 'sequence'; sourceId: string }
   | { kind: 'selection' }
-  | { kind: 'source'; sourceId: string }
+  | { kind: 'source'; sourceId: string };
+/** Anything the inspector can be asked to show: an Inspect target, or another tab (an annotation in its tab). */
+export type AnalysisInspectorTarget =
+  | AnalysisInspectTarget
+  | { id: number; kind: 'annotation' }
+  | { kind: 'annotations' }
+  | { kind: 'editor' }
   | { kind: 'time' };
-export const analysisInspector: Writable<AnalysisInspectorTarget> = writable({ kind: 'selection' });
-/** Where the inspector was before, most recent last, for Back. */
-export const analysisInspectorHistory: Writable<AnalysisInspectorTarget[]> = writable([]);
+/** A place Inspect was: its target, and the activity selected then. */
+export type AnalysisInspectState = { selected: AnalysisActivityRef | null; target: AnalysisInspectTarget };
+
+export const analysisInspectorTab: Writable<AnalysisInspectorTab> = writable('inspect');
+export const analysisInspector: Writable<AnalysisInspectTarget> = writable({ kind: 'selection' });
+/** The annotation open in the Annotations tab; null for the list alone. */
+export const analysisAnnotationFocus: Writable<number | null> = writable(null);
+/** Where Inspect was before, most recent last, for Back. Switching tabs is not a place. */
+export const analysisInspectorHistory: Writable<AnalysisInspectState[]> = writable([]);
 /** Set when the inspector is asked to show something, so the page can open its pane. */
 export const analysisInspectorRequests: Writable<number> = writable(0);
 
-/** Shows `target` in the inspector, remembering what it showed for Back. */
-export function inspect(target: AnalysisInspectorTarget) {
-  const current = get(analysisInspector);
-  if (!isEqual(current, target)) {
-    analysisInspectorHistory.update(history => [...history, current].slice(-20));
-    analysisInspector.set(target);
-  }
-  analysisInspectorRequests.update(n => n + 1);
+let inspected: AnalysisInspectState = { selected: null, target: { kind: 'selection' } };
+
+function resetInspector(target: AnalysisInspectTarget = { kind: 'selection' }) {
+  inspected = { selected: get(selectedAnalysisActivity), target };
+  analysisInspector.set(target);
+  analysisInspectorTab.set('inspect');
+  analysisAnnotationFocus.set(null);
+  analysisInspectorHistory.set([]);
 }
+
+/**
+ * Shows `target`, on its tab. Following something in Inspect (a source, a sequence, a newly selected activity) is
+ * remembered for Back; opening another tab is not.
+ */
+export function inspect(target: AnalysisInspectorTarget) {
+  analysisInspectorRequests.update(n => n + 1);
+  switch (target.kind) {
+    case 'time':
+    case 'editor':
+      analysisInspectorTab.set(target.kind);
+      return;
+    case 'annotations':
+    case 'annotation':
+      analysisAnnotationFocus.set(target.kind === 'annotation' ? target.id : null);
+      analysisInspectorTab.set('annotations');
+      return;
+  }
+  analysisInspectorTab.set('inspect');
+  const next: AnalysisInspectState = { selected: get(selectedAnalysisActivity), target };
+  if (isEqual(next, inspected)) {
+    return;
+  }
+  // Nothing selected and nothing followed is no place to go back to.
+  if (inspected.target.kind !== 'selection' || inspected.selected) {
+    analysisInspectorHistory.update(history => [...history, inspected].slice(-20));
+  }
+  inspected = next;
+  analysisInspector.set(target);
+}
+
+/** Whether `ref` being selected is already what Inspect shows (as after Back), so it is not a new place. */
+export function isInspected(ref: AnalysisActivityRef | null): boolean {
+  if (restoringSelection) {
+    restoringSelection = false;
+    return true;
+  }
+  return inspected.target.kind === 'selection' && isEqual(inspected.selected, ref);
+}
+
+/** Set while Back puts back the selection it had: that is not a new place to remember. */
+let restoringSelection = false;
 
 export function inspectBack() {
   const history = get(analysisInspectorHistory);
   const previous = history.at(-1);
   if (previous) {
     analysisInspectorHistory.set(history.slice(0, -1));
-    analysisInspector.set(previous);
+    inspected = previous;
+    analysisInspectorTab.set('inspect');
+    analysisInspector.set(previous.target);
+    restoringSelection = get(selectedAnalysisActivity) !== previous.selected;
+    selectedAnalysisActivity.set(previous.selected);
   }
 }
+
 /**
  * Resources the At Time inspector was asked to watch, each of one source (by the analysis's own binding id) and its
  * name: the same name in two sources is two entries. Page state, not saved with the analysis; it lives here because the
@@ -160,19 +214,18 @@ export const analysisWatchedResources: Writable<WatchedResource[]> = writable([]
  */
 export const analysisCompareReference: Writable<AnalysisActivityRef | null> = writable(null);
 /**
- * The analysis's annotations about records and resources (and value marks whose rows were replaced), saved with it
- * and never with a layout. Marks across or on the rows are the timeline's guides (see utilities/analysisAnnotations).
+ * The analysis's annotations: its timeline's (types/timeline.ts), marks and findings alike, saved with it. Derived
+ * from the view so there is one copy; changed through the functions below.
  */
-export const analysisAnnotations: Writable<AnalysisAnnotation[]> = writable([]);
+export const analysisAnnotations: Readable<Annotation[]> = derived(
+  view,
+  $view => $view?.definition.plan.timelines[0]?.annotations ?? [],
+);
 /**
- * The timeline and notes as they were before the layout was last replaced, to undo it. Page state: cleared when the
- * analysis closes, and by any later replacement.
+ * The timeline (with its annotations) as it was before the layout was last replaced, to undo it. Page state: cleared
+ * when the analysis closes, and by any later replacement.
  */
-export const analysisLayoutUndo: Writable<{
-  annotations: AnalysisAnnotation[];
-  name: string;
-  timeline: Timeline;
-} | null> = writable(null);
+export const analysisLayoutUndo: Writable<{ name: string; timeline: Timeline } | null> = writable(null);
 /** 'conflict': someone else saved the analysis since it was opened; saving stops until it is reloaded. */
 export const analysisSaveStatus: Writable<'conflict' | 'error' | 'saved' | 'saving' | 'unsaved'> = writable('saved');
 
@@ -212,6 +265,40 @@ export const analysisPlanDirectives: Readable<Record<number, AnalysisPlanDirecti
   {},
 );
 
+/** The derivation groups linked to each bound plan, live, by plan id. */
+const analysisPlanDerivationGroupLinks = gqlSubscribable<{ derivation_group_name: string; plan_id: number }[]>(
+  gql.SUB_ANALYSIS_PLAN_DERIVATION_GROUPS,
+  { planIds: analysisPlanIds },
+  [],
+);
+export const analysisPlanDerivationGroups: Readable<Record<number, string[]>> = derived(
+  analysisPlanDerivationGroupLinks,
+  $links => {
+    const byPlan: Record<number, string[]> = {};
+    ($links ?? []).forEach(({ derivation_group_name, plan_id }) => {
+      byPlan[plan_id] = [...(byPlan[plan_id] ?? []), derivation_group_name];
+    });
+    return byPlan;
+  },
+);
+
+/** Each bound plan's external events (of its linked derivation groups, as derived), live, by plan id. */
+export const analysisPlanExternalEvents: Readable<Record<number, AnalysisExternalEvent[]>> = derived(
+  analysisPlanDerivationGroups,
+  ($groups, set) => {
+    const byPlan: Record<number, AnalysisExternalEvent[]> = {};
+    set(byPlan);
+    const unsubscribers = Object.entries($groups).map(([planId, groups]) =>
+      getExternalEvents(groups).subscribe(events => {
+        byPlan[Number(planId)] = events ?? [];
+        set({ ...byPlan });
+      }),
+    );
+    return () => unsubscribers.forEach(unsubscribe => unsubscribe());
+  },
+  {},
+);
+
 export const analysisTimelineSources: Readable<TimelineSourceRegistry> = derived(
   [
     analysisSourceBindings,
@@ -223,12 +310,28 @@ export const analysisTimelineSources: Readable<TimelineSourceRegistry> = derived
     analysisPlans,
     analysisPlans.loading,
     analysisPlanDirectives,
+    analysisPlanExternalEvents,
+    analysisPlanDerivationGroups,
   ],
-  ([$bindings, $revisions, $datasets, $typeCounts, $recovery, $loading, $plans, $plansLoading, $planDirectives]) => ({
+  ([
+    $bindings,
+    $revisions,
+    $datasets,
+    $typeCounts,
+    $recovery,
+    $loading,
+    $plans,
+    $plansLoading,
+    $planDirectives,
+    $planEvents,
+    $planGroups,
+  ]) => ({
     loading: $loading,
+    scope: 'analysis' as const,
     sources: createAnalysisSources({
       bindings: $bindings,
       loading: $loading,
+      planExternalEvents: $planEvents,
       planTypeCounts: Object.fromEntries(
         Object.entries($planDirectives).map(([planId, directives]) => [planId, countTypes(directives)]),
       ),
@@ -260,7 +363,15 @@ export const analysisTimelineSources: Readable<TimelineSourceRegistry> = derived
           resourceType: { name: resource.key, schema: resource.schema },
           target: { revisionId: revision.id },
         }),
-      subscribePlanActivities: (binding, plan) => createPlanActivitySubscription(binding.id, plan.id),
+      subscribePlanActivities: (binding, plan) =>
+        createPlanActivitySubscription(binding.id, plan.id, $planGroups[plan.id] ?? []),
+      subscribePlanExternalProfile: (_binding, plan, dataset, name, { user }) =>
+        createProfileSubscription(
+          dataset.dataset_id,
+          name,
+          new Date(Date.parse(plan.start_time) + getIntervalInMs(dataset.offset_from_plan_start)).toISOString(),
+          user,
+        ),
       subscribeSimulationActivities: (binding, dataset, { user }) =>
         createLoadedActivitySubscription(async () =>
           (await getSimulationDatasetSpans(dataset, user)).map(span => simulationSpanToActivity(binding.id, span)),
@@ -356,8 +467,11 @@ async function loadSourceDetails(bindings: AnalysisSourceBinding[], user: User |
 export type AnalysisOpenContext = {
   /** A linked activity, with the data it was in (see getSourceIdentity): selected only if its source still reads that data. */
   activity?: AnalysisActivityRef & { data: string };
+  /** An annotation to open. */
+  annotationId?: number;
   compareCursorMs?: number;
   cursorMs?: number;
+  /** A note, linked before annotations were one thing: the annotation made from it opens. */
   noteId?: number;
   range?: TimeRange;
 };
@@ -373,6 +487,7 @@ export function parseAnalysisOpenContext(params: URLSearchParams): AnalysisOpenC
   const activity = /^([^|]+)\|([^|]+)\|(\d+)$/.exec(params.get('activity') ?? '');
   return {
     activity: activity ? { activityId: Number(activity[3]), data: activity[2], sourceId: activity[1] } : undefined,
+    annotationId: number('annotation'),
     compareCursorMs: number('cursorB'),
     cursorMs: number('cursor'),
     noteId: number('note'),
@@ -409,27 +524,32 @@ export async function openAnalysis(initial: Analysis, user: User | null, context
   analysisSourceBindings.set(initial.definition.sources);
   selectedAnalysisActivity.set(null);
   analysisCompareReference.set(null);
-  // Notes saved before annotations were one concept become the annotations they are (see migrateLegacyNotes).
+  // Notes saved before annotations were one concept become the annotations they are (see notesToAnnotations), and
+  // layers that name a Plan page's plan read the analysis's plan or simulation, when there is only one.
   const viewDefinition = migratedViewDefinition ?? initial.definition.view;
   const [firstTimeline, ...otherTimelines] = viewDefinition.plan.timelines;
-  const translated = firstTimeline
-    ? migrateLegacyNotes(initial.definition.annotations ?? [], firstTimeline)
-    : { notes: initial.definition.annotations ?? [], timeline: firstTimeline };
-  analysisAnnotations.set(translated.notes);
-  analysisInspector.set(
-    context.noteId !== undefined && translated.notes.some(({ id }) => id === context.noteId)
-      ? { key: noteKey(context.noteId), kind: 'annotation' }
-      : { kind: 'selection' },
+  const timeline =
+    firstTimeline &&
+    rebindUnboundLayers(
+      notesToAnnotations(initial.definition.annotations ?? [], firstTimeline),
+      initial.definition.sources,
+    );
+  resetInspector();
+  // A link names an annotation (or, made before annotations, a note): it opens.
+  const linked = timeline?.annotations.find(({ id, legacyNoteId }) =>
+    context.annotationId !== undefined ? id === context.annotationId : legacyNoteId === context.noteId,
   );
-  analysisInspectorHistory.set([]);
+  if (linked && (context.annotationId !== undefined || context.noteId !== undefined)) {
+    inspect({ id: linked.id, kind: 'annotation' });
+  }
   analysisLayoutUndo.set(null);
   analysisWatchedResources.set([]);
   initializeView({
     created_at: initial.created_at,
     definition:
-      translated.timeline === firstTimeline
+      timeline === firstTimeline
         ? viewDefinition
-        : { ...viewDefinition, plan: { ...viewDefinition.plan, timelines: [translated.timeline, ...otherTimelines] } },
+        : { ...viewDefinition, plan: { ...viewDefinition.plan, timelines: [timeline, ...otherTimelines] } },
     id: -1,
     name: initial.name,
     owner: initial.owner,
@@ -480,10 +600,8 @@ export function closeAnalysis() {
   analysisSimulationDatasets.set([]);
   analysisSimulationTypeCounts.set({});
   selectedAnalysisActivity.set(null);
-  analysisInspector.set({ kind: 'selection' });
-  analysisInspectorHistory.set([]);
+  resetInspector();
   analysisCompareReference.set(null);
-  analysisAnnotations.set([]);
   analysisLayoutUndo.set(null);
   analysisWatchedResources.set([]);
   clearAnalysisImports();
@@ -803,12 +921,13 @@ export function showAnalysisSequence(
       ),
   );
   const sourceLabel = getSource(get(analysisTimelineSources), sourceId)?.label ?? sourceId;
-  // One focus row per source: focusing another sequence points that row at it, rather than adding a row per sequence.
+  // One focus row per source: focusing another sequence points the row made for following the focus at it, rather
+  // than adding a row per sequence. A row the person has made their own (edited) is never repointed.
   const focusRow =
     !existing && focus
       ? timeline.rows.find(
           row =>
-            row.discreteOptions?.activityOptions?.hierarchyMode === 'parent' &&
+            row.followsFocus &&
             row.layers.length === 1 &&
             row.layers.some(
               layer => layer.sourceId === sourceId && isActivityLayer(layer) && layer.filter.activity?.within,
@@ -846,6 +965,7 @@ export function showAnalysisSequence(
         activityOptions: { ...ViewDefaultActivityOptions, groupBy: 'name', hierarchyMode: 'parent' },
         displayMode: 'grouped',
       },
+      ...(focus ? { followsFocus: true } : {}),
       height: focus ? 200 : 320,
       layers: [
         createTimelineActivityLayer([timeline], {
@@ -917,17 +1037,17 @@ export async function readViewForTimelineImport(
 }
 
 /**
- * Replaces the analysis's timeline with `timeline` (see importViewTimeline). Its sources, name, owner and everything
- * else in the view are untouched, and, like any edit, it is saved by the autosave. The analysis's own annotations stay:
- * its time annotations are kept by the caller (applyPresentation), and value annotations with an explanation on the
- * rows replaced are kept as unanchored annotations. Not offered when the user can't edit the analysis. Returns whether
- * it replaced.
+ * Replaces the analysis's timeline with `timeline` (see importViewTimeline, applyPresentation). Its sources, name,
+ * owner and everything else in the view are untouched, and, like any edit, it is saved by the autosave. The analysis's
+ * own findings stay (value annotations among them say their row is gone); the presentation's reusable annotations come
+ * with it when `bringAnnotations` (see mergeAnnotationsForLayout). Undo puts back the timeline as it was. Not offered
+ * when the user can't edit the analysis. Returns whether it replaced.
  */
 export function replaceAnalysisTimeline(
   timeline: Timeline,
   user: User | null,
   name: string = 'another layout',
-  { dataless = false }: { dataless?: boolean } = {},
+  { bringAnnotations = true, dataless = false }: { bringAnnotations?: boolean; dataless?: boolean } = {},
 ): boolean {
   const current = get(analysis);
   const previous = get(view)?.definition.plan.timelines[0];
@@ -935,26 +1055,24 @@ export function replaceAnalysisTimeline(
     return false;
   }
   // Nothing mapped to this analysis's sources: replacing the timeline would only empty it. (A layout that never had
-  // data layers, only rows, sections and guides, is used as it is.)
+  // data layers, only rows, sections and annotations, is used as it is.)
   if (!dataless && !timeline.rows.some(row => row.layers.length)) {
     showFailureToast('Nothing In The View Maps To This Analysis, So The Timeline Was Not Replaced');
     return false;
   }
-  const annotations = get(analysisAnnotations);
-  analysisLayoutUndo.set({ annotations, name, timeline: previous });
-  analysisAnnotations.set([
-    ...annotations,
-    ...getDisplacedValueAnnotations(previous, nextAnnotationId(annotations), user?.id ?? undefined),
-  ]);
-  setAnalysisTimeline(timeline);
+  analysisLayoutUndo.set({ name, timeline: previous });
+  setAnalysisTimeline({
+    ...timeline,
+    annotations: mergeAnnotationsForLayout(previous.annotations, timeline, bringAnnotations),
+    id: previous.id,
+  });
   return true;
 }
 
-/** Puts back the timeline and annotations the last layout replacement replaced. */
+/** Puts back the timeline (and its annotations) the last layout replacement replaced. */
 export function undoAnalysisLayout() {
   const undo = get(analysisLayoutUndo);
   if (undo) {
-    analysisAnnotations.set(undo.annotations);
     setAnalysisTimeline(undo.timeline);
     analysisLayoutUndo.set(null);
   }
@@ -978,174 +1096,155 @@ function setAnalysisTimeline(timeline: Timeline) {
   selectedLayerId.set(null);
 }
 
-/* Annotations (see utilities/analysisAnnotations). */
+/* Annotations (types/timeline.ts Annotation; see utilities/analysisAnnotations). */
 
-function nextAnnotationId(all: AnalysisAnnotation[]): number {
-  return Math.max(0, ...all.map(annotation => annotation.id)) + 1;
+function updateAnnotations(change: (annotations: Annotation[]) => Annotation[]) {
+  const timeline = get(view)?.definition.plan.timelines[0];
+  if (timeline) {
+    viewUpdateTimeline('annotations', change(timeline.annotations), timeline.id);
+  }
 }
 
-/** Adds an annotation about a record or a resource and opens it. `about.data` is the source as it is bound now. */
-export function addAnalysisAnnotation(
-  note: Pick<AnalysisAnnotation, 'end' | 'start' | 'text'> & {
-    about?: Omit<NonNullable<AnalysisAnnotation['about']>, 'data' | 'sourceLabel'>;
-  },
+/** Adds an annotation and opens it, to be titled and explained. Returns its id. */
+export function addAnnotation(
+  annotation: Pick<Annotation, 'anchor' | 'label'> & Partial<Pick<Annotation, 'color' | 'description'>>,
   user: User | null,
-): string {
-  const all = get(analysisAnnotations);
-  const id = nextAnnotationId(all);
-  const binding = note.about && get(analysisSourceBindings).find(({ id }) => id === note.about?.sourceId);
-  const about =
-    note.about && binding
-      ? {
-          ...note.about,
-          data: getSourceIdentity(binding),
-          sourceLabel: getSource(get(analysisTimelineSources), binding.id)?.label ?? binding.id,
-        }
-      : undefined;
-  analysisAnnotations.set([
-    ...all,
-    { ...note, about, createdAt: new Date().toISOString(), createdBy: user?.id ?? undefined, id },
-  ]);
-  inspect({ key: noteKey(id), kind: 'annotation' });
-  return noteKey(id);
-}
-
-/** Marks a time, or a time range, across the rows and opens the annotation. Returns its key. */
-export function addTimeAnnotation(startMs: number, endMs?: number): string | null {
+): number | null {
   const timeline = get(view)?.definition.plan.timelines[0];
   if (!timeline) {
     return null;
   }
-  const [from, to] = endMs === undefined ? [startMs] : [Math.min(startMs, endMs), Math.max(startMs, endMs)];
-  const guide = createVerticalGuide([timeline], getDoyTime(new Date(from)), {
-    label: { color: ANNOTATION_COLOR, text: to === undefined ? 'Mark' : 'Marked range' },
-    ...(to === undefined ? {} : { timestamp2: getDoyTime(new Date(to)) }),
-  });
-  viewUpdateTimeline('verticalGuides', [...timeline.verticalGuides, guide], timeline.id);
-  inspect({ key: timeKey(guide.id), kind: 'annotation' });
-  return timeKey(guide.id);
+  const id = getNextAnnotationId([timeline]);
+  updateAnnotations(all => [
+    ...all,
+    {
+      color: ANNOTATION_COLOR,
+      ...annotation,
+      createdAt: new Date().toISOString(),
+      ...(user?.id ? { createdBy: user.id } : {}),
+      id,
+    },
+  ]);
+  inspect({ id, kind: 'annotation' });
+  return id;
 }
 
-/** Marks a value on a row (on its first axis, at the middle of its range) and opens the annotation. */
-export function addValueAnnotation(rowId: number): string | null {
+/** Marks a time, or a time range, across the rows. */
+export function addTimeAnnotation(startMs: number, endMs: number | undefined, user: User | null): number | null {
+  const [from, to] = endMs === undefined ? [startMs] : [Math.min(startMs, endMs), Math.max(startMs, endMs)];
+  const anchor: AnnotationAnchor = {
+    kind: 'time',
+    start: getDoyTime(new Date(from)),
+    ...(to === undefined ? {} : { end: getDoyTime(new Date(to)) }),
+  };
+  return addAnnotation({ anchor, label: to === undefined ? 'Mark' : 'Marked range' }, user);
+}
+
+/** Marks a value on a row, on its first axis at the middle of its range (or at `y`), in that axis's unit. */
+export function addValueAnnotation(rowId: number, user: User | null, y?: number): number | null {
   const timeline = get(view)?.definition.plan.timelines[0];
   const row = timeline?.rows.find(({ id }) => id === rowId);
-  if (!timeline || !row || !row.yAxes.length) {
+  const axis = row?.yAxes[0];
+  if (!timeline || !row || !axis) {
     return null;
   }
-  const guide = createHorizontalGuide([timeline], row.yAxes, { label: { color: ANNOTATION_COLOR, text: 'Mark' } });
-  updateRowGuides(rowId, guides => [...guides, guide]);
-  inspect({ key: valueKey(rowId, guide.id), kind: 'annotation' });
-  return valueKey(rowId, guide.id);
+  const [low, high] = (axis.scaleDomain ?? []) as (number | null)[];
+  // The unit of what the axis plots, so the value keeps its meaning if the row later reads something else.
+  const layer = row.layers.find(({ yAxisId }) => yAxisId === axis.id);
+  const units = layer
+    ? findResourceType(get(analysisTimelineSources), layer.sourceId, layer.filter.resource)?.schema.metadata?.unit
+        ?.value
+    : undefined;
+  const middle = typeof low === 'number' && typeof high === 'number' ? (low + high) / 2 : 0;
+  return addAnnotation(
+    {
+      anchor: {
+        kind: 'value',
+        rowId,
+        rowName: row.name,
+        ...(units ? { units } : {}),
+        y: y ?? middle,
+        yAxisId: axis.id,
+      },
+      label: 'Limit',
+    },
+    user,
+  );
 }
 
-function updateRowGuides(rowId: number, change: (guides: Row['horizontalGuides']) => Row['horizontalGuides']) {
-  const timeline = get(view)?.definition.plan.timelines[0];
-  if (timeline) {
-    viewUpdateTimeline(
-      'rows',
-      timeline.rows.map(row => (row.id === rowId ? { ...row, horizontalGuides: change(row.horizontalGuides) } : row)),
-      timeline.id,
-    );
+/** Annotates one record of a source, at its start; it keeps which data it was about. */
+export function addRecordAnnotation(
+  record: Omit<AnnotationRecord, 'data' | 'sourceLabel'>,
+  startMs: number,
+  user: User | null,
+): number | null {
+  const binding = get(analysisSourceBindings).find(({ id }) => id === record.sourceId);
+  if (!binding) {
+    return null;
   }
+  return addAnnotation(
+    {
+      anchor: {
+        kind: 'record',
+        record: {
+          ...record,
+          data: getSourceIdentity(binding),
+          sourceLabel: getSource(get(analysisTimelineSources), binding.id)?.label ?? binding.id,
+        },
+        start: new Date(startMs).toISOString(),
+      },
+      label: record.name,
+    },
+    user,
+  );
 }
 
-export type AnnotationChanges = {
-  color?: string;
-  description?: string;
-  /** A time annotation's second time (null: a single time again); a value annotation's second value likewise. */
-  end?: number | null;
-  label?: string;
-  start?: number;
-};
-
-/** Changes an annotation, whichever kind it is: a guide's place, label and words, or a record annotation's words. */
-export function updateAnnotation(key: string, changes: AnnotationChanges) {
-  const parsed = parseAnnotationKey(key);
-  const timeline = get(view)?.definition.plan.timelines[0];
-  if (!parsed) {
-    return;
+/** Annotates an activity of the analysis, read from its source for its name, kind and key. */
+export async function annotateActivity(ref: AnalysisActivityRef, user: User | null): Promise<number | null> {
+  const details = await loadAnalysisActivityDetails(ref, {
+    bindings: get(analysisSourceBindings),
+    datasets: get(analysisSimulationDatasets),
+    planDirectives: get(analysisPlanDirectives),
+    planExternalEvents: get(analysisPlanExternalEvents),
+    revisions: get(analysisSourceRevisions),
+    user,
+  });
+  if (!details) {
+    showFailureToast('The Record Could Not Be Read');
+    return null;
   }
-  if (parsed.kind === 'note') {
-    analysisAnnotations.update(all =>
-      all.map(note =>
-        note.id === parsed.id
-          ? {
-              ...note,
-              ...(changes.color !== undefined ? { color: changes.color } : {}),
-              ...(changes.description !== undefined ? { text: changes.description } : {}),
-            }
-          : note,
-      ),
-    );
-    return;
-  }
-  const described = (description: string | undefined) =>
-    changes.description === undefined ? description : changes.description || undefined;
-  if (parsed.kind === 'time' && timeline) {
-    viewUpdateTimeline(
-      'verticalGuides',
-      timeline.verticalGuides.map(guide => {
-        if (guide.id !== parsed.guideId) {
-          return guide;
-        }
-        const { timestamp2, ...rest } = guide;
-        const end =
-          changes.end === null ? undefined : changes.end !== undefined ? getDoyTime(new Date(changes.end)) : timestamp2;
-        return {
-          ...rest,
-          description: described(guide.description),
-          label: {
-            ...guide.label,
-            ...(changes.label !== undefined ? { text: changes.label } : {}),
-            ...(changes.color !== undefined ? { color: changes.color } : {}),
-          },
-          timestamp: changes.start !== undefined ? getDoyTime(new Date(changes.start)) : guide.timestamp,
-          ...(end ? { timestamp2: end } : {}),
-        };
-      }),
-      timeline.id,
-    );
-  } else if (parsed.kind === 'value') {
-    updateRowGuides(parsed.rowId, guides =>
-      guides.map(guide => {
-        if (guide.id !== parsed.guideId) {
-          return guide;
-        }
-        const { y2, ...rest } = guide;
-        const end = changes.end === null ? undefined : (changes.end ?? y2);
-        return {
-          ...rest,
-          description: described(guide.description),
-          label: {
-            ...guide.label,
-            ...(changes.label !== undefined ? { text: changes.label } : {}),
-            ...(changes.color !== undefined ? { color: changes.color } : {}),
-          },
-          y: changes.start ?? guide.y,
-          ...(end !== undefined ? { y2: end } : {}),
-        };
-      }),
-    );
-  }
+  return addRecordAnnotation(
+    {
+      activityId: ref.activityId,
+      key: details.key,
+      kind: 'activity',
+      name: details.name,
+      recordKind: details.kind,
+      sourceId: ref.sourceId,
+    },
+    details.startMs,
+    user,
+  );
 }
 
-export function removeAnnotation(key: string) {
-  const parsed = parseAnnotationKey(key);
-  const timeline = get(view)?.definition.plan.timelines[0];
-  if (parsed?.kind === 'note') {
-    analysisAnnotations.update(all => all.filter(note => note.id !== parsed.id));
-  } else if (parsed?.kind === 'time' && timeline) {
-    viewUpdateTimeline(
-      'verticalGuides',
-      timeline.verticalGuides.filter(({ id }) => id !== parsed.guideId),
-      timeline.id,
-    );
-  } else if (parsed?.kind === 'value') {
-    updateRowGuides(parsed.rowId, guides => guides.filter(({ id }) => id !== parsed.guideId));
-  }
-  if (isEqual(get(analysisInspector), { key, kind: 'annotation' })) {
-    analysisInspector.set({ kind: 'annotations' });
+/** A finding that marks nothing on the timeline. */
+export function addGeneralAnnotation(user: User | null): number | null {
+  return addAnnotation({ anchor: { kind: 'general' }, label: 'Finding' }, user);
+}
+
+/** Changes one annotation (its label, words, color, place, reuse), recording when. */
+export function updateAnnotation(id: number, changes: Partial<Omit<Annotation, 'id'>>) {
+  updateAnnotations(all =>
+    all.map(annotation =>
+      annotation.id === id ? { ...annotation, ...changes, updatedAt: new Date().toISOString() } : annotation,
+    ),
+  );
+}
+
+export function removeAnnotation(id: number) {
+  updateAnnotations(all => all.filter(annotation => annotation.id !== id));
+  if (get(analysisAnnotationFocus) === id) {
+    analysisAnnotationFocus.set(null);
   }
 }
 
@@ -1179,9 +1278,10 @@ export async function readAnalysisPresentation(id: number, user: User | null): P
     id: other.id,
     kind: 'analysis',
     name: other.name,
-    noteCount: other.definition.annotations?.length ?? 0,
-    // Another analysis's explanations are its findings: its marks come (when chosen) without them.
-    timeline: withoutDescriptions(timeline),
+    // Its findings stay there: only its reusable annotations can come (see mergeAnnotationsForLayout).
+    noteCount:
+      (other.definition.annotations?.length ?? 0) + timeline.annotations.filter(({ reusable }) => !reusable).length,
+    timeline,
   };
 }
 
@@ -1232,13 +1332,13 @@ const LAYOUT_SOURCE = /^(plan|revision|simulation):(\d+)$/;
  * Saves the analysis's layout as a view anyone can find and use in another analysis: its timeline, with each layer
  * naming the data it read (e.g. "revision:217") rather than this analysis's binding, and `analysisLayout` saying what
  * each of those was (its alias, source, name, and the resources read with their type and unit), so the view says on
- * its own what each layer showed, even once that data is gone. Of the annotations, only the marks in `include` (by key)
+ * its own what each layer showed, even once that data is gone. Of the annotations, only those in `include` (by id) that can
  * go with it; annotations about records never do. Returns the view's id, or null (reported).
  */
 export async function saveAnalysisLayoutAsView(
   name: string,
   user: User | null,
-  include: Set<string> = new Set(),
+  include: Set<number> = new Set(),
 ): Promise<number | null> {
   const current = get(view);
   if (!current) {
@@ -1246,7 +1346,10 @@ export async function saveAnalysisLayoutAsView(
   }
   const bindings = get(analysisSourceBindings);
   const definition = structuredClone(current.definition);
-  definition.plan.timelines = definition.plan.timelines.map(timeline => keepAnnotations(timeline, include));
+  definition.plan.timelines = definition.plan.timelines.map(timeline => ({
+    ...timeline,
+    annotations: getLayoutAnnotations(timeline.annotations, include),
+  }));
   const used = new Map<string, { binding: AnalysisSourceBinding; resources: Set<string> }>();
   definition.plan.timelines.forEach(timeline =>
     timeline.rows.forEach(row =>
@@ -1360,8 +1463,25 @@ export async function readViewPresentation(
   };
 }
 
-/** Removes a source and every layer bound to it; rows that only showed it go too. */
-export async function removeAnalysisSource(sourceId: string, user: User | null) {
+/**
+ * Removes a source and every layer bound to it; rows that only showed it go too. Asked first, saying which rows read it
+ * (the source's data itself is not deleted, and it can be added again). Returns whether it was removed.
+ */
+export async function removeAnalysisSource(sourceId: string, user: User | null): Promise<boolean> {
+  const label = getSource(get(analysisTimelineSources), sourceId)?.label ?? sourceId;
+  const using = getLayersUsingSource(get(view)?.definition.plan.timelines ?? [], sourceId);
+  const { confirm } = await showConfirmModal(
+    'Remove',
+    `Remove "${label}" from this analysis? Its data is not deleted, and it can be added again. ${
+      using.length
+        ? `${using.length === 1 ? 'This row reads' : 'These rows read'} it, and ${using.length === 1 ? 'its layer goes' : 'their layers go'} with it: ${using.join(', ')}.`
+        : 'No row reads it.'
+    }`,
+    'Remove Source from Analysis',
+  );
+  if (!confirm) {
+    return false;
+  }
   const next = get(analysisSourceBindings).filter(binding => binding.id !== sourceId);
   analysisSourceBindings.set(next);
   view.update(current =>
@@ -1386,6 +1506,7 @@ export async function removeAnalysisSource(sourceId: string, user: User | null) 
   }
   dropWatchedResources(sourceId);
   await loadSourceDetails(next, user);
+  return true;
 }
 
 /* Saving: the analysis saves itself shortly after anything it persists changes. */
@@ -1491,28 +1612,27 @@ export function autosaveAnalysis(user: User | null): () => void {
   }
   const queue = getSaveQueue(current, user);
   let first = true;
-  const unsubscribe = derived([analysisSourceBindings, view, analysisAnnotations], values => values).subscribe(
-    ([sources, currentView, annotations]) => {
-      if (first) {
-        first = false;
-        return;
-      }
-      // Only this analysis's own view is saved into it: the view store is shared with every page, and a view of
-      // another page or analysis (opened in between, or kept by a module reloaded in development) is never saved here.
-      if (
-        get(analysis)?.id !== current.id ||
-        !currentView ||
-        currentView.id !== -1 ||
-        currentView.created_at !== current.created_at ||
-        queue.conflict
-      ) {
-        return;
-      }
-      // Captured now: the stores may hold another analysis by the time this is sent.
-      requestSave(current, { definition: { annotations, sources, version: 1, view: currentView.definition } }, user);
-      saveSoon();
-    },
-  );
+  const unsubscribe = derived([analysisSourceBindings, view], values => values).subscribe(([sources, currentView]) => {
+    if (first) {
+      first = false;
+      return;
+    }
+    // Only this analysis's own view is saved into it: the view store is shared with every page, and a view of
+    // another page or analysis (opened in between, or kept by a module reloaded in development) is never saved here.
+    if (
+      get(analysis)?.id !== current.id ||
+      !currentView ||
+      currentView.id !== -1 ||
+      currentView.created_at !== current.created_at ||
+      queue.conflict
+    ) {
+      return;
+    }
+    // Captured now: the stores may hold another analysis by the time this is sent.
+    // Annotations are the view's; notes saved before them were translated when it opened, and are not written again.
+    requestSave(current, { definition: { sources, version: 1, view: currentView.definition } }, user);
+    saveSoon();
+  });
   return () => {
     unsubscribe();
     flushAnalysisSave();

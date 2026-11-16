@@ -41,7 +41,15 @@ export function getImportedSourceId(planSourceId: number): TimelineSourceId {
  * missing ones, because a layer outlives its removal (and a saved view can still name it): nothing replaces it, and
  * adding the source to the plan again is a new binding, not this one.
  */
-export function getSourceUnavailableMessage(sourceId: TimelineSourceId): string {
+export function getSourceUnavailableMessage(
+  sourceId: TimelineSourceId,
+  scope?: TimelineSourceRegistry['scope'],
+): string {
+  if (scope === 'analysis') {
+    return sourceId === PLAN_SOURCE_ID
+      ? "This layer reads a Plan page's own plan, which isn't one of this analysis's sources"
+      : `This layer's source (${sourceId}) is not in this analysis`;
+  }
   return sourceId.startsWith(IMPORTED_SOURCE_PREFIX)
     ? `Imported source ${sourceId} is no longer in this plan, so this layer has nothing to show`
     : `Source "${sourceId}" is not available in this plan`;
@@ -205,7 +213,10 @@ export function resolveResourceLayerSource(
   registry: TimelineSourceRegistry | null,
 ): ResourceLayerSourceResolution {
   if (!layer.sourceId) {
-    return { kind: 'legacy' };
+    // The legacy lookup reads a Plan page's own simulation and datasets; an analysis has neither.
+    return registry?.scope === 'analysis'
+      ? { kind: 'unavailable', message: getSourceUnavailableMessage(PLAN_SOURCE_ID, registry.scope) }
+      : { kind: 'legacy' };
   }
   const source = getSource(registry, layer.sourceId);
   if (source?.resources) {
@@ -216,7 +227,9 @@ export function resolveResourceLayerSource(
   }
   return {
     kind: 'unavailable',
-    message: source ? `Source "${source.label}" has no resources` : getSourceUnavailableMessage(layer.sourceId),
+    message: source
+      ? `Source "${source.label}" has no resources`
+      : getSourceUnavailableMessage(layer.sourceId, registry?.scope),
   };
 }
 
@@ -440,14 +453,22 @@ export function groupBrowserNodes<T>(
     }));
 }
 
-export function activityItemNode(sourceId: TimelineSourceId, name: string, count: number): SourceBrowserNode {
+/** What a count of records is called: activities by default, or what the source holds (directives, records). */
+export type RecordNoun = [one: string, many: string];
+
+export function activityItemNode(
+  sourceId: TimelineSourceId,
+  name: string,
+  count: number,
+  noun: RecordNoun = ['activity', 'activities'],
+): SourceBrowserNode {
   return {
     action: { item: toIntervalType(name), sourceId, typeName: 'activity' },
     badge: `${count}`,
     id: `${sourceId}/activity/${name}`,
     kind: 'item',
     label: name,
-    tooltip: countLabel(count, 'activity', 'activities'),
+    tooltip: countLabel(count, ...noun),
   };
 }
 
@@ -456,11 +477,14 @@ export function countLabel(count: number, one: string, many: string): string {
 }
 
 /** What a group of activity types shows: its activities, with how many types they are of. */
-export function summarizeActivityTypes(types: { count: number }[]): Pick<SourceBrowserNode, 'badge' | 'tooltip'> {
+export function summarizeActivityTypes(
+  types: { count: number }[],
+  noun: RecordNoun = ['activity', 'activities'],
+): Pick<SourceBrowserNode, 'badge' | 'tooltip'> {
   const activities = types.reduce((total, type) => total + type.count, 0);
   return {
     badge: `${activities}`,
-    tooltip: `${countLabel(types.length, 'type', 'types')} · ${countLabel(activities, 'activity', 'activities')}`,
+    tooltip: `${countLabel(types.length, 'type', 'types')} · ${countLabel(activities, ...noun)}`,
   };
 }
 
@@ -690,22 +714,76 @@ export function createExternalEventsSource(input: ExternalEventsSourceInput): Ti
 
 /* Browser helpers. */
 
-/** Keeps items whose label matches, with their ancestors; a matching group keeps its whole subtree. */
-export function filterSourceBrowserNodes(nodes: SourceBrowserNode[], text: string): SourceBrowserNode[] {
+/** What a search of the Sources tree shows: the paths to what matched, and the groups to open to show it. */
+export type SourceBrowserSearch = {
+  nodes: SourceBrowserNode[];
+  /** Groups holding a matching item: opened to reveal it. A group matched by its own name stays closed. */
+  open: Set<string>;
+  /** Matching items beyond `limit` were left out. */
+  truncated: boolean;
+};
+
+/**
+ * Searches the tree by label. An item that matches is kept with its ancestors, which open to reveal it; a group that
+ * matches is kept whole but closed, so a match on a big group never renders all it holds. At most `limit` items are
+ * kept, so a short query on a huge catalog stays cheap.
+ */
+export function searchSourceBrowserNodes(nodes: SourceBrowserNode[], text: string, limit = 300): SourceBrowserSearch {
   const needle = text.trim().toLowerCase();
+  const open = new Set<string>();
+  let count = 0;
+  let truncated = false;
+  const visit = (list: SourceBrowserNode[]): SourceBrowserNode[] =>
+    list.flatMap(node => {
+      const matches = node.label.toLowerCase().includes(needle);
+      if (node.kind === 'item') {
+        if (!matches) {
+          return [];
+        }
+        if (count >= limit) {
+          truncated = true;
+          return [];
+        }
+        count++;
+        return [node];
+      }
+      const children = visit(node.children ?? []);
+      if (children.length) {
+        open.add(node.id);
+        return [{ ...node, children: matches ? (node.children ?? []) : children }];
+      }
+      return matches ? [node] : [];
+    });
   if (!needle) {
-    return nodes;
+    return { nodes, open, truncated };
   }
-  const result: SourceBrowserNode[] = [];
-  nodes.forEach(node => {
-    if (node.label.toLowerCase().includes(needle)) {
-      result.push(node);
-      return;
+  return { nodes: visit(nodes), open, truncated };
+}
+
+/**
+ * A group whose only child is another group shows that child's contents directly (under its own name): one level per
+ * thing a person tells apart, never a level of a single category.
+ */
+export function collapseSingleChildGroups(nodes: SourceBrowserNode[]): SourceBrowserNode[] {
+  return nodes.map(node => {
+    const only = node.children?.length === 1 ? node.children[0] : null;
+    if (node.kind === 'group' && only?.kind === 'group') {
+      return collapseSingleChildGroups([{ ...node, children: only.children }])[0];
     }
-    const children = filterSourceBrowserNodes(node.children ?? [], needle);
-    if (children.length) {
-      result.push({ ...node, children });
-    }
+    return node.children ? { ...node, children: collapseSingleChildGroups(node.children) } : node;
   });
-  return result;
+}
+
+/**
+ * The source a new layer reads until another is chosen: the Plan where the Plan is a source (the Plan page), else the
+ * first source that has what the layer shows. Never the Plan's placeholder where there is no Plan.
+ */
+export function getDefaultLayerSourceId(
+  registry: TimelineSourceRegistry | null | undefined,
+  capability: 'intervals' | 'resources',
+): TimelineSourceId | undefined {
+  if (!registry || getSource(registry, PLAN_SOURCE_ID)) {
+    return PLAN_SOURCE_ID;
+  }
+  return registry.sources.find(source => source[capability])?.id;
 }
