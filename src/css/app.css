@@ -192,6 +192,34 @@ fieldset {
   color: var(--st-white);
 }
 
+/*
+ * Unavailable actions (see utilities/availability.ts): same footprint as the available control, muted label/icon,
+ * no opacity. They stay focusable (aria-disabled, not `disabled`) so the reason can be read on hover/focus/tap.
+ */
+[data-unavailable='true'],
+[data-unavailable='true']:hover,
+[data-unavailable='true']:active {
+  color: hsl(var(--muted-foreground)) !important;
+  cursor: not-allowed;
+}
+
+button[data-unavailable='true'].bg-primary,
+button[data-unavailable='true'].bg-primary:hover {
+  background-color: hsl(var(--muted));
+}
+
+/* Ghost/outline buttons: no hover fill, so an unavailable action doesn't look pressable. */
+[data-unavailable='true'].border-input:hover,
+[data-unavailable='true'][class*='hover:bg-accent']:hover {
+  background-color: transparent;
+}
+
+.st-button[data-unavailable='true'],
+.st-button[data-unavailable='true']:hover {
+  background: var(--st-gray-10);
+  border-color: var(--st-gray-20);
+}
+
 .permission-disabled {
   /* using !important so that components do not need to know of permissions */
   cursor: not-allowed !important;

@@ -1,7 +1,7 @@
 <svelte:options immutable={true} />
 
 <script lang="ts">
-  import { createEventDispatcher, onDestroy, onMount } from 'svelte';
+  import { afterUpdate, createEventDispatcher, onDestroy, onMount } from 'svelte';
   import type { FieldStore } from '../../types/form';
   import { getTarget } from '../../utilities/generic';
   import FieldError from './FieldError.svelte';
@@ -49,35 +49,55 @@
     }
   }
 
-  onMount(() => {
-    if (container) {
-      input = container.querySelector('input');
-      label = container.querySelector('label');
-      select = container.querySelector('select');
+  let observer: MutationObserver | null = null;
 
+  // The editor may mount/unmount after the Field does (e.g. a `PropertyField` that swaps between an input and a read
+  // view as editability changes), so the elements are re-discovered whenever the container's subtree changes.
+  // Events are handled by delegation on the container rather than by listeners on a single input.
+  function refresh() {
+    if (!container) {
+      return;
+    }
+    const newInput = container.querySelector('input');
+    const newLabel = container.querySelector('label');
+    const newSelect = container.querySelector('select');
+
+    if (newInput !== input) {
+      input = newInput;
       if (input && field) {
-        input.addEventListener('input', onInput);
-        input.addEventListener('change', onChange);
         input.value = $field.value;
       }
-
+    }
+    if (newSelect !== select) {
+      select = newSelect;
       if (select && field) {
-        select.addEventListener('change', onChange);
         select.value = $field.value;
       }
     }
+    if (newLabel !== label) {
+      label = newLabel;
+    }
+  }
+
+  onMount(() => {
+    refresh();
+    if (container) {
+      observer = new MutationObserver(refresh);
+      observer.observe(container, { childList: true, subtree: true });
+    }
   });
+
+  // Slot content changes re-run this synchronously; the observer covers changes made inside nested components.
+  afterUpdate(refresh);
 
   onDestroy(() => {
-    if (input) {
-      input.removeEventListener('input', onInput);
-      input.removeEventListener('change', onChange);
-    }
-
-    if (select) {
-      select.removeEventListener('change', onChange);
-    }
+    observer?.disconnect();
   });
+
+  function isFieldControl(event: Event) {
+    const target = event.target as Element | null;
+    return !!target && (target === input || target === select);
+  }
 
   function onInput(event: Event) {
     const { value } = getTarget(event);
@@ -92,7 +112,11 @@
   }
 </script>
 
-<fieldset bind:this={container}>
+<fieldset
+  bind:this={container}
+  on:input={e => isFieldControl(e) && onInput(e)}
+  on:change={e => isFieldControl(e) && onChange(e)}
+>
   <slot name="label" />
   <slot>No input element provided!</slot>
   <FieldError {field} />
