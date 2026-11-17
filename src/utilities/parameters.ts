@@ -7,6 +7,7 @@ import type {
   Argument,
   ArgumentsMap,
   FormParameter,
+  ParameterCapabilities,
   ParametersMap,
   RequiredParametersList,
   ValueSource,
@@ -28,7 +29,22 @@ import {
   isWithRevision,
 } from './actions';
 import { isEmpty } from './generic';
+import { AVAILABLE, type Availability } from './availability';
 import { convertUsToDurationString } from './time';
+
+/**
+ * Builds the capabilities for a parameter tree from a single editability decision (derived from the caller's existing
+ * permission logic) and, when not editable, the reason to show for the actions that exist.
+ */
+export function parameterCapabilities(editable: boolean, reason?: string): ParameterCapabilities {
+  const unavailable: Availability = { available: false, reason };
+  return editable
+    ? { edit: true, reset: AVAILABLE, structure: AVAILABLE }
+    : { edit: false, reset: unavailable, structure: unavailable };
+}
+
+/** Capabilities for parameters that are informational by nature (computed attributes, schema listings, ...). */
+export const READ_ONLY_PARAMETERS: ParameterCapabilities = parameterCapabilities(false);
 
 /**
  * Formats a parameter value according to its schema type for display purposes.
@@ -291,10 +307,12 @@ export function getFormParameters(
     }
 
     const formParameter: FormParameter = {
+      defaultValue: defaultArg,
       errors,
       externalEvent: isExternalEvent,
       name,
       order,
+      presetValue: preset,
       required,
       schema: newFormParameterSchema,
       value,

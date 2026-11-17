@@ -40,7 +40,11 @@
     getExternalSourceTypeRowId,
   } from '../../utilities/externalEvents';
   import { parseJSONStream } from '../../utilities/generic';
-  import { getFormParameters, translateJsonSchemaToValueSchema } from '../../utilities/parameters';
+  import {
+    getFormParameters,
+    READ_ONLY_PARAMETERS,
+    translateJsonSchemaToValueSchema,
+  } from '../../utilities/parameters';
   import { permissionHandler } from '../../utilities/permissionHandler';
   import { featurePermissions } from '../../utilities/permissions';
   import { tooltip } from '../../utilities/tooltip';
@@ -700,7 +704,7 @@
           {:else}
             <div class="st-typography-body">
               <Parameters
-                disabled={true}
+                capabilities={READ_ONLY_PARAMETERS}
                 expanded={false}
                 formParameters={getFormParameters(
                   selectedExternalSourceTypeParametersMap,
@@ -762,7 +766,7 @@
           {:else}
             <div class="st-typography-body">
               <Parameters
-                disabled={true}
+                capabilities={READ_ONLY_PARAMETERS}
                 expanded={false}
                 formParameters={getFormParameters(
                   selectedExternalEventTypeParametersMap,

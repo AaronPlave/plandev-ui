@@ -1,3 +1,4 @@
+import type { Availability } from '../utilities/availability';
 import type { UIValueSchemaWithOptionsMultiple, UIValueSchemaWithOptionsSingle, ValueSchema } from './schema';
 
 export type DefaultEffectiveArguments = {
@@ -27,6 +28,8 @@ export type EffectiveArguments = {
 };
 
 export type FormParameter<T = ValueSchema | UIValueSchemaWithOptionsSingle | UIValueSchemaWithOptionsMultiple> = {
+  /** Value of the argument in the preset applied to the parent (if any), for comparison in the details view. */
+  defaultValue?: Argument;
   errors: string[] | null;
   externalEvent?: boolean;
   file?: File;
@@ -34,6 +37,7 @@ export type FormParameter<T = ValueSchema | UIValueSchemaWithOptionsSingle | UIV
   key?: string;
   name: string;
   order: number;
+  presetValue?: Argument;
   required?: boolean;
   schema: T;
   value: Argument;
@@ -66,6 +70,20 @@ export type ParameterValidationError = {
 export type ParameterValidationResponse = {
   errors?: ParameterValidationError[];
   success: boolean;
+};
+
+/**
+ * What the user can do in a `Parameters` tree. Kept deliberately small: read-only parameters are a different
+ * *presentation* (not disabled editors), and expand/collapse, inspect (details) and native text selection are always
+ * available regardless of these.
+ */
+export type ParameterCapabilities = {
+  /** Edit values with the type-specific editors. When false, values are shown with the read-only presentation. */
+  edit: boolean;
+  /** Reset an overridden value to its preset/default. Unavailable carries the reason shown in the details view. */
+  reset: Availability;
+  /** Add/remove series items. */
+  structure: Availability;
 };
 
 export type ParameterType = 'action' | 'activity' | 'constraint' | 'goal' | 'simulation';

@@ -1,102 +1,70 @@
 <svelte:options immutable={true} />
 
 <script lang="ts">
-  import { Copy } from 'lucide-svelte';
+  import { Eye, EyeOff } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
-  import type { FormParameter, ParameterType } from '../../types/parameter';
-  import { setClipboardContent } from '../../utilities/clipboard';
-  import { tooltip } from '../../utilities/tooltip';
-  import { useActions, type ActionArray } from '../../utilities/useActions';
-  import Input from '../form/Input.svelte';
-  import ParameterBaseRightAdornments from './ParameterBaseRightAdornments.svelte';
-  import ParameterName from './ParameterName.svelte';
-  import ParameterUnits from './ParameterUnits.svelte';
+  import type { FormParameter } from '../../types/parameter';
+  import ParameterInputBox from './ParameterInputBox.svelte';
 
-  export let disabled: boolean = false;
+  export let errorId: string = '';
   export let formParameter: FormParameter;
-  export let hideRightAdornments: boolean = false;
-  export let labelColumnWidth: number = 200;
-  export let level: number = 0;
-  export let levelPadding: number = 20;
-  export let parameterType: ParameterType = 'activity';
-  export let use: ActionArray = [];
   export let type: 'text' | 'password' = 'text';
 
-  const dispatch = createEventDispatcher<{
-    change: FormParameter;
-    reset: FormParameter;
-  }>();
+  const dispatch = createEventDispatcher<{ change: FormParameter }>();
 
-  $: columns = `calc(${labelColumnWidth}px - ${level * levelPadding}px) auto`;
+  // A secret is masked until someone who can edit it chooses to show it. Nothing is copyable while masked.
+  let revealed: boolean = false;
+
+  $: inputType = type === 'password' && !revealed ? 'password' : 'text';
 
   function handleChange(): void {
     dispatch('change', formParameter);
   }
 </script>
 
-<div class="parameter-base-string" style="grid-template-columns: {columns}">
-  <ParameterName {formParameter} />
-  <Input>
-    <!-- Type can only be text or password so it's safe to overwrite the type and don't coerce the value. -->
-    <input
-      bind:value={formParameter.value}
-      class="st-input w-full"
-      class:error={formParameter.errors !== null}
-      aria-label={formParameter.name}
-      {disabled}
-      {...{ type }}
-      use:useActions={use}
-      on:change={handleChange}
-    />
-    <div class="parameter-right" slot="right">
-      <ParameterUnits unit={formParameter.schema?.metadata?.unit?.value} />
+<ParameterInputBox trailing={type === 'password'} unit={formParameter.schema?.metadata?.unit?.value}>
+  <!-- Type can only be text or password so it's safe to overwrite the type and don't coerce the value. -->
+  <input
+    bind:value={formParameter.value}
+    class="st-input w-full"
+    class:error={formParameter.errors !== null}
+    aria-label={formParameter.name}
+    aria-invalid={formParameter.errors !== null ? true : undefined}
+    aria-describedby={formParameter.errors !== null ? errorId : undefined}
+    autocomplete="off"
+    {...{ type: inputType }}
+    on:change={handleChange}
+  />
+  <svelte:fragment slot="trailing">
+    {#if type === 'password'}
       <button
         type="button"
-        class="st-icon copy-parameter-value"
-        use:tooltip={{ content: 'Copy Value' }}
-        on:click={() => {
-          setClipboardContent(formParameter.value);
-        }}
+        class="reveal"
+        aria-label={revealed ? `Hide ${formParameter.name}` : `Show ${formParameter.name}`}
+        aria-pressed={revealed}
+        on:click={() => (revealed = !revealed)}
       >
-        <Copy size={16} />
+        {#if revealed}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
       </button>
-      <ParameterBaseRightAdornments
-        {disabled}
-        hidden={hideRightAdornments}
-        {formParameter}
-        {parameterType}
-        {use}
-        on:reset={() => dispatch('reset', formParameter)}
-      />
-    </div>
-  </Input>
-</div>
+    {/if}
+  </svelte:fragment>
+</ParameterInputBox>
 
 <style>
-  .parameter-base-string {
+  .reveal {
     align-items: center;
-    display: grid;
-  }
-
-  .parameter-right {
-    display: flex;
-    gap: 2px;
-    min-width: min-content;
-    width: 100%;
-  }
-
-  .copy-parameter-value {
-    height: 16px;
-    margin: 0 4px;
-    visibility: hidden;
-    width: 16px;
-  }
-
-  .copy-parameter-value:hover {
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    color: hsl(var(--muted-foreground));
     cursor: pointer;
+    display: flex;
+    height: 20px;
+    justify-content: center;
+    width: 20px;
   }
 
-  .parameter-base-string:hover .copy-parameter-value {
-    visibility: visible;
+  .reveal:hover {
+    color: hsl(var(--foreground));
   }
 </style>

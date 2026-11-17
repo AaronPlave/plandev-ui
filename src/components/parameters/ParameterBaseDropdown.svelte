@@ -4,28 +4,15 @@
   import ChevronDownIcon from '@nasa-jpl/stellar/icons/chevron_down.svg?component';
   import { createEventDispatcher } from 'svelte';
   import type { DropdownOptions, SelectedDropdownOptionValue } from '../../types/dropdown';
-  import type { FormParameter, ParameterType } from '../../types/parameter.js';
+  import type { FormParameter } from '../../types/parameter.js';
   import { isParameterWithOptions } from '../../utilities/parameters';
-  import type { ActionArray } from '../../utilities/useActions.js';
-  import Input from '../form/Input.svelte';
   import SearchableDropdown from '../ui/SearchableDropdown.svelte';
-  import ParameterBaseRightAdornments from './ParameterBaseRightAdornments.svelte';
-  import ParameterName from './ParameterName.svelte';
-
-  export const hideRightAdornments: boolean = false;
 
   export let allowMultiple: boolean = false;
-  export let disabled: boolean = false;
   export let formParameter: FormParameter;
-  export let labelColumnWidth: number = 200;
-  export let level: number = 0;
-  export let levelPadding: number = 20;
-  export let parameterType: ParameterType = 'action';
   export let placeholderText: string | undefined = undefined;
   export let selectedOptionLabel: string = '';
-  export let use: ActionArray = [];
 
-  let columns: string = '';
   let dropdownOptions: DropdownOptions = [];
   let selectedDropdownOptions: SelectedDropdownOptionValue[] = [];
   let placeholder: string;
@@ -36,9 +23,7 @@
     reset: FormParameter;
   }>();
 
-  $: columns = `calc(${labelColumnWidth}px - ${level * levelPadding}px) auto min-content`;
-
-  $: if (!disabled && isParameterWithOptions(formParameter.schema)) {
+  $: if (isParameterWithOptions(formParameter.schema)) {
     dropdownOptions = formParameter.schema.options.map(option => ({ display: option.display, value: option.value }));
     placeholder =
       placeholderText ??
@@ -73,61 +58,20 @@
   }
 </script>
 
-<div class="parameter-base-dropdown" style="grid-template-columns: {columns}">
-  <ParameterName {formParameter} />
-  <!--  TODO: If disabled, use an input to avoid SearchableDropdown need to map the value to existing options, this way it can report accurately the value that it was used. Is this the endgame decision? -->
-  {#if disabled}
-    <Input>
-      <input
-        value={Array.isArray(formParameter.value) ? formParameter.value.join(', ') : formParameter.value}
-        class="st-input w-full"
-        class:error={formParameter.errors !== null}
-        aria-label={formParameter.name}
-        {disabled}
-        type="text"
-      />
-    </Input>
-  {:else}
-    <div class="flex min-w-0 items-center gap-1">
-      <div class="min-w-0 flex-1">
-        <SearchableDropdown
-          bind:selectedOptionValues={selectedDropdownOptions}
-          {allowMultiple}
-          showPlaceholderOption={false}
-          options={dropdownOptions}
-          {placeholder}
-          {searchPlaceholder}
-          {selectedOptionLabel}
-          on:change={onChange}
-        >
-          <ChevronDownIcon slot="icon" />
-        </SearchableDropdown>
-      </div>
-      <slot name="trailing" />
-    </div>
-  {/if}
-  <div class="parameter-right items-center">
-    <ParameterBaseRightAdornments
-      {disabled}
-      {formParameter}
-      hidden={false}
-      hideValueSource={true}
-      {parameterType}
-      {use}
-    />
+<div class="flex min-w-0 items-center gap-1">
+  <div class="min-w-0 flex-1">
+    <SearchableDropdown
+      bind:selectedOptionValues={selectedDropdownOptions}
+      {allowMultiple}
+      showPlaceholderOption={false}
+      options={dropdownOptions}
+      {placeholder}
+      {searchPlaceholder}
+      {selectedOptionLabel}
+      on:change={onChange}
+    >
+      <ChevronDownIcon slot="icon" />
+    </SearchableDropdown>
   </div>
+  <slot name="trailing" />
 </div>
-
-<style>
-  .parameter-base-dropdown {
-    align-items: center;
-    display: grid;
-  }
-
-  .parameter-right {
-    display: flex;
-    gap: 2px;
-    min-width: min-content;
-    width: 100%;
-  }
-</style>

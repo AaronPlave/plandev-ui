@@ -2,27 +2,12 @@
 
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import type { FormParameter, ParameterType } from '../../types/parameter';
-  import { useActions, type ActionArray } from '../../utilities/useActions';
-  import Input from '../form/Input.svelte';
-  import ParameterBaseRightAdornments from './ParameterBaseRightAdornments.svelte';
-  import ParameterName from './ParameterName.svelte';
+  import type { FormParameter } from '../../types/parameter';
 
-  export let disabled: boolean = false;
+  export let errorId: string = '';
   export let formParameter: FormParameter;
-  export let hideRightAdornments: boolean = false;
-  export let labelColumnWidth: number = 200;
-  export let level: number = 0;
-  export let levelPadding: number = 20;
-  export let parameterType: ParameterType = 'activity';
-  export let use: ActionArray = [];
 
-  const dispatch = createEventDispatcher<{
-    change: FormParameter;
-    reset: FormParameter;
-  }>();
-
-  $: columns = `calc(${labelColumnWidth}px - ${level * levelPadding}px) auto`;
+  const dispatch = createEventDispatcher<{ change: FormParameter }>();
 
   function onChange(event: Event) {
     const input = event.target as HTMLInputElement;
@@ -37,43 +22,24 @@
   }
 </script>
 
-<div class="parameter-base-path" style="grid-template-columns: {columns}">
-  <ParameterName {formParameter} />
-  <div class="file-input">
-    <Input>
-      <input
-        bind:value={formParameter.value}
-        class="st-input w-full"
-        class:error={formParameter.errors !== null}
-        aria-label={formParameter.name}
-        disabled
-        use:useActions={use}
-        type="text"
-      />
-      <ParameterBaseRightAdornments
-        {disabled}
-        hidden={hideRightAdornments}
-        slot="right"
-        {formParameter}
-        {parameterType}
-        {use}
-        on:reset={() => dispatch('reset', formParameter)}
-      />
-    </Input>
-    {#if !disabled}
-      <input type="file" on:change={onChange} use:useActions={use} />
-    {/if}
-  </div>
+<div class="file-input">
+  <!-- The chosen file's name is displayed (selectable), the native file input chooses a new one. -->
+  <input
+    value={formParameter.value ?? ''}
+    class="st-input w-full"
+    class:error={formParameter.errors !== null}
+    aria-label={formParameter.name}
+    aria-invalid={formParameter.errors !== null ? true : undefined}
+    aria-describedby={formParameter.errors !== null ? errorId : undefined}
+    readonly
+    type="text"
+  />
+  <input type="file" aria-label="Choose file for {formParameter.name}" on:change={onChange} />
 </div>
 
 <style>
   .file-input {
     display: grid;
     gap: 5px;
-  }
-
-  .parameter-base-path {
-    align-items: center;
-    display: grid;
   }
 </style>

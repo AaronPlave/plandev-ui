@@ -1,9 +1,8 @@
 <svelte:options immutable={true} />
 
 <script lang="ts">
-  import type { FormParameter, ParameterType } from '../../types/parameter';
+  import type { FormParameter, ParameterCapabilities, ParameterType } from '../../types/parameter';
   import { isWithRevision } from '../../utilities/actions';
-  import type { ActionArray } from '../../utilities/useActions';
   import ActionFileParameter from './ActionFileParameter.svelte';
   import ParameterBaseBoolean from './ParameterBaseBoolean.svelte';
   import ParameterBaseDropdown from './ParameterBaseDropdown.svelte';
@@ -12,160 +11,76 @@
   import ParameterBasePath from './ParameterBasePath.svelte';
   import ParameterBaseString from './ParameterBaseString.svelte';
   import ParameterBaseVariant from './ParameterBaseVariant.svelte';
+  import ParameterReadValue from './ParameterReadValue.svelte';
+  import ParameterRow from './ParameterRow.svelte';
 
-  export let disabled: boolean = false;
+  /**
+   * The parameter-type dispatch boundary for scalar parameters. This is the only place that decides between the
+   * type-specific *editor* and the shared type-aware *read view*, so the editors themselves have no read-only branch.
+   * Row layout, provenance, details and validation are the shared `ParameterRow`.
+   */
+  export let capabilities: ParameterCapabilities;
   export let formParameter: FormParameter;
+  export let hideDetails: boolean = false;
   export let hideRightAdornments: boolean = false;
-  export let labelColumnWidth: number = 200;
+  export let indent: number = 0;
   export let level: number = 0;
-  export let levelPadding: number = 20;
   export let parameterType: ParameterType = 'activity';
-  export let use: ActionArray = [];
+  export let path: string = '';
+
+  const errorId = `parameter-error-${Math.random().toString(36).slice(2, 9)}`;
+
+  $: type = formParameter.schema.type;
 </script>
 
-{#if formParameter.schema.type === 'boolean'}
-  <ParameterBaseBoolean
-    {disabled}
-    {hideRightAdornments}
-    {labelColumnWidth}
-    {level}
-    {levelPadding}
-    {formParameter}
-    {parameterType}
-    {use}
-    on:change
-    on:reset
-  />
-{:else if formParameter.schema.type === 'duration'}
-  <ParameterBaseDuration
-    {disabled}
-    hideValueSource={hideRightAdornments}
-    {labelColumnWidth}
-    {level}
-    {levelPadding}
-    {formParameter}
-    {parameterType}
-    {use}
-    on:change
-    on:reset
-  />
-{:else if formParameter.schema.type === 'int'}
-  <ParameterBaseNumber
-    {disabled}
-    {hideRightAdornments}
-    {labelColumnWidth}
-    {level}
-    {levelPadding}
-    {formParameter}
-    {parameterType}
-    {use}
-    on:change
-    on:reset
-  />
-{:else if formParameter.schema.type === 'path'}
-  <ParameterBasePath
-    {disabled}
-    {hideRightAdornments}
-    {labelColumnWidth}
-    {level}
-    {levelPadding}
-    {formParameter}
-    {parameterType}
-    {use}
-    on:change
-    on:reset
-  />
-{:else if formParameter.schema.type === 'real'}
-  <ParameterBaseNumber
-    {disabled}
-    {hideRightAdornments}
-    {labelColumnWidth}
-    {level}
-    {levelPadding}
-    {formParameter}
-    {parameterType}
-    {use}
-    on:change
-    on:reset
-  />
-{:else if formParameter.schema.type === 'string'}
-  <ParameterBaseString
-    {disabled}
-    {hideRightAdornments}
-    {labelColumnWidth}
-    {level}
-    {levelPadding}
-    {formParameter}
-    {parameterType}
-    {use}
-    on:change
-    on:reset
-  />
-{:else if formParameter.schema.type === 'secret'}
-  <ParameterBaseString
-    {disabled}
-    {hideRightAdornments}
-    {labelColumnWidth}
-    {level}
-    {levelPadding}
-    {formParameter}
-    {parameterType}
-    {use}
-    type="password"
-    on:change
-    on:reset
-  />
-{:else if formParameter.schema.type === 'variant'}
-  <ParameterBaseVariant
-    {disabled}
-    {hideRightAdornments}
-    {labelColumnWidth}
-    {level}
-    {levelPadding}
-    {formParameter}
-    {parameterType}
-    {use}
-    on:change
-    on:reset
-  />
-{:else if (formParameter.schema.type === 'options-single' || formParameter.schema.type === 'options-multiple') && isWithRevision(formParameter.schema)}
+{#if (type === 'options-single' || type === 'options-multiple') && isWithRevision(formParameter.schema)}
   <ActionFileParameter
-    {disabled}
-    {hideRightAdornments}
-    {labelColumnWidth}
-    {level}
-    {levelPadding}
+    {capabilities}
     {formParameter}
+    {hideDetails}
+    {hideRightAdornments}
+    {indent}
+    {level}
     {parameterType}
-    {use}
+    path={path || formParameter.name}
     on:change
     on:reset
   />
-{:else if formParameter.schema.type === 'options-single'}
-  <ParameterBaseDropdown
-    {disabled}
-    {hideRightAdornments}
-    {labelColumnWidth}
-    {level}
-    {levelPadding}
+{:else}
+  <ParameterRow
+    {capabilities}
+    {errorId}
     {formParameter}
-    {parameterType}
-    {use}
-    on:change
-    on:reset
-  />
-{:else if formParameter.schema.type === 'options-multiple'}
-  <ParameterBaseDropdown
-    allowMultiple={true}
-    {disabled}
+    {hideDetails}
     {hideRightAdornments}
-    {labelColumnWidth}
+    {indent}
     {level}
-    {levelPadding}
-    {formParameter}
     {parameterType}
-    {use}
-    on:change
+    path={path || formParameter.name}
     on:reset
-  />
+  >
+    {#if !capabilities.edit}
+      <ParameterReadValue {formParameter} />
+    {:else if type === 'boolean'}
+      <ParameterBaseBoolean {errorId} {formParameter} on:change />
+    {:else if type === 'duration'}
+      <ParameterBaseDuration {errorId} {formParameter} on:change />
+    {:else if type === 'int' || type === 'real'}
+      <ParameterBaseNumber {errorId} {formParameter} on:change />
+    {:else if type === 'path'}
+      <ParameterBasePath {errorId} {formParameter} on:change />
+    {:else if type === 'string'}
+      <ParameterBaseString {errorId} {formParameter} on:change />
+    {:else if type === 'secret'}
+      <ParameterBaseString {errorId} {formParameter} type="password" on:change />
+    {:else if type === 'variant'}
+      <ParameterBaseVariant {errorId} {formParameter} on:change />
+    {:else if type === 'options-single'}
+      <ParameterBaseDropdown {formParameter} on:change />
+    {:else if type === 'options-multiple'}
+      <ParameterBaseDropdown allowMultiple={true} {formParameter} on:change />
+    {:else}
+      <ParameterReadValue {formParameter} />
+    {/if}
+  </ParameterRow>
 {/if}

@@ -10,6 +10,7 @@
   import type { ValueSchema } from '../../types/schema';
   import {
     getFormParameters,
+    READ_ONLY_PARAMETERS,
     translateJsonSchemaArgumentsToValueSchema,
     translateJsonSchemaToValueSchema,
   } from '../../utilities/parameters';
@@ -108,7 +109,7 @@
         {:else}
           <div class="st-typography-body">
             <Parameters
-              disabled={true}
+              capabilities={READ_ONLY_PARAMETERS}
               expanded={false}
               formParameters={getFormParameters(
                 externalEventTypeParametersMap,

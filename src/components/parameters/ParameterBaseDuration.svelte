@@ -2,32 +2,17 @@
 
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import type { FormParameter, ParameterType } from '../../types/parameter';
+  import type { FormParameter } from '../../types/parameter';
   import { convertDurationStringToUs, convertUsToDurationString } from '../../utilities/time';
-  import { useActions, type ActionArray } from '../../utilities/useActions';
-  import Input from '../form/Input.svelte';
-  import ParameterBaseRightAdornments from './ParameterBaseRightAdornments.svelte';
-  import ParameterName from './ParameterName.svelte';
 
-  export let disabled: boolean = false;
+  export let errorId: string = '';
   export let formParameter: FormParameter;
-  export let hideValueSource: boolean = false;
-  export let labelColumnWidth: number = 200;
-  export let level: number = 0;
-  export let levelPadding: number = 20;
-  export let parameterType: ParameterType = 'activity';
-  export let use: ActionArray = [];
 
   let durationStringFormatError: string | null = null;
 
-  const dispatch = createEventDispatcher<{
-    change: FormParameter;
-    reset: FormParameter;
-  }>();
+  const dispatch = createEventDispatcher<{ change: FormParameter }>();
 
-  $: columns = `calc(${labelColumnWidth}px - ${level * levelPadding}px) auto`;
-
-  $: durationString = convertUsToDurationString(formParameter.value, !disabled);
+  $: durationString = convertUsToDurationString(formParameter.value, true);
 
   function onChange() {
     try {
@@ -39,36 +24,24 @@
   }
 </script>
 
-<div class="parameter-base-duration" style="grid-template-columns: {columns}">
-  <ParameterName {formParameter} />
-  <Input>
-    <input
-      bind:value={durationString}
-      class="st-input w-full"
-      aria-label={formParameter.name}
-      class:error={formParameter.errors !== null || durationStringFormatError !== null}
-      {disabled}
-      type="text"
-      use:useActions={use}
-      on:change={onChange}
-    />
-
-    <ParameterBaseRightAdornments
-      {disabled}
-      slot="right"
-      {formParameter}
-      additionalErrors={durationStringFormatError ? [durationStringFormatError] : []}
-      {hideValueSource}
-      {parameterType}
-      {use}
-      on:reset={() => dispatch('reset', formParameter)}
-    />
-  </Input>
-</div>
+<input
+  bind:value={durationString}
+  class="st-input w-full"
+  aria-label={formParameter.name}
+  class:error={formParameter.errors !== null || durationStringFormatError !== null}
+  aria-invalid={formParameter.errors !== null || durationStringFormatError !== null ? true : undefined}
+  aria-describedby={formParameter.errors !== null ? errorId : undefined}
+  type="text"
+  on:change={onChange}
+/>
+{#if durationStringFormatError}
+  <div class="duration-format-error" role="alert">{durationStringFormatError}</div>
+{/if}
 
 <style>
-  .parameter-base-duration {
-    align-items: center;
-    display: grid;
+  .duration-format-error {
+    color: var(--st-red);
+    font-size: 12px;
+    line-height: 16px;
   }
 </style>

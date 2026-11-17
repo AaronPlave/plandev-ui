@@ -14,7 +14,7 @@
   import type { Span, SpanUtilityMaps, SpansMap } from '../../types/simulation';
   import { getSpanRootParent } from '../../utilities/activities';
   import effects from '../../utilities/effects';
-  import { getFormParameters } from '../../utilities/parameters';
+  import { getFormParameters, READ_ONLY_PARAMETERS } from '../../utilities/parameters';
   import { formatDate } from '../../utilities/time';
   import { tooltip } from '../../utilities/tooltip';
   import Collapse from '../Collapse.svelte';
@@ -211,7 +211,7 @@
       error={parametersWithErrorsCount > 0}
       title={`Parameters${parametersWithErrorsCount > 0 ? ` (${parametersWithErrorsCount} invalid)` : ''}`}
     >
-      <Parameters disabled {formParameters} hideRightAdornments={true}>
+      <Parameters capabilities={READ_ONLY_PARAMETERS} {formParameters} hideRightAdornments={true}>
         <svelte:fragment slot="right-action" let:parameter>
           <!-- Only show link to directive parameter if the span is a root span and has a matching directive -->
           {#if typeof span.parent_id !== 'number' && typeof spanDirectiveId === 'number'}
@@ -240,7 +240,7 @@
       {#if !hasComputedAttributes}
         <div class="st-typography-label">No Computed Attributes Found</div>
       {:else}
-        <Parameters disabled expanded formParameters={formParametersComputedAttributes} />
+        <Parameters capabilities={READ_ONLY_PARAMETERS} expanded formParameters={formParametersComputedAttributes} />
       {/if}
     </Collapse>
   </fieldset>

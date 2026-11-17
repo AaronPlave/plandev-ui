@@ -23,7 +23,12 @@
   import effects from '../../utilities/effects';
   import { provideFileRevisionHistory } from '../../utilities/fileRevisionHistory';
   import { isEmpty } from '../../utilities/generic';
-  import { applyRequiredErrors, getArguments, getFormParameters } from '../../utilities/parameters';
+  import {
+    applyRequiredErrors,
+    getArguments,
+    getFormParameters,
+    parameterCapabilities,
+  } from '../../utilities/parameters';
   import { tooltip } from '../../utilities/tooltip';
   import Parameters from '../parameters/Parameters.svelte';
   import Modal from './Modal.svelte';
@@ -297,7 +302,7 @@
           touchedParamNames,
         )}
         parameterType="action"
-        disabled={isLoadingWorkspace}
+        capabilities={parameterCapabilities(!isLoadingWorkspace, 'The workspace is still loading.')}
         on:change={onChangeFormParameters}
         on:reset={onResetFormParameter}
       />

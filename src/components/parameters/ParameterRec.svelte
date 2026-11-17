@@ -1,24 +1,23 @@
 <svelte:options immutable={true} />
 
 <script lang="ts">
-  import type { FormParameter, ParameterType } from '../../types/parameter';
-  import type { ActionArray } from '../../utilities/useActions';
+  import type { FormParameter, ParameterCapabilities, ParameterType } from '../../types/parameter';
 
-  export let disabled: boolean = false;
+  export let capabilities: ParameterCapabilities;
   export let expanded: boolean = false;
   export let formParameter: FormParameter;
-  export let headerHeight: number = 24;
+  export let hideDetails: boolean = false;
   export let hideRightAdornments: boolean = false;
-  export let labelColumnWidth: number = 200;
+  export let indent: number = 0;
   export let level: number = 0;
-  export let levelPadding: number = 20;
   export let parameterType: ParameterType = 'activity';
-  export let use: ActionArray = [];
+  export let path: string = '';
 
   let component: any;
 
   $: loadComponent(formParameter);
 
+  // Struct and series recurse into ParameterRec/ParameterBase, so they are loaded lazily to break the import cycle.
   async function loadComponent(formParameter: FormParameter) {
     if (formParameter.schema.type === 'series') {
       component = (await import('./ParameterRecSeries.svelte')).default;
@@ -30,16 +29,15 @@
 
 <svelte:component
   this={component}
-  {disabled}
+  {capabilities}
   {expanded}
-  {headerHeight}
   {formParameter}
+  {hideDetails}
   {hideRightAdornments}
-  {labelColumnWidth}
+  {indent}
   {level}
-  {levelPadding}
   {parameterType}
-  {use}
+  {path}
   on:change
   on:reset
 />

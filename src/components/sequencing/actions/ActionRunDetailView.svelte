@@ -25,7 +25,7 @@
   import effects from '../../../utilities/effects';
   import { downloadJSON } from '../../../utilities/generic';
   import gql from '../../../utilities/gql';
-  import { getFormParameters } from '../../../utilities/parameters';
+  import { getFormParameters, READ_ONLY_PARAMETERS } from '../../../utilities/parameters';
   import { permissionHandler } from '../../../utilities/permissionHandler';
   import { formatMS } from '../../../utilities/time';
   import { tooltip } from '../../../utilities/tooltip';
@@ -316,7 +316,7 @@
                   parameterType="action"
                   hideRightAdornments
                   hideInfo={false}
-                  disabled
+                  capabilities={READ_ONLY_PARAMETERS}
                 />
               {:else}
                 <p class="text-xs italic text-muted-foreground">No parameters</p>
@@ -329,7 +329,7 @@
                   parameterType="action"
                   hideRightAdornments
                   hideInfo={false}
-                  disabled
+                  capabilities={READ_ONLY_PARAMETERS}
                 />
               {:else}
                 <p class="text-xs italic text-muted-foreground">No settings</p>

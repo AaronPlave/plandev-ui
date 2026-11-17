@@ -5,166 +5,64 @@
   import { createEventDispatcher } from 'svelte';
   import type { ParameterType, ValueSource } from '../../types/parameter';
   import { isMacOs } from '../../utilities/browser';
-  import { classNames } from '../../utilities/generic';
   import { isMetaOrCtrlPressed } from '../../utilities/keyboardEvents';
   import { tooltip } from '../../utilities/tooltip';
-  import { useActions, type ActionArray } from '../../utilities/useActions';
 
-  export let isCompact: boolean = true;
-  export let disabled: boolean = false;
+  /**
+   * Provenance *indicator* (not a button): none = model default, ◆ = preset, ● = override.
+   * ⌘/Ctrl-click on an override resets it (kept for compatibility); the discoverable reset is in the details view.
+   */
+  export let canReset: boolean = false;
   export let source: ValueSource;
   export let parameterType: ParameterType = 'activity';
-  export let use: ActionArray = [];
 
   const dispatch = createEventDispatcher<{
     reset: void;
   }>();
 
-  let showButton: boolean = false;
-  let status: string = '';
-  let tooltipContent: string = '';
-  let tooltipShortcut: string = '';
-  let tooltipShortcutLabel: string = '';
-
-  $: dotClasses = classNames('value-source-badge-dot st-typography-body', {
-    'value-source-badge-dot--mission': source === 'mission',
-    'value-source-badge-dot--preset': source === 'preset',
-    'value-source-badge-dot--user': source === 'user on model' || source === 'user on preset',
-  });
-
-  // Ensure browser is available so that isMacOs can be called
-  $: if (browser) {
-    const presetText = parameterType === 'activity' ? 'Activity Preset' : 'Simulation Template';
-    const defaultText =
-      parameterType === 'goal' || parameterType === 'constraint' || parameterType === 'action'
-        ? 'Default'
-        : 'Mission Model';
-    showButton = false;
-    switch (source) {
-      case 'user on model':
-      case 'user on preset':
-        showButton = true;
-        tooltipContent = 'Modified';
-        tooltipShortcut = `${isMacOs() ? '⌘' : 'CTRL'} Click`;
-        tooltipShortcutLabel = `Reset to ${source === 'user on preset' ? presetText : defaultText}`;
-        break;
-      case 'preset':
-        tooltipContent = `${presetText} Value`;
-        tooltipShortcut = '';
-        tooltipShortcutLabel = '';
-        break;
-      case 'mission':
-      default:
-        tooltipContent = defaultText;
-        tooltipShortcut = '';
-        tooltipShortcutLabel = '';
-    }
-    switch (source) {
-      case 'user on model':
-      case 'user on preset':
-        status = 'Override';
-        break;
-      case 'preset':
-        status = `${presetText} Value`;
-        break;
-      case 'mission':
-      default:
-        status = defaultText;
-    }
-  }
+  $: presetText = parameterType === 'activity' ? 'Activity Preset' : 'Simulation Template';
+  $: isOverride = source === 'user on model' || source === 'user on preset';
+  $: label = isOverride ? 'Override' : source === 'preset' ? `${presetText} value` : '';
+  $: shortcut = browser && isOverride && canReset ? `${isMacOs() ? '⌘' : 'Ctrl'}-click to reset` : '';
 
   function onClick(event: MouseEvent) {
-    if (isMetaOrCtrlPressed(event) && !disabled) {
-      reset();
+    if (isOverride && canReset && isMetaOrCtrlPressed(event)) {
+      dispatch('reset');
     }
-  }
-
-  function reset() {
-    dispatch('reset');
   }
 </script>
 
-{#if source !== 'none'}
-  <div
-    class={classNames('value-source-badge-dot-root', {
-      'value-source-badge-compact': isCompact,
-    })}
-    role="none"
-    use:tooltip={{
-      content: tooltipContent,
-      disabled: !isCompact,
-      placement: 'top',
-      shortcut: !disabled ? tooltipShortcut : '',
-      shortcutLabel: !disabled ? tooltipShortcutLabel : '',
-    }}
-    use:useActions={use}
+<!-- Rows at the model default show nothing: provenance is only called out when it differs. -->
+{#if label}
+  <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-noninteractive-element-interactions -->
+  <span
+    class="provenance"
+    class:override={isOverride}
+    class:preset={source === 'preset'}
+    data-source={isOverride ? 'override' : 'preset'}
+    role="img"
+    aria-label={label}
+    use:tooltip={{ content: shortcut ? `${label} · ${shortcut}` : label, placement: 'top' }}
     on:click={onClick}
   >
-    <div class={dotClasses} />
-    {#if !isCompact}
-      <span>{status}</span>
-      {#if showButton && !disabled}
-        <button type="button" class="value-source-reset-button st-button icon" on:click={reset}>Reset</button>
-      {/if}
-    {/if}
-  </div>
+    {isOverride ? '●' : '◆'}
+  </span>
 {/if}
 
 <style>
-  .value-source-badge-dot-root {
-    align-items: center;
-    display: flex;
-    gap: 4px;
-    height: 16px;
-    min-width: auto;
-  }
-  .value-source-badge-dot-root.value-source-badge-compact {
-    justify-content: center;
+  .provenance {
+    cursor: default;
+    font-size: 10px;
+    line-height: 12px;
+    text-align: center;
+    width: 12px;
   }
 
-  .value-source-badge-dot {
-    background-color: gray;
-    border-radius: 50%;
-    height: 6px;
-    width: 6px;
+  .override {
+    color: #e0701a;
   }
 
-  .value-source-badge-dot--user {
-    background: orange;
-  }
-
-  .value-source-badge-dot--preset {
-    background: var(--st-primary-70);
-  }
-
-  .value-source-badge-dot--mission {
-    background: var(--st-success-green);
-  }
-
-  .value-source-reset-button {
-    border: 1px solid var(--st-gray-30);
-    min-width: inherit;
-    padding: 0 8px;
-  }
-
-  :global(.value-source-tooltip-modified) {
-    align-items: center;
-    color: var(--st-gray-10);
-    display: flex;
-    gap: 2rem;
-    justify-content: center;
-  }
-
-  :global(.value-source-tooltip-modified .value-source-tooltip-modified-reset) {
-    align-items: center;
-    display: flex;
-    font-weight: 200;
-    gap: 0.3rem;
-  }
-
-  :global(.value-source-tooltip-modified .value-source-tooltip-modified-reset > div) {
-    background-color: var(--st-gray-70);
-    border-radius: 3px;
-    padding: 0 2px;
+  .preset {
+    color: var(--st-primary-60);
   }
 </style>

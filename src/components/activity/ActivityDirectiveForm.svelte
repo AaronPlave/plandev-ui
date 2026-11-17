@@ -35,7 +35,7 @@
   import effects from '../../utilities/effects';
   import { isInstantiationError } from '../../utilities/errors';
   import { classNames, keyByBoolean } from '../../utilities/generic';
-  import { getArguments, getFormParameters } from '../../utilities/parameters';
+  import { getArguments, getFormParameters, parameterCapabilities } from '../../utilities/parameters';
   import { permissionHandler } from '../../utilities/permissionHandler';
   import { featurePermissions } from '../../utilities/permissions';
   import { pluralize } from '../../utilities/text';
@@ -51,6 +51,7 @@
   import Parameters from '../parameters/Parameters.svelte';
   import ActivityStatusesRollup from '../ui/ActivityStatusesRollup.svelte';
   import Highlight from '../ui/Highlight.svelte';
+  import RestrictionBanner from '../ui/RestrictionBanner.svelte';
   import TagsInput from '../ui/Tags/TagsInput.svelte';
   import ActivityAnchorForm from './ActivityAnchorForm.svelte';
   import ActivityPresetInput from './ActivityPresetInput.svelte';
@@ -98,6 +99,12 @@
   $: updatePermissionError = $planReadOnly
     ? PlanStatusMessages.READ_ONLY
     : 'You do not have permission to update this activity';
+  $: canEditParameters = editable && hasUpdatePermission;
+  $: parametersRestrictionReason = !editable
+    ? revision
+      ? 'You are previewing a previous revision of this activity.'
+      : 'Activity editing is locked.'
+    : updatePermissionError;
   $: highlightKeysMap = keyByBoolean(highlightKeys);
   $: activityType =
     (activityTypes ?? []).find(({ name: activityTypeName }) => activityDirective?.type === activityTypeName) ?? null;
@@ -531,6 +538,11 @@
   {/if}
 
   <div class="activity-form">
+    {#if !canEditParameters}
+      <div class="px-4 pt-2">
+        <RestrictionBanner reason={parametersRestrictionReason} />
+      </div>
+    {/if}
     <fieldset>
       {#if activityType && activityType.description}
         <Collapse title="Description">
@@ -750,7 +762,7 @@
         error={parametersWithErrorsCount > 0}
         title={`Parameters${parametersWithErrorsCount > 0 ? ` (${parametersWithErrorsCount} invalid)` : ''}`}
       >
-        <div class="activity-preset">
+        <div class="activity-preset" class:editable={canEditParameters}>
           <ActivityPresetInput
             {modelId}
             {activityDirective}
@@ -765,22 +777,13 @@
           />
         </div>
         <Parameters
-          disabled={!editable}
+          capabilities={parameterCapabilities(editable && hasUpdatePermission, parametersRestrictionReason)}
           {formParameters}
           {highlightKeysMap}
           parameterToFlash={selectedParameterName}
           on:change={onChangeFormParameters}
           on:reset={onResetFormParameters}
           on:didFlash
-          use={[
-            [
-              permissionHandler,
-              {
-                hasPermission: hasUpdatePermission,
-                permissionError: updatePermissionError,
-              },
-            ],
-          ]}
         />
         {#if formParameters.length === 0}
           <div class="st-typography-label">No Parameters Found</div>
@@ -961,6 +964,13 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
+  }
+
+  /* Editable parameter rows have no hairlines of their own, so the preset block gets the one separator. */
+  .activity-preset.editable {
+    border-bottom: 1px solid hsl(var(--border));
+    margin-bottom: 4px;
+    padding-bottom: 6px;
   }
 
   .activity-description {

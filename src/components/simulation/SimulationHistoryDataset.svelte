@@ -11,7 +11,7 @@
   import type { ArgumentsMap, FormParameter, ParametersMap } from '../../types/parameter';
   import type { SimulationDataset } from '../../types/simulation';
   import { hexToRgba } from '../../utilities/color';
-  import { getFormParameters } from '../../utilities/parameters';
+  import { getFormParameters, READ_ONLY_PARAMETERS } from '../../utilities/parameters';
   import {
     formatSimulationQueuePosition,
     getSimulationExtent,
@@ -219,7 +219,7 @@
     >
       {#if argumentsExpanded}
         {#if formParameters.length}
-          <Parameters {formParameters} parameterType="simulation" disabled={true} />
+          <Parameters {formParameters} parameterType="simulation" capabilities={READ_ONLY_PARAMETERS} />
         {:else}
           <div class="p-1">No simulation arguments found</div>
         {/if}

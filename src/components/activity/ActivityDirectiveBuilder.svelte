@@ -275,7 +275,6 @@
           <div class="directive-section-content directive-section-content-bordered">
             <div class="activity-preset">
               <Parameters
-                disabled={false}
                 formParameters={currentActivityTypeFormParams}
                 on:change={event => {
                   const { name, value } = event.detail;

@@ -3,36 +3,32 @@
 <script lang="ts">
   import { Minus, Plus } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
-  import type { FormParameter, ParameterType } from '../../types/parameter';
+  import type { FormParameter, ParameterCapabilities, ParameterType } from '../../types/parameter';
   import type { ValueSchemaSeries } from '../../types/schema';
   import { getArgument, getValueSchemaDefaultValue } from '../../utilities/parameters';
-  import { tooltip } from '../../utilities/tooltip';
-  import type { ActionArray } from '../../utilities/useActions';
-  import Collapse from '../Collapse.svelte';
-  import CssGrid from '../ui/CssGrid.svelte';
+  import AvailabilityButton from '../ui/AvailabilityButton.svelte';
   import ParameterBase from './ParameterBase.svelte';
-  import ParameterBaseRightAdornments from './ParameterBaseRightAdornments.svelte';
-  import ParameterName from './ParameterName.svelte';
   import ParameterRec from './ParameterRec.svelte';
-  import ParameterUnits from './ParameterUnits.svelte';
+  import ParameterRow from './ParameterRow.svelte';
 
-  export let disabled: boolean = false;
+  export let capabilities: ParameterCapabilities;
   export let expanded: boolean = false;
-  export let headerHeight: number = 24;
   export let formParameter: FormParameter<ValueSchemaSeries>;
+  export let hideDetails: boolean = false;
   export let hideRightAdornments: boolean = false;
-  export let labelColumnWidth: number = 200;
+  export let indent: number = 0;
   export let level: number = 0;
-  export let levelPadding: number = 20;
   export let parameterType: ParameterType = 'activity';
-  export let use: ActionArray = [];
+  export let path: string = '';
 
   const dispatch = createEventDispatcher<{
     change: FormParameter;
     reset: FormParameter;
   }>();
 
+  $: step = level >= 3 ? 6 : 12;
   $: subFormParameters = getSubFormParameters(formParameter);
+  $: readOnly = !capabilities.edit;
 
   function getSubFormParameters(formParameter: FormParameter<ValueSchemaSeries>): FormParameter[] {
     const subFormParameters = [];
@@ -82,121 +78,126 @@
   }
 </script>
 
-<div class="parameter-rec-series">
-  <Collapse defaultExpanded={expanded} {headerHeight}>
-    <div slot="left">
-      <ParameterName {formParameter} />
-    </div>
-    <div class="series-right" slot="right">
-      <CssGrid gap="3px" columns="auto auto auto auto" class="parameter-rec-series-css-grid">
-        <ParameterUnits unit={formParameter.schema?.metadata?.unit?.value} />
-        <button
-          class="st-button icon"
-          disabled={subFormParameters?.length === 0 || disabled}
-          on:click|stopPropagation={valueRemove}
-          use:tooltip={{ content: 'Remove Value', placement: 'left' }}
+<div class="parameter-rec-series" class:top-level={level === 0} class:read-only={readOnly}>
+  <ParameterRow
+    {capabilities}
+    {expanded}
+    expandable
+    {formParameter}
+    {hideDetails}
+    {hideRightAdornments}
+    {indent}
+    {level}
+    {parameterType}
+    {path}
+    on:reset={onResetSeries}
+    on:toggle={event => (expanded = event.detail)}
+  >
+    <div class="series-summary">
+      <span class="count" data-testid="parameter-summary"
+        >{subFormParameters.length} {subFormParameters.length === 1 ? 'item' : 'items'}</span
+      >
+      {#if capabilities.edit}
+        <!-- Adding/removing items is independent of expanding/collapsing and of inspecting. -->
+        <AvailabilityButton
+          availability={subFormParameters.length === 0
+            ? { available: false, reason: 'There are no values to remove' }
+            : capabilities.structure}
+          label="Remove value"
+          size="icon-sm"
+          variant="outline"
+          on:click={valueRemove}
         >
-          <Minus size={16} />
-        </button>
-        <button
-          {disabled}
-          class="st-button icon"
-          on:click|stopPropagation={valueAdd}
-          use:tooltip={{ content: 'Add Value', placement: 'left' }}
+          <Minus size={12} />
+        </AvailabilityButton>
+        <AvailabilityButton
+          availability={capabilities.structure}
+          label="Add value"
+          size="icon-sm"
+          variant="outline"
+          on:click={valueAdd}
         >
-          <Plus size={16} />
-        </button>
-        <ParameterBaseRightAdornments
-          {disabled}
-          hidden={hideRightAdornments}
-          {formParameter}
-          {parameterType}
-          {use}
-          on:reset={onResetSeries}
-        />
-      </CssGrid>
-    </div>
-    <ul style="padding-inline-start: {levelPadding}px">
-      {#if subFormParameters?.length}
-        {#each subFormParameters as subFormParameter (subFormParameter.name)}
-          <li>
-            {#if subFormParameter.schema.type === 'series' || subFormParameter.schema.type === 'struct'}
-              <ParameterRec
-                {disabled}
-                hideRightAdornments
-                {headerHeight}
-                expanded
-                formParameter={subFormParameter}
-                {labelColumnWidth}
-                level={++level}
-                {levelPadding}
-                {parameterType}
-                {use}
-                on:change={onChange}
-                on:reset={onResetSeries}
-              />
-            {:else}
-              <ParameterBase
-                {disabled}
-                formParameter={subFormParameter}
-                hideRightAdornments
-                {labelColumnWidth}
-                level={++level}
-                {levelPadding}
-                {parameterType}
-                {use}
-                on:change={onChange}
-                on:reset={onResetSeries}
-              />
-            {/if}
-          </li>
-        {/each}
-      {:else}
-        <div class="p-1">This series has no values</div>
+          <Plus size={12} />
+        </AvailabilityButton>
       {/if}
-    </ul>
-  </Collapse>
+    </div>
+  </ParameterRow>
+  {#if expanded}
+    <div
+      class="children"
+      role={readOnly ? 'group' : undefined}
+      style="margin-left: {step - 1}px; --indent-step: {step}px"
+    >
+      {#each subFormParameters as subFormParameter (subFormParameter.name)}
+        {#if subFormParameter.schema.type === 'series' || subFormParameter.schema.type === 'struct'}
+          <ParameterRec
+            {capabilities}
+            {hideDetails}
+            hideRightAdornments
+            expanded
+            formParameter={subFormParameter}
+            indent={indent + step}
+            level={level + 1}
+            {parameterType}
+            path="{path}{subFormParameter.name}"
+            on:change={onChange}
+            on:reset={onResetSeries}
+          />
+        {:else}
+          <ParameterBase
+            {capabilities}
+            {hideDetails}
+            hideRightAdornments
+            formParameter={subFormParameter}
+            indent={indent + step}
+            level={level + 1}
+            {parameterType}
+            path="{path}{subFormParameter.name}"
+            on:change={onChange}
+            on:reset={onResetSeries}
+          />
+        {/if}
+      {:else}
+        <div class="empty">This series has no values</div>
+      {/each}
+    </div>
+  {/if}
 </div>
 
 <style>
-  ul {
+  .parameter-rec-series.top-level:not(.read-only) {
+    margin: 6px 0;
+  }
+
+  .children {
+    border-left: 1px solid hsl(var(--border));
+  }
+
+  .series-summary {
+    align-items: center;
     display: flex;
-    flex-direction: column;
     gap: 4px;
-    margin: 0;
   }
 
-  li {
-    list-style: none;
-    padding: 4px 0px;
+  .count {
+    color: hsl(var(--muted-foreground));
+    flex: 1 1 auto;
+    min-width: 0;
+    padding-left: 8px;
+    white-space: nowrap;
   }
 
-  .parameter-rec-series {
-    align-items: center;
-    cursor: pointer;
-    display: flex;
+  .series-summary :global(button) {
+    flex: none;
   }
 
-  .series-right {
-    align-items: center;
-    justify-content: flex-end;
+  .parameter-rec-series.read-only .count {
+    padding-left: 0;
   }
 
-  :global(.parameter-rec-series-css-grid) {
-    align-items: center;
-    margin-right: 3px;
-  }
-
-  .parameter-rec-series :global(.form-parameter-name .name) {
-    cursor: pointer;
-  }
-
-  .parameter-rec-series :global(.collapse-root > .collapse-header) {
-    gap: 8px;
-    height: 24px;
-  }
-
-  .parameter-rec-series :global(.collapse-root > .content) {
-    margin-left: 0px;
+  .empty {
+    color: hsl(var(--muted-foreground));
+    font-size: 12px;
+    padding: 4px 8px;
   }
 </style>

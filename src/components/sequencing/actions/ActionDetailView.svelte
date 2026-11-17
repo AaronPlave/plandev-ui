@@ -28,7 +28,12 @@
   import { isEmpty } from '../../../utilities/generic';
   import { isMetaOrCtrlPressed } from '../../../utilities/keyboardEvents';
   import { showConfirmModal } from '../../../utilities/modal';
-  import { applyRequiredErrors, getArguments, getFormParameters } from '../../../utilities/parameters';
+  import {
+    applyRequiredErrors,
+    getArguments,
+    getFormParameters,
+    parameterCapabilities,
+  } from '../../../utilities/parameters';
   import { permissionHandler } from '../../../utilities/permissionHandler';
   import { featurePermissions } from '../../../utilities/permissions';
   import { formatMS } from '../../../utilities/time';
@@ -726,15 +731,10 @@
                   hideInfo={false}
                   on:change={onChangeFormParameters}
                   on:reset={onResetSettingsParameter}
-                  use={[
-                    [
-                      permissionHandler,
-                      {
-                        hasPermission: hasUpdatePermission,
-                        permissionError: 'You do not have permission to update an action',
-                      },
-                    ],
-                  ]}
+                  capabilities={parameterCapabilities(
+                    hasUpdatePermission,
+                    'You do not have permission to update an action',
+                  )}
                 />
               {/if}
             </SectionCard>

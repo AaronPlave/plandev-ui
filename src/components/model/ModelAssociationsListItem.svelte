@@ -273,7 +273,7 @@
       </svelte:fragment>
 
       <Collapse title="Parameters" defaultExpanded={true}>
-        <Parameters disabled={false} expanded={true} {formParameters} on:change={onChangeFormParameters} />
+        <Parameters expanded={true} {formParameters} on:change={onChangeFormParameters} />
       </Collapse>
     </Collapse>
   {:else}

@@ -35,6 +35,7 @@
   } from '../../utilities/externalEvents';
   import {
     getFormParameters,
+    READ_ONLY_PARAMETERS,
     translateJsonSchemaArgumentsToValueSchema,
     translateJsonSchemaToValueSchema,
   } from '../../utilities/parameters';
@@ -538,7 +539,7 @@
               <div class="st-typography-body">
                 {#if Object.keys(selectedSourceAttributes).length > 0}
                   <Parameters
-                    disabled={true}
+                    capabilities={READ_ONLY_PARAMETERS}
                     expanded={false}
                     formParameters={getFormParameters(
                       selectedSourceTypeParametersMap,

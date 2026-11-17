@@ -31,7 +31,7 @@
   } from '../../types/simulation';
   import type { ViewGridSection } from '../../types/view';
   import effects from '../../utilities/effects';
-  import { getArguments, getFormParameters } from '../../utilities/parameters';
+  import { getArguments, getFormParameters, parameterCapabilities } from '../../utilities/parameters';
   import { permissionHandler } from '../../utilities/permissionHandler';
   import { featurePermissions } from '../../utilities/permissions';
   import { getSimulationQueuePosition } from '../../utilities/simulation';
@@ -462,15 +462,10 @@
             <Parameters
               {formParameters}
               parameterType="simulation"
-              use={[
-                [
-                  permissionHandler,
-                  {
-                    hasPermission: hasUpdatePermission,
-                    permissionError: $planReadOnly ? PlanStatusMessages.READ_ONLY : updatePermissionError,
-                  },
-                ],
-              ]}
+              capabilities={parameterCapabilities(
+                hasUpdatePermission,
+                $planReadOnly ? PlanStatusMessages.READ_ONLY : updatePermissionError,
+              )}
               on:change={onChangeFormParameters}
               on:reset={onResetFormParameters}
             />

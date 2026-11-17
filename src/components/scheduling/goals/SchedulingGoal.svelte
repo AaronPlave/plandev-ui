@@ -305,7 +305,6 @@
     {#if formParameters.length > 0}
       <Collapse title="Parameters" className="scheduling-goal-analysis-activities" defaultExpanded={true}>
         <Parameters
-          disabled={false}
           expanded={true}
           {formParameters}
           parameterType="goal"
