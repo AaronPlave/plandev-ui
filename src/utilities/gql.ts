@@ -3330,6 +3330,15 @@ const gql = {
     }
   `,
 
+  SUB_SEQUENCE_ADAPTATION_VERSION: `#graphql
+    subscription SubSequenceAdaptationVersion($id: Int!) {
+      ${Queries.SEQUENCE_ADAPTATION}(where: { id: { _eq: $id } }) {
+        id
+        updated_at
+      }
+    }
+  `,
+
   SUB_SEQUENCE_FILTERS: `#graphql
     subscription SubSequenceFilters {
       ${Queries.SEQUENCE_FILTER}(order_by: { id: desc }) {

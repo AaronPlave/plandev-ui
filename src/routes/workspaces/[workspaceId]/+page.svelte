@@ -73,6 +73,7 @@
   } from '../../../stores/workspaceErrors';
   import {
     parcel,
+    parcelSequenceAdaptationVersion,
     parcels,
     selectedActionDefinitionId,
     selectedActionRunId,
@@ -192,9 +193,10 @@
   let leftPaneApi: PaneAPI;
   let leftPanelActiveTab: string = initialUrlState.sidebarTab;
   let librarySequences: LibrarySequenceSignature[] = [];
-  // Adaptation id last evaluated: re-running the bundle on every parcel/dictionary update would
-  // discard its module state (e.g. language-server connections) and leak the old copy's.
-  let loadedSequenceAdaptationId: number | null | undefined = undefined;
+  // The adaptation last evaluated. Re-running the bundle on every parcel/dictionary update would
+  // discard its module state (e.g. language-server connections); it is re-run only when the parcel
+  // names another adaptation or the adaptation is updated in place (same id, newer updated_at).
+  let loadedSequenceAdaptation: { id: number | null; updatedAt: string | null } | undefined = undefined;
   let loadingSpinnerTimeout: ReturnType<typeof setTimeout> | null = null;
   let logLevelLabel: string = 'Default levels';
   let logLevels: LogLevel[] = defaultLogLevels;
@@ -344,11 +346,10 @@
   }
 
   $: if ($parcel) {
-    if ($parcel.sequence_adaptation_id !== loadedSequenceAdaptationId) {
-      loadedSequenceAdaptationId = $parcel.sequence_adaptation_id;
-      loadSequenceAdaptation($parcel.sequence_adaptation_id);
-    }
+    syncSequenceAdaptation($parcel.sequence_adaptation_id, $parcelSequenceAdaptationVersion);
+  }
 
+  $: if ($parcel) {
     const unparsedChannelDictionary = $channelDictionaries.find(
       channelDictionaryMetadata => channelDictionaryMetadata.id === $parcel.channel_dictionary_id,
     );
@@ -682,6 +683,21 @@
           }
         })
         .catch(() => {});
+    }
+  }
+
+  function syncSequenceAdaptation(id: number | null, version: { id: number; updated_at: string } | null) {
+    const updatedAt = version && version.id === id ? version.updated_at : null;
+    if (loadedSequenceAdaptation?.id !== id) {
+      loadedSequenceAdaptation = { id, updatedAt };
+      loadSequenceAdaptation(id);
+    } else if (updatedAt && loadedSequenceAdaptation.updatedAt !== updatedAt) {
+      // The first update time seen for an adaptation only records what was loaded.
+      const changed = loadedSequenceAdaptation.updatedAt !== null;
+      loadedSequenceAdaptation = { id, updatedAt };
+      if (changed) {
+        loadSequenceAdaptation(id);
+      }
     }
   }
 

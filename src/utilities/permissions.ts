@@ -1008,6 +1008,7 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
   },
   SUB_SCHEDULING_REQUESTS: () => true,
   SUB_SEQUENCE_ADAPTATIONS: () => true,
+  SUB_SEQUENCE_ADAPTATION_VERSION: () => true,
   SUB_SEQUENCE_FILTERS: () => true,
   SUB_SEQUENCE_TEMPLATES: () => true,
   SUB_SIMULATION: (user: User | null): boolean => {

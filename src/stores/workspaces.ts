@@ -33,3 +33,11 @@ export const parcel: Readable<Parcel | undefined> = derived([workspace, parcels]
     return $parcels.find(({ id }) => $workspace.parcel_id === id);
   }
 });
+
+/** The parcel's adaptation and when it last changed: an adaptation updated in place keeps its id. */
+export const parcelSequenceAdaptationVersion = gqlSubscribable<{ id: number; updated_at: string } | null>(
+  gql.SUB_SEQUENCE_ADAPTATION_VERSION,
+  { id: derived(parcel, $parcel => $parcel?.sequence_adaptation_id ?? -1) },
+  null,
+  (rows: { id: number; updated_at: string }[]) => rows[0] ?? null,
+);
