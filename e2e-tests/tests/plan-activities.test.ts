@@ -141,13 +141,13 @@ test.describe.serial('Plan Activities', () => {
     await expect(
       setup.plan.panelActivityForm
         .locator('.parameter', { hasText: 'tbSugar' })
-        .getByLabel('Parameter not explicitly set'),
+        .getByText('Parameter not explicitly set'),
     ).not.toBeVisible();
     await setup.plan.panelActivityForm.locator('.parameter', { hasText: 'glutenFree' }).getByRole('checkbox').click();
     await expect(
       setup.plan.panelActivityForm
         .locator('.parameter', { hasText: 'glutenFree' })
-        .getByLabel('Parameter not explicitly set'),
+        .getByText('Parameter not explicitly set'),
     ).not.toBeVisible();
     await setup.plan.waitForActivityCheckingStatus(Status.Complete);
     await setup.plan.hoverMenu(setup.plan.navButtonActivityChecking);

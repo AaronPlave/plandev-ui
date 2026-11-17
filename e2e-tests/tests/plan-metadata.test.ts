@@ -182,7 +182,35 @@ test.describe.serial('Plan Metadata', () => {
     await userB.gotoWithRetry(`/plans/${planAId}`);
     await planAForUserB.showPanel(PanelNames.PLAN_METADATA, true);
     await planAForUserB.waitForPlanCollaboratorLoad();
-    await expect(planAForUserB.planCollaboratorInputContainer).toHaveAttribute('readonly');
+    // A user who can't edit collaborators sees the names as text: no combobox/input to edit with.
+    await expect(planAForUserB.planCollaboratorField).toBeVisible();
+    await expect(planAForUserB.planCollaboratorInputContainer).toHaveCount(0);
+  });
+
+  test(`Non-collaborator userB sees readable view-only fields and explained, inert editing actions`, async () => {
+    const userB = new User(setupB.page, 'userB');
+    await userB.gotoWithRetry('/plans');
+    await userB.switchRole('user');
+
+    await userB.gotoWithRetry(`/plans/${planAId}`);
+    await planAForUserB.showPanel(PanelNames.PLAN_METADATA, true);
+    await planAForUserB.waitForPlanCollaboratorLoad();
+
+    const panel = planAForUserB.panelPlanMetadata;
+    // One panel banner explains the restriction; values are readable text, not disabled/readonly inputs.
+    await expect(panel.getByTestId('restriction-banner')).toBeVisible();
+    await expect(panel.locator('input[name="plan-name"]')).toHaveCount(0);
+    await expect(panel.locator('input[disabled]')).toHaveCount(0);
+    await expect(planAForUserB.planMetadataValue('planName')).toHaveText(planA.planName);
+
+    // The editing action is still there, focusable, explained, and does not activate.
+    const editBounds = panel.getByRole('button', { name: 'Change plan time range' });
+    await expect(editBounds).toHaveAttribute('aria-disabled', 'true');
+    await expect(editBounds).not.toHaveAttribute('disabled');
+    await editBounds.focus();
+    await expect(editBounds).toBeFocused();
+    await editBounds.click({ force: true });
+    await expect(planAForUserB.page.locator('#modal-container')).not.toContainText('Change Plan Time Range');
   });
 
   test(`userB can be added as a plan collaborator to userA's plan`, async () => {

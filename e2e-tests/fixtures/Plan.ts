@@ -53,9 +53,9 @@ export class Plan {
   panelSimulation: Locator;
   panelTimeline: Locator;
   panelTimelineEditor: Locator;
+  planCollaboratorField: Locator;
   planCollaboratorInput: Locator;
   planCollaboratorInputContainer: Locator;
-  planCollaboratorLoadingInput: Locator;
   planNameInput: Locator;
   planTitle: Locator;
   reSimulateButton: Locator;
@@ -448,8 +448,8 @@ export class Plan {
   /** Reads the read-only Start/End time values shown in the Plan Metadata panel. */
   async getPlanMetadataBounds(): Promise<{ end: string; start: string }> {
     await this.showPanel(PanelNames.PLAN_METADATA, true);
-    const start = (await this.panelPlanMetadata.locator('input[name="planStartTime"]').inputValue()).trim();
-    const end = (await this.panelPlanMetadata.locator('input[name="planEndTime"]').inputValue()).trim();
+    const start = (await this.planMetadataValue('planStartTime').innerText()).trim();
+    const end = (await this.planMetadataValue('planEndTime').innerText()).trim();
     return { end, start };
   }
 
@@ -482,6 +482,11 @@ export class Plan {
     const menu = menuButton.getByRole('menu');
     await menu.waitFor({ state: 'attached' });
     await menu.waitFor({ state: 'visible' });
+  }
+
+  /** The text of a read-only property in the Plan Metadata panel (`<PropertyField name=...>`). */
+  planMetadataValue(fieldName: string): Locator {
+    return this.panelPlanMetadata.locator(`[data-field="${fieldName}"] [data-testid="read-value"]`);
   }
 
   async reRunSimulation(expectedFinalState = Status.Complete) {
@@ -780,10 +785,10 @@ export class Plan {
     this.panelTimeline = page.locator('[data-component-name="TimelinePanel"]');
     this.panelTimelineEditor = page.locator('[data-component-name="TimelineEditorPanel"]');
     this.planTitle = page.locator(`.plan-title:has-text("${this.planName}")`);
+    this.planCollaboratorField = this.panelPlanMetadata.locator('[data-field="collaborators"]');
     this.planCollaboratorInputContainer = this.panelPlanMetadata.getByLabel('collaborators combobox');
     this.planCollaboratorInput = this.planCollaboratorInputContainer.getByPlaceholder('Search collaborators or plans');
     this.planNameInput = page.locator('input[name="plan-name"]');
-    this.planCollaboratorLoadingInput = this.planCollaboratorInputContainer.getByPlaceholder('Loading...');
     this.roleSelector = page.getByRole('navigation').getByLabel('Select Role');
     this.reSimulateButton = page.locator('.header-actions button:has-text("Re-Run")');
     this.scheduleButton = page.locator('.header-actions button[aria-label="Schedule"]');
@@ -840,8 +845,9 @@ export class Plan {
   }
 
   async waitForPlanCollaboratorLoad() {
-    await expect(this.planCollaboratorInputContainer).toBeVisible({ timeout: 10000 });
-    await expect(this.planCollaboratorLoadingInput).not.toBeVisible({ timeout: 10000 });
+    // Users without permission see a read view (no combobox), so wait on the property field itself.
+    await expect(this.planCollaboratorField).toBeVisible({ timeout: 10000 });
+    await expect(this.planCollaboratorField).not.toContainText('Loading', { timeout: 10000 });
   }
 
   async waitForSchedulingStatus(status: Status) {

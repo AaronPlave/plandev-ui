@@ -34,11 +34,11 @@ export class Action {
   async configureAction(): Promise<void> {
     await this.page.getByRole('tab', { name: 'Configure' }).click();
     // Fill in the externalUrl setting and blur to trigger change event
-    const externalUrlInput = this.page.locator(".parameter-base-string:has-text('externalUrl') input");
+    const externalUrlInput = this.page.locator('[data-parameter-name="externalUrl"] input');
     await externalUrlInput.fill('https://api.github.com/');
     await externalUrlInput.dispatchEvent('change');
     // The demo schema has a required setting with no default; fill it so Save can enable
-    const requiredSettingInput = this.page.locator(".parameter-base-string:has-text('requiredSetting') input");
+    const requiredSettingInput = this.page.locator('[data-parameter-name="requiredSetting"] input');
     await requiredSettingInput.fill('test-setting-value');
     await requiredSettingInput.dispatchEvent('change');
     // Wait for Save button to become enabled (isDirty must be true)
@@ -194,7 +194,7 @@ export class Action {
 
     // Filling the required setting clears both the empty-required gate
     // and makes the form dirty, so Save should become enabled.
-    const requiredSettingInput = this.page.locator(".parameter-base-string:has-text('requiredSetting') input");
+    const requiredSettingInput = this.page.locator('[data-parameter-name="requiredSetting"] input');
     await requiredSettingInput.fill('test-setting-value');
     await requiredSettingInput.dispatchEvent('change');
 

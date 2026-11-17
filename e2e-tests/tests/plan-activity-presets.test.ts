@@ -20,8 +20,8 @@ test.afterAll(async () => {
 
 test.describe.serial('Plan Activity Presets', () => {
   test('Creating an activity preset from a directive', async () => {
-    await setup.plan.panelActivityForm.locator('.parameter-base-number input[type="number"]').fill('2');
-    await setup.plan.panelActivityForm.locator('.parameter-base-number input[type="number"]').blur();
+    await setup.plan.panelActivityForm.locator('[data-parameter-row] input[type="number"]').fill('2');
+    await setup.plan.panelActivityForm.locator('[data-parameter-row] input[type="number"]').blur();
 
     await setup.plan.fillActivityPresetName('Preset 1');
     await setup.plan.panelActivityForm.getByRole('button', { name: 'Enter a unique name for the new preset' }).click();
@@ -38,8 +38,8 @@ test.describe.serial('Plan Activity Presets', () => {
   test('Creating a second activity preset with different parameter values', async () => {
     // Changing a parameter makes the directive deviate from Preset 1, so the preset display resets
     // to 'None' — which fillActivityPresetName relies on to open the create-preset input.
-    await setup.plan.panelActivityForm.locator('.parameter-base-number input[type="number"]').fill('12');
-    await setup.plan.panelActivityForm.locator('.parameter-base-number input[type="number"]').blur();
+    await setup.plan.panelActivityForm.locator('[data-parameter-row] input[type="number"]').fill('12');
+    await setup.plan.panelActivityForm.locator('[data-parameter-row] input[type="number"]').blur();
 
     await setup.plan.fillActivityPresetName('Preset 2');
     await setup.plan.panelActivityForm.getByRole('button', { name: 'Enter a unique name for the new preset' }).click();

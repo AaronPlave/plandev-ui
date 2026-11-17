@@ -13,8 +13,8 @@ test.beforeAll(async ({ browser }) => {
   await setup.plan.addActivityByDragAndDrop('child');
   await setup.page.getByRole('button', { name: 'Simulate' }).click();
 
-  await setup.plan.panelSimulation.locator('.parameter-base-number input[type="number"]').first().fill('199');
-  await setup.plan.panelSimulation.locator('.parameter-base-number input[type="number"]').first().blur();
+  await setup.plan.panelSimulation.locator('[data-parameter-row] input[type="number"]').first().fill('199');
+  await setup.plan.panelSimulation.locator('[data-parameter-row] input[type="number"]').first().blur();
 
   await setup.plan.fillSimulationTemplateName('Template 1');
 
@@ -23,8 +23,8 @@ test.beforeAll(async ({ browser }) => {
 
   await setup.page.waitForFunction(() => document.querySelector('.selected-display-value')?.innerHTML === 'Template 1');
 
-  await setup.plan.panelSimulation.locator('.parameter-base-number input[type="number"]').first().fill('120');
-  await setup.plan.panelSimulation.locator('.parameter-base-number input[type="number"]').first().blur();
+  await setup.plan.panelSimulation.locator('[data-parameter-row] input[type="number"]').first().fill('120');
+  await setup.plan.panelSimulation.locator('[data-parameter-row] input[type="number"]').first().blur();
 
   await setup.plan.fillSimulationTemplateName('Template 2');
 
