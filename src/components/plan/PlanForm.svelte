@@ -1,7 +1,6 @@
 <svelte:options immutable={true} />
 
 <script lang="ts">
-  import { Button, cn } from '@nasa-jpl/stellar-svelte';
   import { FileUp, Pencil } from 'lucide-svelte';
   import { PlanStatusMessages } from '../../enums/planStatusMessages';
   import { SearchParameters } from '../../enums/searchParameters';
@@ -29,7 +28,7 @@
   import type { PlanSnapshot as PlanSnapshotType } from '../../types/plan-snapshot';
   import type { PlanTagsInsertInput, Tag, TagsChangeEvent } from '../../types/tags';
   import effects from '../../utilities/effects';
-  import { permissionHandler } from '../../utilities/permissionHandler';
+  import { availability, availabilityOf } from '../../utilities/availability';
   import { featurePermissions } from '../../utilities/permissions';
   import { exportPlan } from '../../utilities/plan';
   import { getShortISOForDate } from '../../utilities/time';
@@ -38,13 +37,17 @@
   import { required, unique } from '../../utilities/validators';
   import Collapse from '../Collapse.svelte';
   import Field from '../form/Field.svelte';
-  import Input from '../form/Input.svelte';
+  import PropertyField from '../form/PropertyField.svelte';
+  import ReadValue from '../form/ReadValue.svelte';
   import AsyncContentState from '../ui/AsyncContentState.svelte';
   import CardList from '../ui/CardList.svelte';
   import FilterToggleButton from '../ui/FilterToggleButton.svelte';
   import ProgressRadial from '../ui/ProgressRadial.svelte';
   import PlanCollaboratorInput from '../ui/Tags/PlanCollaboratorInput.svelte';
+  import TagChip from '../ui/Tags/Tag.svelte';
   import TagsInput from '../ui/Tags/TagsInput.svelte';
+  import AvailabilityButton from '../ui/AvailabilityButton.svelte';
+  import RestrictionBanner from '../ui/RestrictionBanner.svelte';
   import PlanSnapshot from './PlanSnapshot.svelte';
   import PlanTimeBounds from './PlanTimeBounds.svelte';
 
@@ -75,6 +78,12 @@
   let planExporting: boolean = false;
 
   $: permissionError = $planReadOnly ? PlanStatusMessages.READ_ONLY : 'You do not have permission to edit this plan.';
+  $: changeModelAvailability = $planReadOnly
+    ? availabilityOf(false, PlanStatusMessages.READ_ONLY)
+    : availabilityOf(hasChangePlanModelPermission, "You don't have permission to change mission model");
+  $: snapshotAvailability = $planReadOnly
+    ? availabilityOf(false, PlanStatusMessages.READ_ONLY)
+    : availabilityOf(hasCreateSnapshotPermission, 'You do not have permission to create a plan snapshot');
   $: if (plan && plan.model) {
     hasCreateSnapshotPermission = featurePermissions.planSnapshot.canCreate(user, plan, plan.model) && !$planReadOnly;
   }
@@ -206,80 +215,46 @@
             </span>
           {/if}
         </svelte:fragment>
+        {#if !hasPlanUpdatePermission}
+          <RestrictionBanner reason={permissionError} />
+        {/if}
         <div class="plan-form-field">
           <Field field={planNameField} on:change={onPlanNameChange}>
-            <Input layout="inline">
-              <label use:tooltip={{ content: 'Name', placement: 'top' }} for="plan-name">Plan Name</label>
+            <PropertyField
+              editable={hasPlanUpdatePermission}
+              id="plan-name"
+              label="Plan Name"
+              name="planName"
+              value={plan.name}
+            >
               <input
                 autocomplete="off"
                 class="st-input w-full"
                 name="plan-name"
                 placeholder="Enter a plan name"
                 id="plan-name"
-                use:permissionHandler={{
-                  hasPermission: hasPlanUpdatePermission,
-                  permissionError,
-                }}
               />
-            </Input>
+            </PropertyField>
           </Field>
         </div>
-        <Input layout="inline">
-          <label use:tooltip={{ content: 'ID', placement: 'top' }} for="id">Plan ID</label>
-          <input class="st-input w-full" disabled name="id" value={plan.id} id="id" />
-        </Input>
+        <PropertyField label="Plan ID" name="planId" value={plan.id} />
         {#if $planIsNonExecutable}
-          <Input layout="inline">
-            <span>Model</span>
-            <span class="text-muted-foreground">Model-free plan</span>
-          </Input>
+          <PropertyField label="Model" name="modelName" value="Model-free plan" />
         {:else}
-          <Input layout="inline">
-            <label use:tooltip={{ content: 'Model Name', placement: 'top' }} for="modelName">Model Name</label>
-            <div class="flex gap-1">
-              <input
-                class={cn('st-input w-full', !plan.model?.name ? 'border-destructive' : '')}
-                readonly
-                name="modelName"
-                value={plan.model?.name ?? 'Model not found'}
-                id="modelName"
-              />
-              <div
-                use:permissionHandler={{
-                  hasPermission: hasChangePlanModelPermission && !$planReadOnly,
-                  permissionError: $planReadOnly
-                    ? PlanStatusMessages.READ_ONLY
-                    : "You don't have permission to change mission model",
-                }}
-                use:tooltip={{ content: !$planReadOnly ? 'Change Mission Model' : '', placement: 'top' }}
-              >
-                <Button
-                  class="shrink-0"
-                  variant="outline"
-                  size="icon"
-                  disabled={$planReadOnly}
-                  on:click={openChangePlanMissionModelModal}
-                  aria-label="Change mission model"
-                >
-                  <Pencil size={16} />
-                </Button>
-              </div>
-            </div>
-          </Input>
-          <Input layout="inline">
-            <label use:tooltip={{ content: 'Model ID', placement: 'top' }} for="modelId">Model ID</label>
-            <input class="st-input w-full" disabled name="modelId" value={plan.model_id} id="modelId" />
-          </Input>
-          <Input layout="inline">
-            <label use:tooltip={{ content: 'Model Version', placement: 'top' }} for="modelVersion">Model Version</label>
-            <input
-              class="st-input w-full"
-              disabled
-              name="modelVersion"
-              value={plan.model?.version ?? 'Model not found'}
-              id="modelVersion"
-            />
-          </Input>
+          <PropertyField label="Model" name="modelName" value={plan.model?.name ?? 'Model not found'}>
+            <AvailabilityButton
+              slot="action"
+              availability={changeModelAvailability}
+              label="Change mission model"
+              size="icon-sm"
+              variant="ghost"
+              on:click={openChangePlanMissionModelModal}
+            >
+              <Pencil size={14} />
+            </AvailabilityButton>
+          </PropertyField>
+          <PropertyField label="Model ID" name="modelId" value={plan.model_id} />
+          <PropertyField label="Model version" name="modelVersion" value={plan.model?.version ?? 'Model not found'} />
         {/if}
         <PlanTimeBounds
           {plan}
@@ -288,83 +263,40 @@
           hasUpdatePermission={hasPlanUpdatePermission}
           {permissionError}
         />
-        <Input layout="inline">
-          <label use:tooltip={{ content: 'Owner', placement: 'top' }} for="owner">Owner</label>
-          <input class="st-input w-full" disabled name="owner" value={plan.owner} id="owner" />
-        </Input>
-        <Input layout="inline">
-          <label use:tooltip={{ content: 'Date Created', placement: 'top' }} for="createdAt">Date Created</label>
-          <input
-            class="st-input w-full"
-            disabled
-            name="createdAt"
-            id="createdAt"
-            value={getShortISOForDate(new Date(plan.created_at))}
+        <PropertyField label="Owner" name="owner" value={plan.owner} />
+        <PropertyField label="Created" name="createdAt" value={getShortISOForDate(new Date(plan.created_at))} />
+        <PropertyField label="Updated" name="updatedAt" value={getShortISOForDate(new Date(plan.updated_at))} />
+        <PropertyField label="Updated by" name="updatedBy" value={plan.updated_by} />
+        <PropertyField label="Revision" name="revision" value={plan.revision} />
+        <PropertyField
+          editable={hasPlanCollaboratorsUpdatePermission && !usersLoading && userWriteablePlans !== null}
+          label="Collaborators"
+          name="collaborators"
+          value={usersLoading || userWriteablePlans === null
+            ? 'Loading…'
+            : plan.collaborators.map(({ collaborator }) => collaborator).join(', ')}
+        >
+          <PlanCollaboratorInput
+            name="collaborators"
+            collaborators={plan.collaborators}
+            {users}
+            plans={userWriteablePlans ?? []}
+            {plan}
+            {user}
+            on:create={onPlanCollaboratorsCreate}
+            on:delete={onPlanCollaboratorsDelete}
           />
-        </Input>
-        <Input layout="inline">
-          <label use:tooltip={{ content: 'Updated At', placement: 'top' }} for="updatedAt">Updated At</label>
-          <input
-            class="st-input w-full"
-            disabled
-            name="updatedAt"
-            id="updatedAt"
-            value={getShortISOForDate(new Date(plan.updated_at))}
-          />
-        </Input>
-        <Input layout="inline">
-          <label use:tooltip={{ content: 'Updated By', placement: 'top' }} for="updatedBy">Updated By</label>
-          <input class="st-input w-full" disabled name="updatedBy" value={plan.updated_by} id="updatedBy" />
-        </Input>
-        <Input layout="inline">
-          <label use:tooltip={{ content: 'Revision', placement: 'top' }} for="revision">Revision</label>
-          <input class="st-input w-full" disabled name="revision" value={plan.revision} id="revision" />
-        </Input>
-        <Input layout="inline">
-          <label use:tooltip={{ content: 'Collaborators', placement: 'top' }} for="collaborators">Collaborators</label>
-          {#if usersLoading || userWriteablePlans === null}
-            <input class="st-input w-full" disabled name="collaborators" value="Loading..." />
-          {:else}
-            <PlanCollaboratorInput
-              name="collaborators"
-              collaborators={plan.collaborators}
-              {users}
-              plans={userWriteablePlans}
-              {plan}
-              {user}
-              on:create={onPlanCollaboratorsCreate}
-              on:delete={onPlanCollaboratorsDelete}
-              disabled={!hasPlanCollaboratorsUpdatePermission}
-              use={[
-                [
-                  permissionHandler,
-                  {
-                    hasPermission: hasPlanCollaboratorsUpdatePermission,
-                    permissionError,
-                  },
-                ],
-              ]}
-            />
-          {/if}
-        </Input>
-        <Input layout="inline">
-          <label use:tooltip={{ content: 'Tags', placement: 'top' }} for="tags">Tags</label>
-          <TagsInput
-            use={[
-              [
-                permissionHandler,
-                {
-                  hasPermission: hasPlanUpdatePermission,
-                  permissionError,
-                },
-              ],
-            ]}
-            disabled={!hasPlanUpdatePermission}
-            options={tags}
-            selected={planTags}
-            on:change={onTagsInputChange}
-          />
-        </Input>
+        </PropertyField>
+        <PropertyField editable={hasPlanUpdatePermission} label="Tags" name="tags" value={null}>
+          <TagsInput options={tags} selected={planTags} on:change={onTagsInputChange} />
+          <div slot="read" class="flex flex-wrap gap-[2px]" data-testid="tags-read">
+            {#each planTags as tag (tag.id)}
+              <TagChip {tag} removable={false} />
+            {:else}
+              <ReadValue value={null} />
+            {/each}
+          </div>
+        </PropertyField>
       </Collapse>
     </fieldset>
     <fieldset>
@@ -382,12 +314,7 @@
           <button
             class="st-button secondary"
             disabled={$initialPlanSnapshotsLoading}
-            use:permissionHandler={{
-              hasPermission: hasCreateSnapshotPermission,
-              permissionError: $planReadOnly
-                ? PlanStatusMessages.READ_ONLY
-                : 'You do not have permission to create a plan snapshot',
-            }}
+            use:availability={snapshotAvailability}
             on:click={onCreatePlanSnapshot}
           >
             Take Snapshot
@@ -451,7 +378,7 @@
   }
 
   .plan-form-field :global(fieldset .error *) {
-    padding-left: calc(40% + 8px);
+    padding-left: calc(100px + 8px);
   }
 
   .export {

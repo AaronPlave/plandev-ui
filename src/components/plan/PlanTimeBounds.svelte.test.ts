@@ -21,21 +21,15 @@ describe('PlanTimeBounds component', () => {
     vi.clearAllMocks();
   });
 
-  it('renders the start and end times as read-only (copyable) inputs', () => {
+  it('renders the start, end and duration as plain selectable text, not inputs', () => {
     const { container } = render(PlanTimeBounds, { props: { hasUpdatePermission: true, plan, user: null } });
 
-    const startInput = container.querySelector('input[name="planStartTime"]') as HTMLInputElement;
-    const endInput = container.querySelector('input[name="planEndTime"]') as HTMLInputElement;
-    const durationInput = container.querySelector('input[name="planDuration"]') as HTMLInputElement;
-
-    // Read-only (so text stays selectable/copyable) rather than disabled.
-    expect(startInput.hasAttribute('readonly')).toBe(true);
-    expect(startInput.hasAttribute('disabled')).toBe(false);
-    expect(endInput.hasAttribute('readonly')).toBe(true);
-
-    expect(startInput.value).toContain('2024-001');
-    expect(endInput.value).toContain('2024-010');
-    expect(durationInput.value).not.toBe('');
+    expect(container.querySelector('input')).toBeNull();
+    const text = (name: string) =>
+      container.querySelector(`[data-field="${name}"] [data-testid="read-value"]`)?.textContent;
+    expect(text('planStartTime')).toContain('2024-001');
+    expect(text('planEndTime')).toContain('2024-010');
+    expect(text('planDuration')).toBeTruthy();
   });
 
   it('opens the change-plan-bounds modal when the edit button is clicked', async () => {
@@ -44,5 +38,38 @@ describe('PlanTimeBounds component', () => {
     await fireEvent.click(getByRole('button', { name: 'Change plan time range' }));
 
     expect(showChangePlanBoundsModal).toHaveBeenCalledWith(plan, null);
+  });
+
+  it('keeps the edit action visible and explained, but inert, when the user cannot edit', async () => {
+    const { getByRole } = render(PlanTimeBounds, {
+      props: {
+        hasUpdatePermission: false,
+        permissionError: 'You do not have permission to edit this plan.',
+        plan,
+        user: null,
+      },
+    });
+    const button = getByRole('button', { name: 'Change plan time range' });
+
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(button.hasAttribute('disabled')).toBe(false);
+    expect(document.getElementById(button.getAttribute('aria-describedby') as string)?.textContent).toBe(
+      'You do not have permission to edit this plan.',
+    );
+
+    await fireEvent.click(button);
+    expect(showChangePlanBoundsModal).not.toHaveBeenCalled();
+  });
+
+  it('re-enables the action when permission is gained during the session', async () => {
+    const { component, getByRole } = render(PlanTimeBounds, {
+      props: { hasUpdatePermission: false, permissionError: 'No', plan, user: null },
+    });
+    await component.$set({ hasUpdatePermission: true });
+    const button = getByRole('button', { name: 'Change plan time range' });
+    expect(button.hasAttribute('aria-disabled')).toBe(false);
+    expect(button.hasAttribute('aria-describedby')).toBe(false);
+    await fireEvent.click(button);
+    expect(showChangePlanBoundsModal).toHaveBeenCalledTimes(1);
   });
 });
