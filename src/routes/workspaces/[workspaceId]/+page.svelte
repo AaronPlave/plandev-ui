@@ -192,6 +192,9 @@
   let leftPaneApi: PaneAPI;
   let leftPanelActiveTab: string = initialUrlState.sidebarTab;
   let librarySequences: LibrarySequenceSignature[] = [];
+  // Adaptation id last evaluated: re-running the bundle on every parcel/dictionary update would
+  // discard its module state (e.g. language-server connections) and leak the old copy's.
+  let loadedSequenceAdaptationId: number | null | undefined = undefined;
   let loadingSpinnerTimeout: ReturnType<typeof setTimeout> | null = null;
   let logLevelLabel: string = 'Default levels';
   let logLevels: LogLevel[] = defaultLogLevels;
@@ -341,7 +344,10 @@
   }
 
   $: if ($parcel) {
-    loadSequenceAdaptation($parcel.sequence_adaptation_id);
+    if ($parcel.sequence_adaptation_id !== loadedSequenceAdaptationId) {
+      loadedSequenceAdaptationId = $parcel.sequence_adaptation_id;
+      loadSequenceAdaptation($parcel.sequence_adaptation_id);
+    }
 
     const unparsedChannelDictionary = $channelDictionaries.find(
       channelDictionaryMetadata => channelDictionaryMetadata.id === $parcel.channel_dictionary_id,
