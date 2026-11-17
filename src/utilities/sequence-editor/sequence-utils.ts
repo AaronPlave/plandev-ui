@@ -18,7 +18,6 @@ import type { ArgTextDef, CommandInfoMapper, StringArg } from '@nasa-jpl/plandev
 import type { VariableDeclaration } from '@nasa-jpl/seq-json-schema/types';
 import type { EditorView } from 'codemirror';
 import type { NumberArg } from '../../types/sequencing';
-import { fswCommandArgDefault } from './command-dictionary';
 
 export function isFswCommand(command: FswCommand | HwCommand): command is FswCommand {
   return (command as FswCommand).type === 'fsw_command';
@@ -87,7 +86,7 @@ export function addDefaultArgs(
   const insertPosition = commandInfoMapper.getArgumentAppendPosition(commandNode);
   if (insertPosition !== undefined) {
     const str = commandInfoMapper.formatArgumentArray(
-      argDefs.map(argDef => fswCommandArgDefault(argDef, commandDictionary.enumMap)),
+      argDefs.map(argDef => commandInfoMapper.getDefaultValueForArgumentDef(argDef, commandDictionary.enumMap)),
       commandNode,
     );
     const transaction = view.state.update({

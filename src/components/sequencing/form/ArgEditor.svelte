@@ -36,6 +36,7 @@
   let isSymbol: boolean = false;
 
   $: argDef = argInfo.argDef;
+  $: formatEnumValue = (symbol: string) => commandInfoMapper.formatEnumValue?.(symbol) ?? quoteEscape(symbol);
 
   $: {
     isSymbol = commandInfoMapper.isArgumentNodeOfVariableType(argInfo.node ?? null);
@@ -116,7 +117,7 @@
           initVal={unquoteUnescape(argInfo.text ?? '')}
           setInEditor={val => {
             if (argInfo.node) {
-              setInEditor(argInfo.node, quoteEscape(val));
+              setInEditor(argInfo.node, formatEnumValue(val));
             }
           }}
         />
@@ -125,7 +126,7 @@
           class="st-button"
           on:click={() => {
             if (argInfo.node && argInfo.text) {
-              setInEditor(argInfo.node, quoteEscape(argInfo.text));
+              setInEditor(argInfo.node, formatEnumValue(argInfo.text));
             }
           }}
         >

@@ -7,11 +7,13 @@
   import { Compartment, EditorSelection, EditorState, Transaction, type Extension } from '@codemirror/state';
   import { keymap, type ViewUpdate } from '@codemirror/view';
   import type { SyntaxNode } from '@lezer/common';
-  import type {
-    CommandInfoMapper,
-    OutputLanguage,
-    PhoenixAdaptation,
-    PhoenixContext,
+  import {
+    getInputLanguage,
+    type CommandInfoMapper,
+    type InputLanguage,
+    type OutputLanguage,
+    type PhoenixAdaptation,
+    type PhoenixContext,
   } from '@nasa-jpl/plandev-sequence-languages';
   import { basicSetup, EditorView } from 'codemirror';
   import { debounce } from 'lodash-es';
@@ -95,6 +97,7 @@
   let toggleSeqJsonPreview: boolean = false;
   let commandInfoMapper: CommandInfoMapper;
   let inputEditorExtension: Extension = [];
+  let inputLanguage: InputLanguage;
   let outputEditorExtension: Extension = [];
   let previousSequenceFilePath: string = sequenceFilePath;
 
@@ -102,11 +105,13 @@
   const debouncedOutputUpdate = debounce(updateOutputFormat, 250);
 
   $: isDirty = $activeDocumentIsDirty;
-  $: commandInfoMapper = sequenceAdaptation.input.commandInfoMapper;
+  // The adaptation may author several languages; this file's is chosen by extension.
+  $: inputLanguage = getInputLanguage(sequenceAdaptation, sequenceName) ?? sequenceAdaptation.input;
+  $: commandInfoMapper = inputLanguage.commandInfoMapper;
 
   // Only use input extensions if the sequence file matches the input file extensions
-  $: if (phoenixContext && isInputFile && sequenceAdaptation.input.getEditorExtension) {
-    inputEditorExtension = sequenceAdaptation.input.getEditorExtension(phoenixContext, phoenixResources);
+  $: if (phoenixContext && isInputFile && inputLanguage.getEditorExtension) {
+    inputEditorExtension = inputLanguage.getEditorExtension(phoenixContext, phoenixResources);
   } else if (phoenixContext && sequenceAdaptation.outputs.length > 0) {
     const matchingOutputLanguage = sequenceAdaptation.outputs.find(output =>
       doesFilenameMatchExtension(output.fileExtension, sequenceName),
@@ -315,9 +320,9 @@
   async function copyInputFormatToClipboard(): Promise<void> {
     try {
       await navigator.clipboard.writeText(editorSequenceView.state.doc.toString());
-      showSuccessToast(`${sequenceAdaptation.input.name} copied to clipboard`);
+      showSuccessToast(`${inputLanguage.name} copied to clipboard`);
     } catch {
-      showFailureToast(`Error copying ${sequenceAdaptation.input.name} to clipboard`);
+      showFailureToast(`Error copying ${inputLanguage.name} to clipboard`);
     }
   }
 
@@ -330,7 +335,7 @@
   }
 
   function formatDocument() {
-    let format = sequenceAdaptation.input.format;
+    let format = inputLanguage.format;
     if (format !== undefined && phoenixContext) {
       format(editorSequenceView, phoenixContext);
     }
@@ -515,11 +520,7 @@
               outputDisabled={disableCopyAndExport}
               downloadOptions={selectedOutputFormat
                 ? getDownloadOptionsForFile(
-                    replaceFileExtension(
-                      sequenceName,
-                      sequenceAdaptation.input.fileExtension,
-                      selectedOutputFormat.fileExtension,
-                    ),
+                    replaceFileExtension(sequenceName, inputLanguage.fileExtension, selectedOutputFormat.fileExtension),
                     doesWorkingCopyMatchLatestRevision,
                     revisionList[0]?.name ?? null,
                     isDirty,

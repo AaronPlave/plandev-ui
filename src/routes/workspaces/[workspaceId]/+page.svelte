@@ -14,6 +14,7 @@
     PhoenixContext,
     UserSequence,
   } from '@nasa-jpl/plandev-sequence-languages';
+  import { getInputLanguage, type InputLanguage } from '@nasa-jpl/plandev-sequence-languages';
   import { Button, Checkbox, Resizable, Select } from '@nasa-jpl/stellar-svelte';
   import type { EditorView } from 'codemirror';
   import { capitalize, startCase } from 'lodash-es';
@@ -166,6 +167,7 @@
 
   let activeEditorView: EditorView | null = null;
   let activeFileIsInputSequence: boolean = false;
+  let activeInputLanguage: InputLanguage | null = null;
   let activeFileIsSequence: boolean = false;
   let activeFileMetadata: WorkspaceFileMetadata | null = null;
   let allActionsForWorkspace: ActionDefinition[] = [];
@@ -308,14 +310,12 @@
   $: activeFileIsSequence =
     $activeDocumentPath === null ||
     ($activeDocument.type !== null && $activeDocument.type === WorkspaceContentType.Sequence);
-  $: {
-    activeFileIsInputSequence =
-      activeFileIsSequence &&
-      (!$activeDocument.fileName ||
-        (!!$activeDocument.fileName &&
-          doesFilenameMatchExtension($sequenceAdaptation.input.fileExtension, $activeDocument.fileName)));
-  }
-  $: commandInfoMapper = $sequenceAdaptation.input.commandInfoMapper;
+  // An adaptation may author several languages (e.g. F Prime `.seq` and `.rs`); pick by extension.
+  $: activeInputLanguage = $activeDocument.fileName
+    ? getInputLanguage($sequenceAdaptation, $activeDocument.fileName)
+    : $sequenceAdaptation.input;
+  $: activeFileIsInputSequence = activeFileIsSequence && activeInputLanguage !== null;
+  $: commandInfoMapper = (activeInputLanguage ?? $sequenceAdaptation.input).commandInfoMapper;
   $: isFileReadOnly = activeFileMetadata?.readOnly ?? false;
 
   // Auto-switch the right-panel tab only when the editor crosses between sequence mode and
@@ -381,6 +381,8 @@
     commandDictionary,
     librarySequences,
     parameterDictionaries,
+    sequenceFile:
+      $workspaceId && $activeDocumentPath ? { path: $activeDocumentPath, workspaceId: $workspaceId } : undefined,
   };
 
   $: if (!isWorkspaceLoading && selectedFilePath !== $activeDocumentPath) {
@@ -574,7 +576,9 @@
 
       if (librarySequencesEnabled) {
         librarySequences = workspaceSequences
-          .flatMap(sequence => ($sequenceAdaptation.input.getLibrarySequences ?? (() => []))(sequence))
+          .flatMap(sequence =>
+            (getInputLanguage($sequenceAdaptation, sequence.name)?.getLibrarySequences ?? (() => []))(sequence),
+          )
           .filter(({ name }) => name !== '');
       }
 
@@ -1280,8 +1284,8 @@
       return null;
     }
     const sequenceName = $activeDocument.fileName ?? '';
-    if (activeFileIsInputSequence && adaptation.input.getEditorExtension) {
-      return adaptation.input.getEditorExtension(phoenixContext, phoenixResources);
+    if (activeFileIsInputSequence && activeInputLanguage?.getEditorExtension) {
+      return activeInputLanguage.getEditorExtension(phoenixContext, phoenixResources);
     }
     if (adaptation.outputs.length > 0) {
       const matchingOutput = adaptation.outputs.find(output =>

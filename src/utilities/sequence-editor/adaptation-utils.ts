@@ -1,8 +1,13 @@
 // codemirror dependencies to be injected into the adaptation
+import * as cmAutocomplete from '@codemirror/autocomplete';
 import * as cmCommands from '@codemirror/commands';
 import * as cmLanguage from '@codemirror/language';
+import * as cmLint from '@codemirror/lint';
 import * as cmState from '@codemirror/state';
 import * as cmView from '@codemirror/view';
+import * as lezerCommon from '@lezer/common';
+import * as lezerHighlight from '@lezer/highlight';
+import * as lezerLr from '@lezer/lr';
 
 import type { PhoenixAdaptation } from '@nasa-jpl/plandev-sequence-languages';
 import type { User } from '../../types/app';
@@ -65,11 +70,18 @@ export async function loadSequenceAdaptation(
   // To ensure this, pass a custom `require` function to the module which injects the page's CM dependencies.
   // (any other dependencies are expected to be bundled into the adaptation code)
   const moduleRequire = (id: string) => {
+    // Modules whose identity CodeMirror relies on (facets, node props, highlight tags) must be the
+    // page's own: a bundled copy would compile but silently not take effect.
     return {
+      '@codemirror/autocomplete': cmAutocomplete,
       '@codemirror/commands': cmCommands,
       '@codemirror/language': cmLanguage,
+      '@codemirror/lint': cmLint,
       '@codemirror/state': cmState,
       '@codemirror/view': cmView,
+      '@lezer/common': lezerCommon,
+      '@lezer/highlight': lezerHighlight,
+      '@lezer/lr': lezerLr,
     }[id];
   };
   // adaptation code will set `exports.adaptation = adaptation;`
@@ -91,11 +103,11 @@ export async function loadSequenceAdaptation(
     throw new Error(`Invalid adaptation "${adaptationRow.name}": missing required \`input\` property`);
   }
 
-  if (!Array.isArray(adaptation.outputs) || adaptation.outputs.length === 0) {
+  // Outputs may be empty: a language compiled by an Action (e.g. F Prime `.seq` → `.bin`) has no
+  // in-editor output format.
+  if (!Array.isArray(adaptation.outputs)) {
     console.error('Invalid adaptation - missing outputs', adaptation);
-    throw new Error(
-      `Invalid adaptation "${adaptationRow.name}": missing required \`outputs\` array (must have at least one output format)`,
-    );
+    throw new Error(`Invalid adaptation "${adaptationRow.name}": missing required \`outputs\` array`);
   }
 
   return { adaptation, metadata: adaptationRow };
