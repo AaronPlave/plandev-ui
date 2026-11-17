@@ -4,7 +4,7 @@
   import { permissionHandler } from '../../../utilities/permissionHandler';
 
   import PenIcon from '@nasa-jpl/stellar/icons/pen.svg?component';
-  import { Download, EllipsisVertical, ExpandIcon, FileUp, Trash2 } from 'lucide-svelte';
+  import { Copy, Download, EllipsisVertical, ExpandIcon, FileUp, Trash2 } from 'lucide-svelte';
   import type { Placement } from 'tippy.js';
   import type { TRowData } from '../../../types/data-grid';
   import { tooltip } from '../../../utilities/tooltip';
@@ -27,6 +27,8 @@
   export let downloadTooltip: Tooltip | undefined = undefined;
   export let hasDeletePermission: boolean = true;
   export let hasDeletePermissionError: string | undefined = undefined;
+  export let hasDuplicatePermission: boolean = true;
+  export let duplicateTooltip: Tooltip | undefined = undefined;
   export let hasEditPermission: boolean = true;
   export let hasEditPermissionError: string | undefined = undefined;
   export let rowData: RowData | undefined;
@@ -40,6 +42,7 @@
     | ((data: RowData, progressCallback?: (progress: number) => void, signal?: AbortSignal) => void)
     | undefined = undefined;
   export let viewCallback: ((data: RowData) => void) | undefined = undefined;
+  export let duplicateCallback: ((data: RowData) => void) | undefined = undefined;
   export let menuCallback: ((data: RowData, event: MouseEvent) => void) | undefined = undefined;
   export let menuTooltip: Tooltip | undefined = undefined;
 
@@ -152,6 +155,24 @@
     }}
   >
     <PenIcon />
+  </button>
+{/if}
+{#if duplicateCallback}
+  <button
+    class:st-button={true}
+    class:icon={true}
+    on:click|stopPropagation={() => {
+      if (rowData && hasDuplicatePermission) {
+        duplicateCallback?.(rowData);
+      }
+    }}
+    use:tooltip={hasDuplicatePermission ? duplicateTooltip : undefined}
+    use:permissionHandler={{
+      hasPermission: hasDuplicatePermission,
+      permissionError: `You do not have permission to ${duplicateTooltip?.content.toLowerCase() ?? 'duplicate'}.`,
+    }}
+  >
+    <Copy size={16} />
   </button>
 {/if}
 {#if deleteCallback}

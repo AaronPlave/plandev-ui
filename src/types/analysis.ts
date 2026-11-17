@@ -214,10 +214,13 @@ export type AnalysisSimulationDataset = {
   id: number;
   simulation: {
     plan: {
+      /** External datasets uploaded for one of the simulations read (plan_dataset.simulation_dataset_id). */
+      external_datasets?: (AnalysisPlanExternalDataset & { simulation_dataset_id: number | null })[];
       id: number;
       /** The types the plan's model declares, with their parameters, for filters. */
       mission_model: { activity_types: ActivityType[] } | null;
       name: string;
+      start_time?: string;
     } | null;
   } | null;
   simulation_end_time: string | null;

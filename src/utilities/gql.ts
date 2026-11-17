@@ -1252,6 +1252,20 @@ const gql = {
         id
         simulation {
           plan {
+            external_datasets: datasets(
+              where: { simulation_dataset_id: { _in: $ids } }
+              order_by: { dataset_id: asc }
+            ) {
+              dataset {
+                profiles(order_by: { name: asc }) {
+                  name
+                  type
+                }
+              }
+              dataset_id
+              offset_from_plan_start
+              simulation_dataset_id
+            }
             id
             mission_model {
               activity_types {
@@ -1262,6 +1276,7 @@ const gql = {
               }
             }
             name
+            start_time
           }
         }
         simulation_end_time
@@ -2220,6 +2235,20 @@ const gql = {
         name
         owner
         updated_at
+      }
+    }
+  `,
+
+  GET_VIEW_SUMMARIES: `#graphql
+    query GetViewSummaries {
+      analyses: ${Queries.ANALYSES} {
+        id
+        rows: definition(path: "view.plan.timelines[0].rows")
+      }
+      views: ${Queries.VIEWS} {
+        id
+        rows: definition(path: "plan.timelines[0].rows")
+        sources: definition(path: "analysisLayout.sources")
       }
     }
   `,

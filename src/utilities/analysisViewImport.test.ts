@@ -92,17 +92,14 @@ describe('importing a Plan view timeline into an Analysis', () => {
     // A view's marks are its presentation: they come reusable.
     expect(timeline.annotations).toEqual(source.annotations.map(annotation => ({ ...annotation, reusable: true })));
     expect(timeline.sections).toEqual(source.sections);
-    // The row with only events is gone, from its place in the hierarchy as well.
-    expect(timeline.rows.map(row => row.id)).toEqual([1, 2, 3]);
-    expect(timeline.items).toEqual([
-      { id: 1, type: 'row' },
-      { id: 9, type: 'section' },
-    ]);
+    // External events are the plan's records in an Analysis: every row stays.
+    expect(timeline.rows.map(row => row.id)).toEqual([1, 2, 3, 4]);
+    expect(timeline.items).toEqual(source.items);
     const power = timeline.rows.find(row => row.id === 2) as Row;
     expect(power.height).toBe(222);
     expect(power.yAxes).toEqual(source.rows[1].yAxes);
     expect(timeline.rows[0].autoAdjustHeight).toBe(true);
-    expect(omitted.map(({ layer }) => layer)).toEqual(['Events', 'DSN']);
+    expect(omitted).toEqual([]);
     // The view that was read is not altered.
     expect(source.rows[1].layers[0].sourceId).toBe('plan');
     expect(source.id).toBe(5);
@@ -121,7 +118,27 @@ describe('importing a Plan view timeline into an Analysis', () => {
     expect(sourceOf(1, 11)).toBe('source-1'); // unbound activity layer: the plan
     expect(sourceOf(2, 21)).toBe('source-2'); // 'plan' resource layer: the simulation
     expect(sourceOf(3, 31)).toBe('source-3'); // imported:7 -> revision 26 -> this Analysis's binding
-    expect(kept).toBe(3);
+    expect(sourceOf(3, 32)).toBe('source-1'); // an external-event layer: the plan's events
+    expect(sourceOf(4, 41)).toBe('source-1');
+    expect(kept).toBe(5);
+  });
+
+  it("reads a Plan view's external-event layer as an activity layer of the plan's event types", () => {
+    const source = planViewTimeline();
+    const events = source.rows[2].layers[1];
+    events.filter = { externalEvent: { static_types: ['DSN_Track'] } };
+    (events as unknown as { externalEventColor: string }).externalEventColor = '#123456';
+    const { timeline } = importViewTimeline(source, 0, [plan, simulation], [], choose(null, null));
+    const layer = timeline.rows.find(row => row.id === 3)?.layers.find(({ id }) => id === 32) as Layer & {
+      activityColor: string;
+    };
+    expect(layer.chartType).toBe('activity');
+    expect(layer.filter).toEqual({ activity: { static_types: ['DSN_Track'] } });
+    expect(layer.activityColor).toBe('#123456');
+    expect(layer.sourceId).toBe('source-1'); // the only plan
+    // No plan at all: said, and left out.
+    const none = importViewTimeline(source, 0, [simulation], [], choose(null, null));
+    expect(none.omitted.find(({ layer: name }) => name === 'Events')?.reason).toMatch(/no plan/);
   });
 
   it('can read the Plan activity layers from a simulation instead', () => {
@@ -166,8 +183,9 @@ describe('importing a Plan view timeline into an Analysis', () => {
     expect(timeline.rows).toEqual([]);
     expect(Object.fromEntries(omitted.map(({ layer, reason }) => [layer, reason]))).toEqual({
       Activities: "No source was chosen for the Plan's activity layers",
-      DSN: 'Source "external-events" is not available in an Analysis',
-      Events: 'External events are not available in an Analysis',
+      DSN: "No plan was chosen for the Plan's activity layers, so it is not known which plan's external data they read",
+      Events:
+        "No plan was chosen for the Plan's activity layers, so it is not known which plan's external data they read",
       SOC: 'This Analysis has no simulation to read them from',
       'Tour passes': 'This Analysis has a different revision of "Tour" than the one this view used',
     });
@@ -194,7 +212,7 @@ describe('importing a Plan view timeline into an Analysis', () => {
       ...timeline.rows[1].layers[0],
       id: 22,
       name: 'Other',
-      sourceId: 'external-dataset:2',
+      sourceId: 'imported:99',
     });
     const kept = importViewTimeline(timeline, 0, bindings, [], choose(null, 'source-2'));
     const power = kept.timeline.rows.find(row => row.id === 2) as Row;

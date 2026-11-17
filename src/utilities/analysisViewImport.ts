@@ -1,9 +1,9 @@
 import type { AnalysisSourceBinding } from '../types/analysis';
-import type { Layer, Timeline } from '../types/timeline';
+import type { ActivityLayer, ActivityLayerFilter, ExternalEventLayer, Layer, Timeline } from '../types/timeline';
 import type { TimelineSourceId } from '../types/timelineSource';
 import { isActivityLayer, isExternalEventLayer, removeRowFromTimelineHierarchy } from './timeline';
 import { removeValueAnnotations } from './annotations';
-import { PLAN_SOURCE_ID } from './timelineSources';
+import { EXTERNAL_DATASET_SOURCE_PREFIX, EXTERNAL_EVENTS_SOURCE_ID, PLAN_SOURCE_ID } from './timelineSources';
 
 /*
  * Loading a saved Plan View's timeline into an Analysis. Only the timeline travels. Its layers name sources in the
@@ -105,10 +105,53 @@ export function importViewTimeline(
   const bindingById = new Map(bindings.map(binding => [binding.id, binding]));
   const importedBindings = bindings.flatMap(binding => (binding.kind === 'imported' ? [binding] : []));
 
-  /** The Analysis source a layer reads, or why there is none. */
-  const translate = (layer: Layer): { reason: string } | { sourceId: TimelineSourceId } => {
-    if (isExternalEventLayer(layer)) {
-      return { reason: 'External events are not available in an Analysis' };
+  // External events and external datasets are a plan's in an Analysis: the plan the activity layers read, else the only one.
+  const plans = bindings.filter(binding => binding.kind === 'plan');
+  const eventPlanId =
+    choices.activitySourceId && bindingById.get(choices.activitySourceId)?.kind === 'plan'
+      ? choices.activitySourceId
+      : plans.length === 1
+        ? plans[0].id
+        : null;
+  const noEventPlan = plans.length
+    ? "No plan was chosen for the Plan's activity layers, so it is not known which plan's external data they read"
+    : 'This Analysis has no plan to read external data from';
+
+  /** The Analysis source a layer reads (and the layer as it reads it there), or why there is none. */
+  const translate = (layer: Layer): { reason: string } | { layer?: Layer; sourceId: TimelineSourceId } => {
+    if (isExternalEventLayer(layer) || layer.sourceId === EXTERNAL_EVENTS_SOURCE_ID) {
+      if (!eventPlanId) {
+        return { reason: noEventPlan };
+      }
+      // A plan's external events are records of its source in an Analysis: an activity layer of the same types.
+      const events = layer.filter.externalEvent ?? {};
+      const activityFilter = layer.filter.activity ?? {};
+      return {
+        layer: {
+          ...layer,
+          activityColor: (layer as ExternalEventLayer).externalEventColor ?? (layer as ActivityLayer).activityColor,
+          chartType: 'activity',
+          filter: {
+            activity: {
+              ...activityFilter,
+              static_types: events.static_types ?? activityFilter.static_types,
+              ...(events.dynamic_type_filters
+                ? {
+                    // Both fields are 'Type'.
+                    dynamic_type_filters:
+                      events.dynamic_type_filters as unknown as ActivityLayerFilter['dynamic_type_filters'],
+                  }
+                : {}),
+            },
+          },
+          sourceId: eventPlanId,
+        } as Layer,
+        sourceId: eventPlanId,
+      };
+    }
+    if (layer.sourceId?.startsWith(EXTERNAL_DATASET_SOURCE_PREFIX)) {
+      // The plan's external datasets are its resources, by profile name.
+      return eventPlanId ? { sourceId: eventPlanId } : { reason: noEventPlan };
     }
     if (isUnbound(layer)) {
       const activity = isActivityLayer(layer);
@@ -151,7 +194,7 @@ export function importViewTimeline(
     row.layers.forEach(layer => {
       const result = translate(layer);
       if ('sourceId' in result) {
-        layers.push({ ...layer, sourceId: result.sourceId });
+        layers.push({ ...(result.layer ?? layer), sourceId: result.sourceId });
         kept++;
       } else {
         omitted.push({ layer: layer.name, reason: result.reason, row: row.name });

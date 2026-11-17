@@ -187,9 +187,10 @@ export function notesToAnnotations(notes: AnalysisNote[], timeline: Timeline): T
   return { ...timeline, annotations };
 }
 
-/** Whether an annotation can go with a reused presentation: a record annotation is about one source's data. */
+/** Whether an annotation can go with a saved View: a mark of a time or a value, not a finding about records. */
 export function canBeReusable(annotation: Annotation): boolean {
-  return annotation.anchor.kind !== 'record';
+  // Marks of a time or a value read the same over other data; a record's or a general finding is this analysis's.
+  return annotation.anchor.kind === 'time' || annotation.anchor.kind === 'value';
 }
 
 /** The annotations saved with a layout: the chosen ones (by id) that can be, marked reusable. */

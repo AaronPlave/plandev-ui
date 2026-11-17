@@ -20,7 +20,7 @@ import type {
 
 export const PLAN_SOURCE_ID: TimelineSourceId = 'plan';
 export const EXTERNAL_EVENTS_SOURCE_ID: TimelineSourceId = 'external-events';
-const EXTERNAL_DATASET_SOURCE_PREFIX = 'external-dataset:';
+export const EXTERNAL_DATASET_SOURCE_PREFIX = 'external-dataset:';
 const IMPORTED_SOURCE_PREFIX = 'imported:';
 
 /** A plan_dataset is identified by (plan, dataset); within one plan's registry the dataset id is enough. */

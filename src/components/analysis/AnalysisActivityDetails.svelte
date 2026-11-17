@@ -21,6 +21,7 @@
   import SpanIcon from '../../assets/timeline-span.svg?component';
   import { createEventDispatcher } from 'svelte';
   import {
+    analysisRecordLabels,
     addRecordAnnotation,
     updateAnnotation,
     analysisCompareReference,
@@ -104,6 +105,14 @@
     load(selected);
   }
   $: loadReference($analysisCompareReference);
+  // Named for the inspector's trail.
+  $: if (details) {
+    const key = `${details.ref.sourceId}::${details.ref.activityId}`;
+    const label = details.name || details.type;
+    if ($analysisRecordLabels[key] !== label) {
+      $analysisRecordLabels = { ...$analysisRecordLabels, [key]: label };
+    }
+  }
   // The model's declaration of the type, for a plan's directive or a simulation's span: its arguments by their schema.
   $: declared = getDeclaredType(details, selectedBinding);
   // Each section of values, as the Plan's activity forms show them; an empty one is left out.

@@ -15,7 +15,7 @@
   import { Button } from '@nasa-jpl/stellar-svelte';
   import CaretDownIcon from '@nasa-jpl/stellar/icons/caret_down.svg?component';
   import CaretRightIcon from '@nasa-jpl/stellar/icons/caret_right.svg?component';
-  import { Filter, GripVertical, Trash2 } from 'lucide-svelte';
+  import { Plus, Trash2 } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
   import type { ChartType, Layer, Row } from '../../types/timeline';
   import type { SourceBrowserAction, SourceBrowserNode } from '../../types/timelineSource';
@@ -34,11 +34,19 @@
   /** Items can be browsed but not added to rows. */
   export let readOnly: boolean = false;
   export let rows: Row[] = [];
+  /**
+   * Rows are selected by a click (to inspect them), opened by their caret (or a double-click), and added by drag or
+   * Add. Without it (the Plan page) a group's click opens it.
+   */
+  export let selectable: boolean = false;
+  /** The selected node's id: ids are source-qualified, so the same name in two sources is two nodes. */
+  export let selectedId: string | null = null;
 
   const dispatch = createEventDispatcher<{
     add: { action: SourceBrowserAction; layer?: Layer; row?: Row };
     dragstart: { action: SourceBrowserAction; event: DragEvent };
     remove: { id: string; label: string };
+    select: SourceBrowserNode;
     toggle: { id: string; open: boolean };
   }>();
 
@@ -89,14 +97,22 @@
     {@const action = node.action}
     <div
       class="tree-row item"
+      class:selectable
+      class:selected={selectable && selectedId === node.id}
       style:--depth={depth}
       draggable={!readOnly}
       role="treeitem"
       tabindex="0"
-      aria-selected="false"
+      aria-selected={selectable && selectedId === node.id}
       data-node-id={node.id}
       data-tree-focus
-      title={node.tooltip || undefined}
+      title={node.tooltip || (readOnly ? undefined : `${node.label}: drag to the timeline, or use Add`)}
+      on:click={() => selectable && dispatch('select', node)}
+      on:keydown={event => {
+        if (selectable && event.key === 'Enter' && event.target === event.currentTarget) {
+          dispatch('select', node);
+        }
+      }}
       on:dragstart={onItemDragStart(action)}
       on:mouseenter={() => activate(node.id)}
       on:focusin={() => activate(node.id)}
@@ -110,9 +126,11 @@
       {#if node.badge}
         <span class="badge">{formatBadge(node.badge)}</span>
       {/if}
-      {#if !readOnly}
-        {#if active === node.id}
+      {#if !readOnly && active === node.id}
+        <!-- Over the row's end on hover or focus, so nothing is reserved beside the badges otherwise. -->
+        <span class="actions" role="presentation" on:click|stopPropagation on:keydown|stopPropagation>
           <LayerPicker
+            label="Add to timeline"
             layerItem={action.item}
             sourceId={action.sourceId ?? undefined}
             {rows}
@@ -121,31 +139,61 @@
             on:visibilityChange={({ detail }) => (pickerOpen = detail)}
             let:builders
           >
-            <Button {builders} variant="ghost" size="icon-sm" class="add" aria-label={`Add ${node.label} to row`}>
-              <Filter size={13} />
+            <Button
+              {builders}
+              variant="ghost"
+              size="icon-sm"
+              class="add"
+              title="Add to timeline…"
+              aria-label={`Add ${node.label} to timeline`}
+            >
+              <Plus size={13} />
             </Button>
           </LayerPicker>
-        {:else}
-          <Button variant="ghost" size="icon-sm" class="add" aria-label={`Add ${node.label} to row`} tabindex={-1}>
-            <Filter size={13} />
-          </Button>
-        {/if}
-        <span class="drag"><GripVertical size={13} /></span>
+        </span>
       {/if}
     </div>
   {:else}
     {@const open = isExpanded(node, expanded, searchOpen)}
-    <div class="tree-row group" class:source={node.kind === 'source'} style:--depth={depth} title={node.tooltip}>
+    {@const isSelected = selectable && selectedId === node.id}
+    <div
+      class="tree-row group"
+      class:source={node.kind === 'source'}
+      class:selected={isSelected}
+      style:--depth={depth}
+      title={node.tooltip}
+      role={selectable ? 'treeitem' : undefined}
+      aria-selected={selectable ? isSelected : undefined}
+      aria-expanded={selectable ? open : undefined}
+    >
+      {#if selectable}
+        <button
+          class="caret-slot caret"
+          tabindex={-1}
+          aria-label="{open ? 'Close' : 'Open'} {node.label}"
+          on:click={() => dispatch('toggle', { id: toggleKey(node.id), open })}
+          >{#if open}<CaretDownIcon />{:else}<CaretRightIcon />{/if}</button
+        >
+      {/if}
       <button
         class="toggle"
-        aria-expanded={open}
+        aria-expanded={selectable ? undefined : open}
         data-node-id={node.id}
         data-tree-focus
-        on:click={() => dispatch('toggle', { id: toggleKey(node.id), open })}
+        on:click={() => (selectable ? dispatch('select', node) : dispatch('toggle', { id: toggleKey(node.id), open }))}
+        on:dblclick={() => selectable && dispatch('toggle', { id: toggleKey(node.id), open })}
+        on:keydown={event => {
+          if (selectable && ((event.key === 'ArrowRight' && !open) || (event.key === 'ArrowLeft' && open))) {
+            event.preventDefault();
+            dispatch('toggle', { id: toggleKey(node.id), open });
+          }
+        }}
       >
-        <span class="caret-slot"
-          >{#if open}<CaretDownIcon />{:else}<CaretRightIcon />{/if}</span
-        >
+        {#if !selectable}
+          <span class="caret-slot"
+            >{#if open}<CaretDownIcon />{:else}<CaretRightIcon />{/if}</span
+          >
+        {/if}
         {#if NodeIcon}<NodeIcon size={13} class="icon" />{/if}
         <span class="label">{node.label}</span>
         {#each node.tags ?? [] as tag}
@@ -177,9 +225,12 @@
           {readOnly}
           {rows}
           {searchOpen}
+          {selectable}
+          {selectedId}
           on:add
           on:dragstart
           on:remove
+          on:select
           on:toggle
         />
       {:else if node.emptyMessage}
@@ -243,20 +294,55 @@
     color: var(--st-gray-100);
   }
 
+  .tree-row {
+    position: relative;
+  }
+
+  .tree-row.selected {
+    background: var(--st-utility-blue-10, #e0ecfb);
+    box-shadow: inset 2px 0 0 var(--st-utility-blue);
+  }
+
+  .caret {
+    background: none;
+    border: 0;
+    cursor: pointer;
+    padding: 0;
+  }
+
   .item {
     cursor: grab;
   }
 
-  .item :global(.add) {
-    height: 20px;
-    opacity: 0;
-    width: 20px;
+  .item.selectable {
+    cursor: pointer;
   }
 
-  .item:hover :global(.add),
-  .item:focus-within :global(.add),
-  .item :global(.add[data-state='open']) {
-    opacity: 1;
+  /* Shown over the row's end while hovered or focused (or its menu is open); the row keeps its layout. */
+  .actions {
+    align-items: center;
+    background: linear-gradient(to right, transparent, var(--st-gray-15) 8px);
+    bottom: 0;
+    display: none;
+    padding-left: 10px;
+    position: absolute;
+    right: 0;
+    top: 0;
+  }
+
+  .selected .actions {
+    background: linear-gradient(to right, transparent, var(--st-utility-blue-10, #e0ecfb) 8px);
+  }
+
+  .item:hover .actions,
+  .item:focus-within .actions,
+  .actions:has([data-state='open']) {
+    display: flex;
+  }
+
+  .actions :global(.add) {
+    height: 20px;
+    width: 20px;
   }
 
   .label {
@@ -286,17 +372,6 @@
     flex: none;
     font-size: 11px;
     font-variant-numeric: tabular-nums;
-  }
-
-  .drag {
-    align-items: center;
-    color: var(--st-gray-50);
-    display: flex;
-    opacity: 0;
-  }
-
-  .item:hover .drag {
-    opacity: 1;
   }
 
   .empty {

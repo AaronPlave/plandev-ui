@@ -2,13 +2,14 @@
 
 <!--
   The analysis's inspector, in four tabs. Inspect shows what is selected or followed to, in its own terms: a record (an
-  authored sequence's step shows in its sequence), a source, a sequence; Back returns along what was followed. At Time
+  authored sequence's step shows in its sequence), a source, a sequence, a row of the Sources tree; a compact trail
+  returns along what was followed. At Time
   is what every source says at the cursor; Annotations lists them and edits the one opened; the Timeline Editor edits
   the selected row.
 -->
 <script lang="ts">
-  import { Button, Tabs } from '@nasa-jpl/stellar-svelte';
-  import { ArrowLeft } from 'lucide-svelte';
+  import { Tabs } from '@nasa-jpl/stellar-svelte';
+  import { ChevronRight } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
   import {
     analysisAnnotationFocus,
@@ -16,8 +17,11 @@
     analysisInspectorHistory,
     analysisInspectorTab,
     analysisMaxTimeRange,
+    analysisRecordLabels,
+    analysisTimelineSources,
     inspect,
-    inspectBack,
+    inspectReturnTo,
+    type AnalysisInspectState,
     type AnalysisInspectorTab,
   } from '../../stores/analysis';
   import { timeCursorMs } from '../../stores/plan';
@@ -33,6 +37,7 @@
   import AnalysisActivityDetails from './AnalysisActivityDetails.svelte';
   import AnalysisAnnotations from './AnalysisAnnotations.svelte';
   import AnalysisAtTimePanel from './AnalysisAtTimePanel.svelte';
+  import AnalysisNodeDetails from './AnalysisNodeDetails.svelte';
   import AnalysisSequencePanel from './AnalysisSequencePanel.svelte';
   import AnalysisSourceDetails from './AnalysisSourceDetails.svelte';
 
@@ -65,17 +70,39 @@
   $: authored = getAuthoredSequenceSources(bindings, revisions);
   // An authored sequence's step is inspected in its sequence.
   $: selectedInSequence = selected ? authored.some(({ binding }) => binding.id === selected?.sourceId) : false;
-  $: previous = $analysisInspectorHistory.at(-1);
-  $: backLabel = previous ? describe(previous.target.kind, previous.target) : '';
+  // Where Inspect has been since the last pick in Sources: a trail of what was followed, not a hierarchy.
+  $: trail = $analysisInspectorHistory.map(place => describe(place, $analysisRecordLabels));
+  $: current = describe({ selected, target }, $analysisRecordLabels);
+  $: isSimulationsGroup = target.kind === 'node' && target.nodeId === `${target.sourceId}/simulations`;
 
-  function describe(kind: string, of: typeof target): string {
-    if (of.kind === 'source') {
-      return sourceLabels[of.sourceId] ?? 'the source';
+  function describe({ selected: ref, target: of }: AnalysisInspectState, labels: Record<string, string>): string {
+    switch (of.kind) {
+      case 'source':
+        return sourceLabels[of.sourceId] ?? 'Source';
+      case 'sequence':
+        return `${sourceLabels[of.sourceId] ?? 'Sequence'}${of.entryId ? ' › step' : ''}`;
+      case 'node':
+        return of.nodeId.endsWith('/simulations')
+          ? 'Simulations'
+          : (findLabel(
+              $analysisTimelineSources.sources.find(({ id }) => id === of.sourceId)?.browserNodes ?? [],
+              of.nodeId,
+            ) ?? 'Item');
     }
-    if (of.kind === 'sequence') {
-      return 'the sequence';
+    return ref ? (labels[`${ref.sourceId}::${ref.activityId}`] ?? 'Record') : 'Selection';
+  }
+
+  function findLabel(nodes: { children?: typeof nodes; id: string; label: string }[], id: string): string | null {
+    for (const node of nodes) {
+      if (node.id === id) {
+        return node.label;
+      }
+      const found = node.children ? findLabel(node.children, id) : null;
+      if (found) {
+        return found;
+      }
     }
-    return kind === 'selection' ? 'the previous record' : '';
+    return null;
   }
 
   function onTab(value: string | undefined) {
@@ -99,12 +126,14 @@
       {/each}
     </Tabs.List>
   </Tabs.Root>
-  {#if tab === 'inspect' && previous}
-    <div class="back">
-      <Button size="xs" variant="ghost" class="h-5 gap-1 px-1" on:click={() => inspectBack()}
-        ><ArrowLeft size={12} />Back to {backLabel}</Button
-      >
-    </div>
+  {#if tab === 'inspect' && trail.length}
+    <nav class="trail" aria-label="Followed from">
+      {#each trail as label, index}
+        <button class="crumb" title="Back to {label}" on:click={() => inspectReturnTo(index)}>{label}</button>
+        <ChevronRight size={11} class="sep" />
+      {/each}
+      <span class="crumb current" aria-current="page">{current}</span>
+    </nav>
   {/if}
 
   <div class="body">
@@ -129,8 +158,10 @@
         {user}
         on:goTo
       />
-    {:else if target.kind === 'source'}
+    {:else if target.kind === 'source' || (target.kind === 'node' && isSimulationsGroup)}
       <AnalysisSourceDetails {bindings} {readOnly} sourceId={target.sourceId} {user} />
+    {:else if target.kind === 'node'}
+      <AnalysisNodeDetails nodeId={target.nodeId} {readOnly} sourceId={target.sourceId} />
     {:else if target.kind === 'sequence' || selectedInSequence}
       <AnalysisSequencePanel
         {bindings}
@@ -186,9 +217,39 @@
     padding: 4px 6px;
   }
 
-  .back {
+  .trail {
+    align-items: center;
     border-bottom: 1px solid var(--st-gray-15);
-    padding: 2px 4px;
+    display: flex;
+    font-size: 11px;
+    gap: 2px;
+    min-width: 0;
+    overflow: hidden;
+    padding: 3px 8px;
+    white-space: nowrap;
+  }
+
+  .crumb {
+    background: none;
+    border: 0;
+    color: var(--st-utility-blue);
+    cursor: pointer;
+    max-width: 12em;
+    overflow: hidden;
+    padding: 0;
+    text-overflow: ellipsis;
+  }
+
+  .crumb.current {
+    color: var(--st-gray-80);
+    cursor: default;
+    flex: 1;
+    max-width: none;
+  }
+
+  .trail :global(.sep) {
+    color: var(--st-gray-50);
+    flex: none;
   }
 
   .body {

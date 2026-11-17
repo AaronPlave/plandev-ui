@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 import type { AnalysisSourceBinding } from '../types/analysis';
 import type { Row, Timeline } from '../types/timeline';
 import {
@@ -227,4 +227,19 @@ test('a focused layer is kept only when the target has its records; else the per
   expect(contacts(cleared.timeline)?.layers[0].filter.activity).toEqual({ static_types: ['ALLOCATION'] });
   const remapped = apply({ focusChecks: { [key]: false }, focusChoices: { [key]: 'SEQ_B' } });
   expect(contacts(remapped.timeline)?.layers[0].filter.activity?.within).toEqual(['SEQ_B']);
+});
+
+describe('describeViewContents', () => {
+  test('says rows, the kinds of data drawn and the sources saved with', async () => {
+    const { describeViewContents } = await import('./analysisPresentation');
+    const rows = [
+      { layers: [{ chartType: 'activity' }, { chartType: 'line' }] },
+      { layers: [{ chartType: 'externalEvent' }] },
+    ] as never;
+    expect(describeViewContents(rows, { a: { name: 'cruise015' }, b: { name: 'TOL' }, c: {} })).toBe(
+      '2 rows · activities, resources, external events · from cruise015, TOL +1',
+    );
+    expect(describeViewContents(null, null)).toBe('0 rows');
+    expect(describeViewContents([{ layers: [] }] as never, null)).toBe('1 row');
+  });
 });

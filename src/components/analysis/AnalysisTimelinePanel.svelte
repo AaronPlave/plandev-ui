@@ -6,7 +6,8 @@
   (source, activity id), drawn through the timeline's numeric span selection.
 -->
 <script lang="ts">
-  import { Button } from '@nasa-jpl/stellar-svelte';
+  import { Button, DropdownMenu } from '@nasa-jpl/stellar-svelte';
+  import { ChevronDown, LayoutTemplate } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
   import {
     addSourceActivityRow,
@@ -55,6 +56,7 @@
     inspect: void;
     loadView: void;
     openAtTime: void;
+    saveView: void;
   }>();
   const noSpanMaps: SpanUtilityMaps = {
     directiveIdToSpanIdMap: {},
@@ -162,6 +164,19 @@
   <Panel padBody={false}>
     <svelte:fragment slot="header">
       <div class="st-typography-medium timeline-title">Timeline</div>
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild let:builder>
+          <Button builders={[builder]} size="xs" variant="outline" class="ml-2 h-6 gap-1 px-2" aria-label="Views">
+            <LayoutTemplate size={12} />Views<ChevronDown size={12} />
+          </Button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Content align="start" class="text-xs">
+          <DropdownMenu.Item class="text-xs" disabled={readOnly} on:click={() => dispatch('loadView')}
+            >Use a View…</DropdownMenu.Item
+          >
+          <DropdownMenu.Item class="text-xs" on:click={() => dispatch('saveView')}>Save View…</DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Root>
       <PanelHeaderActions>
         <div class="header-actions timeline-icon-tray">
           <TimelineViewControls
@@ -185,7 +200,7 @@
     <svelte:fragment slot="body">
       {#if $analysisLayoutUndo}
         <div class="undo-bar" role="status">
-          <span>Showing the layout of “{$analysisLayoutUndo.name}”.</span>
+          <span>Using View “{$analysisLayoutUndo.name}”.</span>
           <Button size="xs" variant="outline" on:click={undoAnalysisLayout}>Undo</Button>
           <Button size="xs" variant="ghost" on:click={() => ($analysisLayoutUndo = null)}>Keep it</Button>
         </div>
@@ -268,7 +283,7 @@
         <div class="empty" role="note">
           <div class="text-sm font-medium">Add rows</div>
           <div class="text-muted-foreground">
-            Drag resources or activity types from Sources onto the timeline, or use the filter button beside an item.
+            Drag resources or activity types from Sources onto the timeline, or use Add beside an item.
           </div>
           {#if !readOnly}
             <div class="flex flex-wrap gap-2">
@@ -277,7 +292,7 @@
                   Show all activities of {source.label}
                 </Button>
               {/each}
-              <Button size="sm" variant="outline" on:click={() => dispatch('loadView')}>Use a saved layout</Button>
+              <Button size="sm" variant="outline" on:click={() => dispatch('loadView')}>Use a saved View…</Button>
             </div>
           {/if}
         </div>

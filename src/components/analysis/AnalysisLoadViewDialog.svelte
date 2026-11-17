@@ -1,10 +1,10 @@
 <svelte:options immutable={true} />
 
 <!--
-  The step of Use a Layout for a Plan's view (chosen there; this is not a separate way in). Review what comes across:
+  The step of Use a View for a Plan's view (chosen there; this is not a separate way in). Review what comes across:
   the timeline replaces this analysis's timeline and nothing else changes (sources, name, ownership), and the view
   itself is only read. Layers name sources in the Plan's terms, so each is translated to one of this analysis's
-  sources or left out and listed here first; nothing is guessed. Back returns to the layout list.
+  sources or left out and listed here first; nothing is guessed. Back returns to the list of Views.
 -->
 <script lang="ts">
   import { Button, Dialog } from '@nasa-jpl/stellar-svelte';
@@ -95,7 +95,7 @@
     if (result && loaded && replaceAnalysisTimeline(result.timeline, user, loaded.name)) {
       const omitted = result.omitted.length;
       showSuccessToast(
-        `Loaded the timeline of "${loaded.name}"${omitted ? `; ${omitted} layer${omitted === 1 ? '' : 's'} left out` : ''}`,
+        `Using View "${loaded.name}"${omitted ? `; ${omitted} layer${omitted === 1 ? '' : 's'} left out` : ''}`,
       );
       open = false;
     }
@@ -105,9 +105,10 @@
 <Dialog.Root bind:open>
   <Dialog.Content class="flex max-h-[85vh] max-w-[680px] flex-col gap-3">
     <Dialog.Header>
-      <Dialog.Title>Use a Plan View{loaded ? ` “${loaded.name}”` : ''}</Dialog.Title>
+      <Dialog.Title>Use View{loaded ? ` “${loaded.name}”` : ''}</Dialog.Title>
       <Dialog.Description>
-        Its layers name a plan's data; choose which of this analysis's sources they read. The view is not changed.
+        Saved in a plan, its layers show a plan's data. Choose which data to show in this View. The saved View is not
+        changed.
       </Dialog.Description>
     </Dialog.Header>
 
@@ -123,8 +124,8 @@
 
         {#if currentRows}
           <div class="rounded border border-destructive/50 p-2" role="alert">
-            This replaces the rows this analysis has now ({currentRows}); you can undo it. Its sources, notes, time
-            guides, name and sharing stay as they are.
+            This replaces the current View ({currentRows} rows); you can undo it. The analysis's sources, annotations, name
+            and sharing stay as they are.
           </div>
         {/if}
 
@@ -212,7 +213,7 @@
           }}>Back</Button
         >
         <Button variant={currentRows ? 'destructive' : 'default'} disabled={result.kept === 0} on:click={load}>
-          {currentRows ? 'Replace Timeline' : 'Load Timeline'}
+          {currentRows ? 'Replace Current View' : 'Use View'}
         </Button>
       </Dialog.Footer>
     {/if}

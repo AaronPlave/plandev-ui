@@ -391,3 +391,36 @@ export function applyPresentation(
   timeline.id = current.id;
   return { issues, kept, timeline, total };
 }
+
+/**
+ * What a saved view shows, in a line for the Views picker: its rows, the kinds of data its layers draw, and the sources
+ * it was saved with (an analysis's view names them; a Plan's view reads its plan).
+ */
+export function describeViewContents(
+  rows: Pick<Row, 'layers'>[] | null,
+  sources: Record<string, { name?: string }> | null,
+): string {
+  const kinds = new Set<string>();
+  (rows ?? []).forEach(row =>
+    row.layers.forEach(layer => {
+      if (layer.chartType === 'line' || layer.chartType === 'x-range') {
+        kinds.add('resources');
+      } else if (layer.chartType === 'externalEvent') {
+        kinds.add('external events');
+      } else if (layer.chartType === 'activity') {
+        kinds.add('activities');
+      }
+    }),
+  );
+  const count = rows?.length ?? 0;
+  const names = Object.values(sources ?? {}).map(({ name }) => name ?? 'a source');
+  return [
+    `${count} row${count === 1 ? '' : 's'}`,
+    ['activities', 'resources', 'external events'].filter(kind => kinds.has(kind)).join(', '),
+    names.length
+      ? `from ${names.length > 2 ? `${names.slice(0, 2).join(', ')} +${names.length - 2}` : names.join(', ')}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}

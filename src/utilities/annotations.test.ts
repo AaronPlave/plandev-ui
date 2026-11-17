@@ -70,3 +70,39 @@ test('guides made from annotations and set back keep what guides do not carry', 
   expect(edited[0]).toMatchObject({ anchor: { start: 'b' }, createdBy: 'me', reusable: true });
   expect(setHorizontalGuides(annotations, row, []).map(({ id }) => id)).toEqual([0, 2]);
 });
+
+test('v4 → v5 keeps value ranges and label styles; a v5 view is left as it is', async () => {
+  const { applyViewDefinitionMigrations } = await import('./view');
+  const v4 = {
+    plan: {
+      timelines: [
+        {
+          id: 0,
+          rows: [
+            {
+              horizontalGuides: [{ id: 0, label: { position: 'right', text: 'Band' }, y: 1, y2: 3, yAxisId: 2 }],
+              id: 1,
+              name: 'Rate',
+            },
+          ],
+          verticalGuides: [],
+        },
+      ],
+    },
+    version: 4,
+  } as unknown as ViewDefinition;
+  const { migratedViewDefinition, anyMigrationsApplied } = applyViewDefinitionMigrations(v4);
+  expect(anyMigrationsApplied).toBe(true);
+  expect(migratedViewDefinition?.plan.timelines[0].annotations).toEqual([
+    {
+      anchor: { kind: 'value', rowId: 1, rowName: 'Rate', y: 1, y2: 3, yAxisId: 2 },
+      id: 0,
+      label: 'Band',
+      labelStyle: { position: 'right' },
+    },
+  ]);
+  // Migrating again (a v5 view) adds nothing: no duplicated annotations.
+  const again = applyViewDefinitionMigrations(migratedViewDefinition as ViewDefinition);
+  expect(again.anyMigrationsApplied).toBe(false);
+  expect(again.migratedViewDefinition?.plan.timelines[0].annotations).toHaveLength(1);
+});

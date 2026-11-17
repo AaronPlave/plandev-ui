@@ -5,6 +5,10 @@ import type { Span } from '../../types/simulation';
 import { getActivityDrawingId, importedActivityToSpan, simulationSpanToActivity } from '../../utilities/analysis';
 import AnalysisActivityTable from './AnalysisActivityTable.svelte';
 
+vi.mock('../../stores/analysis', async () => {
+  const { writable } = await import('svelte/store');
+  return { analysisActivityTableFilter: writable(null) };
+});
 const effects = vi.hoisted(() => ({ getAnalysisActivities: vi.fn(), getAnalysisActivityCount: vi.fn() }));
 vi.mock('../../utilities/effects', () => ({ default: effects }));
 vi.stubGlobal(

@@ -1,17 +1,18 @@
 <svelte:options immutable={true} />
 
 <!--
-  Use a Layout: the one way to bring a prepared presentation (rows, sections, layers, axes, styles, its annotations) to
-  this analysis's data. A layout comes from a saved view (one saved from an analysis, or a Plan's view) or from another
-  analysis. Choose it, confirm which of this analysis's sources each of its sources becomes (the same data and another
-  revision of the same source are filled in, and said to be what they are), and use it. Problems are summed up in a
-  line and listed only on request. The layout it came from is only read; this analysis keeps its sources and its own
-  annotations, and the replacement can be undone.
+  Views: use a saved View on this analysis's data, or save the current View. A View is the presentation (rows, sections,
+  layers, axes, styles, and the time and value marks deliberately saved with it). It can come from a View saved in an
+  analysis, a Plan's view, or another analysis's current View. When every source it was saved with is here, using it
+  is one step; otherwise choose which of this analysis's data each of its sources shows (the same data, or another
+  revision of the same source, is filled in and said to be what it is). Problems are summed up in a line and listed
+  only on request. Using a View never changes this analysis's sources or its own annotations, and can be undone.
 
   A Plan's view is handed to the Plan-view loader (`planView`), which maps the Plan's own layers instead.
 -->
 <script lang="ts">
-  import { Button, Dialog } from '@nasa-jpl/stellar-svelte';
+  import { Button, Dialog, Input } from '@nasa-jpl/stellar-svelte';
+  import { ChevronDown, ChevronRight } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
   import {
     analyses,
@@ -28,6 +29,7 @@
     saveAnalysisLayoutAsView,
     type AnalysisPresentation,
   } from '../../stores/analysis';
+  import { plugins } from '../../stores/plugins';
   import { initialViewsLoading, view, views } from '../../stores/views';
   import type { SourceActivityLink } from '../../types/analysis';
   import type { User } from '../../types/app';
@@ -41,15 +43,17 @@
     getResourceRenameKey,
     getRoleMatch,
     getSourceCatalog,
+    describeViewContents,
     type PresentationIssue,
     type RoleMapping,
   } from '../../utilities/analysisPresentation';
-  import { canBeReusable, describeAnchor } from '../../utilities/analysisAnnotations';
+  import { canBeReusable, describeAnchor, getAnnotationTimes } from '../../utilities/analysisAnnotations';
   import effects from '../../utilities/effects';
+  import { formatDate } from '../../utilities/time';
   import { showSuccessToast } from '../../utilities/toast';
   import DataGrid from '../ui/DataGrid/DataGrid.svelte';
 
-  /** 'save': open on saving this analysis's layout as a view. */
+  /** 'save': open on saving the current View. */
   export let mode: 'save' | 'use' = 'use';
   export let open: boolean = false;
   /** Names of this analysis's sources, by binding id. */
@@ -59,6 +63,7 @@
   const dispatch = createEventDispatcher<{ planView: number }>();
 
   type Choice = {
+    contents: string;
     id: number;
     kind: 'analysis' | 'layout' | 'view';
     name: string;
@@ -66,17 +71,32 @@
     updated_at: string;
   };
 
+  /** Where a View was saved: that decides how its layers find their data (a Plan's view reads a plan's). */
   const KIND_LABELS: Record<Choice['kind'], string> = {
-    analysis: 'Analysis',
-    layout: 'Saved layout',
-    view: 'Plan view',
+    analysis: 'Another analysis',
+    layout: 'Analysis',
+    view: 'Plan',
   };
 
   const columnDefs: DataGridColumnDef<Choice>[] = [
-    { field: 'name', filter: 'text', headerName: 'Name', resizable: true, sortable: true },
+    {
+      field: 'name',
+      filter: 'text',
+      headerName: 'Name',
+      resizable: true,
+      sortable: true,
+      tooltipField: 'name',
+      width: 260,
+    },
+    {
+      field: 'contents',
+      headerName: 'Shows',
+      resizable: true,
+      tooltipField: 'contents',
+    },
     {
       field: 'kind',
-      headerName: 'Kind',
+      headerName: 'Saved in',
       resizable: true,
       sortable: true,
       valueFormatter: ({ value }: { value: Choice['kind'] }) => KIND_LABELS[value],
@@ -95,6 +115,9 @@
   ];
 
   let filter: string = '';
+  /** What each View shows (by grid row id), read when the picker opens. */
+  let contents: Record<string, string> | null = null;
+  let annotationsOpen: boolean = false;
   /** By getFocusKey: whether the target has a focused layer's records, and the records of that name it has. */
   let focusChecks: Record<string, boolean> = {};
   let focusCandidates: Record<string, SourceActivityLink[]> = {};
@@ -110,11 +133,25 @@
   let saving: boolean | null = null;
   let selectedId: RowId | null = null;
   let showDetails: boolean = false;
+  /** Set when a View is chosen: used at once if nothing needs deciding. */
+  let pendingImmediate: boolean = false;
 
   $: if (!open) {
     reset();
   } else if (mode === 'save' && saving === null && !loaded) {
     saving = false;
+  }
+  $: if (open && contents === null) {
+    loadContents();
+  }
+
+  async function loadContents() {
+    contents = {};
+    const summaries = await effects.getViewSummaries(user);
+    contents = Object.fromEntries([
+      ...summaries.views.map(({ id, rows, sources }) => [`view:${id}`, describeViewContents(rows, sources)]),
+      ...summaries.analyses.map(({ id, rows }) => [`analysis:${id}`, describeViewContents(rows, null)]),
+    ]);
   }
   $: targets = $analysisSourceBindings;
   $: targetCatalogs = Object.fromEntries(
@@ -191,6 +228,7 @@
   $: choices = [
     ...$views.map(
       ({ analysis_layout, id, name, owner, updated_at }): Choice => ({
+        contents: contents?.[`view:${id}`] ?? '',
         id,
         kind: analysis_layout ? 'layout' : 'view',
         name,
@@ -200,15 +238,42 @@
     ),
     ...($analyses ?? [])
       .filter(({ id }) => id !== $analysis?.id)
-      .map(({ id, name, owner, updated_at }): Choice => ({ id, kind: 'analysis', name, owner, updated_at })),
+      .map(
+        ({ id, name, owner, updated_at }): Choice => ({
+          contents: contents?.[`analysis:${id}`] ?? '',
+          id,
+          kind: 'analysis',
+          name,
+          owner,
+          updated_at,
+        }),
+      ),
   ];
-  // What the layout brings: its reusable annotations (limits, reference marks), never another analysis's findings.
+  // What the View brings: the time and value marks saved with it, never another analysis's findings.
   $: reusableCount = loaded?.timeline.annotations.filter(({ reusable }) => reusable).length ?? 0;
   $: currentRows = current?.rows.length ?? 0;
-  // What could go with a saved layout (not record annotations), starting from what is marked part of the layout.
+  // Marks that can be saved with a View (a time, a range, a value): none is included unless chosen, except those that
+  // came with the View in use (they are its own).
   $: markChoices = (current?.annotations ?? []).filter(canBeReusable);
   $: if (saving !== null && layoutAnnotations === null) {
     layoutAnnotations = new Set(markChoices.filter(({ reusable }) => reusable).map(({ id }) => id));
+  }
+  // Nothing to decide: every source it was saved with is here, as the same data, and every row is ready.
+  // (A focused row's records are checked asynchronously: such a View always shows its step.)
+  $: immediate =
+    !!loaded &&
+    !!result &&
+    roles.every(role => {
+      const target = targets.find(({ id }) => id === mapping[role.sourceId]);
+      return !!target && getRoleMatch(role, target) === 'same';
+    }) &&
+    result.issues.length === 0 &&
+    getFocusedLayers(loaded.timeline).length === 0;
+  $: if (pendingImmediate && result) {
+    pendingImmediate = false;
+    if (immediate) {
+      apply();
+    }
   }
 
   type RowStatus = { id: number; name: string; notes: string[]; status: 'attention' | 'ready' | 'unavailable' };
@@ -249,8 +314,11 @@
     saveName = '';
     saving = null;
     layoutAnnotations = null;
+    annotationsOpen = false;
+    pendingImmediate = false;
     selectedId = null;
     showDetails = false;
+    contents = null;
   }
 
   /** Resources the person can replace: missing ones, and ones of another type, each once. */
@@ -312,7 +380,13 @@
       loaded = read;
       mapping = getInitialRoleMapping(getPresentationRoles(read.timeline, read.bindings), targets);
       resourceRenames = {};
+      pendingImmediate = true;
     }
+  }
+
+  function formatAnnotationTime(startMs: number, endMs?: number): string {
+    const format = (ms: number) => formatDate(new Date(ms), $plugins.time.primary.format);
+    return endMs !== undefined && endMs !== startMs ? `${format(startMs)} – ${format(endMs)}` : format(startMs);
   }
 
   async function save() {
@@ -331,73 +405,96 @@
       replaceAnalysisTimeline(result.timeline, user, loaded.name, { bringAnnotations, dataless: result.total === 0 })
     ) {
       const left = result.total - result.kept;
-      showSuccessToast(
-        `Using the layout of "${loaded.name}"${left ? `; ${left} layer${left === 1 ? '' : 's'} left out` : ''}`,
-      );
+      showSuccessToast(`Using View "${loaded.name}"${left ? `; ${left} layer${left === 1 ? '' : 's'} left out` : ''}`);
       open = false;
+      // Also when used at once from a reactive statement, where the `!open` reset has already run this tick.
+      reset();
     }
   }
 </script>
 
 <Dialog.Root bind:open>
-  <Dialog.Content class="flex max-h-[88vh] max-w-[680px] flex-col gap-3">
+  <Dialog.Content class="flex max-h-[88vh] max-w-[920px] flex-col gap-3">
     {#if saving !== null}
       <Dialog.Header>
-        <Dialog.Title>Save This Layout as a View</Dialog.Title>
-        <Dialog.Description>
-          Its rows, sections, axes and styles, to use in any analysis, with the annotations chosen below. Annotations
-          about records always stay with this analysis.
-        </Dialog.Description>
+        <Dialog.Title>Save View</Dialog.Title>
+        <Dialog.Description>Save the current timeline arrangement to reuse in other analyses.</Dialog.Description>
       </Dialog.Header>
-      <input
-        class="st-input w-full"
-        placeholder="View name, e.g. DSN contact review"
-        aria-label="View name"
-        bind:value={saveName}
-        on:keydown={event => event.key === 'Enter' && saveName.trim() && save()}
-      />
+      <div class="flex flex-col gap-1 text-xs">
+        <label for="save-view-name">Name</label>
+        <Input
+          id="save-view-name"
+          placeholder="e.g. DSN contact review"
+          aria-label="View name"
+          sizeVariant="xs"
+          bind:value={saveName}
+          on:keydown={event => event.key === 'Enter' && saveName.trim() && save()}
+        />
+      </div>
       {#if markChoices.length && layoutAnnotations}
         {@const chosen = layoutAnnotations}
-        <fieldset class="flex max-h-[240px] flex-col gap-1 overflow-auto text-xs">
-          <legend class="mb-1 text-muted-foreground">Annotations to include (with their descriptions)</legend>
-          {#each markChoices as item (item.id)}
-            <label class="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={chosen.has(item.id)}
-                on:change={event => {
-                  const next = new Set(chosen);
-                  if (event.currentTarget.checked) {
-                    next.add(item.id);
-                  } else {
-                    next.delete(item.id);
-                  }
-                  layoutAnnotations = next;
-                }}
-              />
-              <span class="truncate">{item.label || 'Untitled'}</span>
-              <span class="truncate text-muted-foreground">{describeAnchor(item)}</span>
-            </label>
-          {/each}
-        </fieldset>
+        <div class="text-xs">
+          <button
+            class="flex items-center gap-1 text-muted-foreground"
+            aria-expanded={annotationsOpen}
+            on:click={() => (annotationsOpen = !annotationsOpen)}
+          >
+            {#if annotationsOpen}<ChevronDown size={12} />{:else}<ChevronRight size={12} />{/if}
+            Include annotations…{chosen.size ? ` (${chosen.size} included)` : ''}
+          </button>
+          {#if annotationsOpen}
+            <fieldset class="mt-1 flex max-h-[220px] flex-col gap-1 overflow-auto pl-4">
+              <legend class="mb-1 text-muted-foreground">
+                Time and value marks that make sense over other data (limits, reference times). Findings and notes on
+                records stay with this analysis.
+              </legend>
+              {#each markChoices as item (item.id)}
+                {@const times = getAnnotationTimes(item)}
+                <label class="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={chosen.has(item.id)}
+                    on:change={event => {
+                      const next = new Set(chosen);
+                      if (event.currentTarget.checked) {
+                        next.add(item.id);
+                      } else {
+                        next.delete(item.id);
+                      }
+                      layoutAnnotations = next;
+                    }}
+                  />
+                  <span class="min-w-0 truncate">
+                    {#if item.label}<span class="font-medium">{item.label}</span> ·{/if}
+                    <span class="text-muted-foreground"
+                      >{describeAnchor(item)}{times.startMs !== undefined
+                        ? ` · ${formatAnnotationTime(times.startMs, times.endMs)}`
+                        : ''}</span
+                    >
+                  </span>
+                </label>
+              {/each}
+            </fieldset>
+          {/if}
+        </div>
       {/if}
       <Dialog.Footer>
-        <Button variant="outline" on:click={() => (saving = null)}>Back</Button>
+        {#if mode === 'use'}
+          <Button variant="outline" on:click={() => (saving = null)}>Back</Button>
+        {:else}
+          <Button variant="outline" on:click={() => (open = false)}>Cancel</Button>
+        {/if}
         <Button disabled={!saveName.trim() || saving} on:click={save}>{saving ? 'Saving…' : 'Save View'}</Button>
       </Dialog.Footer>
     {:else if !loaded}
       <Dialog.Header>
-        <Dialog.Title>Use a Layout</Dialog.Title>
-        <Dialog.Description
-          >Show this analysis's data with a saved view or another analysis's layout.</Dialog.Description
-        >
+        <Dialog.Title>Use a View</Dialog.Title>
+        <Dialog.Description>
+          Show this analysis's data with a saved View. It replaces the current View (you can undo it); the analysis's
+          sources and its own annotations stay.
+        </Dialog.Description>
       </Dialog.Header>
-      <input
-        bind:value={filter}
-        class="st-input w-full"
-        placeholder="Filter by name or owner"
-        aria-label="Filter layouts"
-      />
+      <Input bind:value={filter} placeholder="Filter Views" aria-label="Filter Views" sizeVariant="xs" />
       <!-- Enter on the grid does what Next does (Space or a click selects a row). -->
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <div class="h-[300px]" on:keydown={event => event.key === 'Enter' && choose(selectedId)}>
@@ -409,28 +506,23 @@
           getRowId={getChoiceId}
           rowData={choices}
           rowSelection="single"
-          noRowsOverlayText="No saved views or other analyses"
+          noRowsOverlayText="No saved Views"
           on:rowDoubleClicked={({ detail: { data } }) => choose(getChoiceId(data))}
         />
       </div>
       <Dialog.Footer class="sm:justify-between">
-        <Button variant="ghost" disabled={!currentRows} on:click={() => (saving = false)}>
-          Save this layout as a view…
-        </Button>
+        <Button variant="ghost" disabled={!currentRows} on:click={() => (saving = false)}>Save Current View…</Button>
         <div class="flex gap-2">
           <Button variant="outline" on:click={() => (open = false)}>Cancel</Button>
           <Button disabled={selectedId === null || loading} on:click={() => choose(selectedId)}>
-            {loading ? 'Reading…' : 'Next'}
+            {loading ? 'Reading…' : 'Use View'}
           </Button>
         </div>
       </Dialog.Footer>
     {:else if result}
       <Dialog.Header>
-        <Dialog.Title>Use “{loaded.name}”</Dialog.Title>
-        <Dialog.Description>
-          {loaded.kind === 'view' ? 'A saved view' : 'Another analysis'}'s layout, showing this analysis's data. It is
-          not changed.
-        </Dialog.Description>
+        <Dialog.Title>Use View “{loaded.name}”</Dialog.Title>
+        <Dialog.Description>Choose which data to show in this View. The saved View is not changed.</Dialog.Description>
       </Dialog.Header>
       <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-auto text-xs">
         <section aria-label="Data to show">
@@ -543,7 +635,7 @@
         {#if reusableCount}
           <label class="flex items-center gap-2 text-muted-foreground">
             <input type="checkbox" bind:checked={bringAnnotations} />
-            Bring its {reusableCount} layout annotation{reusableCount === 1 ? '' : 's'} (limits, reference marks)
+            Include its {reusableCount} saved mark{reusableCount === 1 ? '' : 's'} (limits, reference times)
           </label>
         {/if}
       </div>
@@ -551,7 +643,7 @@
         {#if currentRows}
           Replaces this analysis's {currentRows} row{currentRows === 1 ? '' : 's'}; you can undo it.
         {/if}
-        This analysis keeps its sources and its own annotations; its layout annotations are replaced.{loaded.kind ===
+        This analysis keeps its sources and its own annotations; marks that came with the current View are replaced.{loaded.kind ===
         'analysis'
           ? ` The findings of "${loaded.name}" stay there.`
           : ''}
@@ -560,7 +652,7 @@
         <Button variant="outline" on:click={() => (loaded = null)}>Back</Button>
         <!-- A layout with no data layers (rows, sections, guides only) is used as it is. -->
         <Button disabled={result.total > 0 && result.kept === 0} on:click={apply}>
-          {currentRows ? `Replace Layout (${result.timeline.rows.length} rows)` : 'Use Layout'}
+          {currentRows ? `Replace Current View (${result.timeline.rows.length} rows)` : 'Use View'}
         </Button>
       </Dialog.Footer>
     {/if}

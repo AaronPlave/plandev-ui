@@ -116,7 +116,9 @@ export type AnalysisInspectorTab = 'annotations' | 'editor' | 'inspect' | 'time'
 export type AnalysisInspectTarget =
   | { entryId?: string; kind: 'sequence'; sourceId: string }
   | { kind: 'selection' }
-  | { kind: 'source'; sourceId: string };
+  | { kind: 'source'; sourceId: string }
+  /** A row of a source's contents in the Sources tree (a group, a resource, an activity type), by its node id. */
+  | { kind: 'node'; nodeId: string; sourceId: string };
 /** Anything the inspector can be asked to show: an Inspect target, or another tab (an annotation in its tab). */
 export type AnalysisInspectorTarget =
   | AnalysisInspectTarget
@@ -188,11 +190,12 @@ export function isInspected(ref: AnalysisActivityRef | null): boolean {
 /** Set while Back puts back the selection it had: that is not a new place to remember. */
 let restoringSelection = false;
 
-export function inspectBack() {
+/** Returns to the `index`th place of the trail (the history), dropping the places after it. */
+export function inspectReturnTo(index: number) {
   const history = get(analysisInspectorHistory);
-  const previous = history.at(-1);
+  const previous = history[index];
   if (previous) {
-    analysisInspectorHistory.set(history.slice(0, -1));
+    analysisInspectorHistory.set(history.slice(0, index));
     inspected = previous;
     analysisInspectorTab.set('inspect');
     analysisInspector.set(previous.target);
@@ -200,6 +203,22 @@ export function inspectBack() {
     selectedAnalysisActivity.set(previous.selected);
   }
 }
+
+export function inspectBack() {
+  inspectReturnTo(get(analysisInspectorHistory).length - 1);
+}
+
+/** Shows something picked directly (in Sources, on the timeline, in the table): the trail starts over from it. */
+export function inspectAfresh(target: AnalysisInspectTarget) {
+  analysisInspectorRequests.update(n => n + 1);
+  resetInspector(target);
+}
+
+/** Asks the activity table to list one source's records of one type (from the inspector). Page state. */
+export const analysisActivityTableFilter: Writable<{ sourceId: string; type: string } | null> = writable(null);
+
+/** What each activity Inspect has shown is called, by `sourceId::activityId`: the trail's labels. */
+export const analysisRecordLabels: Writable<Record<string, string>> = writable({});
 
 /**
  * Resources the At Time inspector was asked to watch, each of one source (by the analysis's own binding id) and its
@@ -341,6 +360,8 @@ export const analysisTimelineSources: Readable<TimelineSourceRegistry> = derived
       simulationDatasets: $datasets,
       simulationTypeCounts: $typeCounts,
       sourceRecovery: $recovery,
+      subscribeExternalDatasetProfile: (datasetId, name, start, { user }) =>
+        createProfileSubscription(datasetId, name, start, user),
       subscribeImportedActivities: (binding, revision, request, { user }) =>
         createLoadedActivitySubscription(() =>
           getRevisionActivities(
@@ -592,6 +613,7 @@ export async function openAnalysis(initial: Analysis, user: User | null, context
 export function closeAnalysis() {
   // Changes already captured are still sent, for the analysis they were made in.
   flushAnalysisSave();
+  analysisActivityTableFilter.set(null);
   sourceDetailsRequest++;
   analysis.set(null);
   analysisSourceBindings.set([]);
@@ -1046,7 +1068,7 @@ export async function readViewForTimelineImport(
 export function replaceAnalysisTimeline(
   timeline: Timeline,
   user: User | null,
-  name: string = 'another layout',
+  name: string = 'another View',
   { bringAnnotations = true, dataless = false }: { bringAnnotations?: boolean; dataless?: boolean } = {},
 ): boolean {
   const current = get(analysis);
@@ -1394,7 +1416,7 @@ export async function saveAnalysisLayoutAsView(
   };
   const id = await effects.createNamedView(definition, name, user);
   if (id !== null) {
-    showSuccessToast(`Saved the layout as view "${name}": use it in any analysis from Use a Layout`);
+    showSuccessToast(`Saved View "${name}": use it in any analysis from Views`);
   }
   return id;
 }

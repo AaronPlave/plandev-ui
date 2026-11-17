@@ -8,6 +8,7 @@
   import { Button, DropdownMenu, Resizable } from '@nasa-jpl/stellar-svelte';
   import {
     ChevronUp,
+    Copy,
     Ellipsis,
     Link,
     LayoutTemplate,
@@ -20,6 +21,7 @@
   import { onDestroy } from 'svelte';
   import AnalysisActivityTable from '../../../components/analysis/AnalysisActivityTable.svelte';
   import AnalysisAddSourceDialog from '../../../components/analysis/AnalysisAddSourceDialog.svelte';
+  import AnalysisDuplicateDialog from '../../../components/analysis/AnalysisDuplicateDialog.svelte';
   import AnalysisApplyPresentationDialog from '../../../components/analysis/AnalysisApplyPresentationDialog.svelte';
   import AnalysisInspector from '../../../components/analysis/AnalysisInspector.svelte';
   import AnalysisLoadViewDialog from '../../../components/analysis/AnalysisLoadViewDialog.svelte';
@@ -30,6 +32,7 @@
   import {
     addAnalysisSource,
     analysis,
+    analysisActivityTableFilter,
     analysisInspector,
     analysisInspectorRequests,
     analysisInspectorTab,
@@ -51,6 +54,7 @@
     showAnalysisActivityType,
     flushAnalysisSave,
     inspect,
+    inspectAfresh,
     type AnalysisInspectorTarget,
   } from '../../../stores/analysis';
   import { timeCursorMs, viewTimeRange } from '../../../stores/plan';
@@ -59,7 +63,7 @@
   import { getAuthoredSequenceSources } from '../../../utilities/analysisSequence';
   import { featurePermissions } from '../../../utilities/permissions';
   import { showFailureToast, showSuccessToast } from '../../../utilities/toast';
-  import type { AnalysisActivityRef } from '../../../types/analysis';
+  import type { AnalysisActivityRef, AnalysisSlim } from '../../../types/analysis';
   import type { PageData } from './$types';
 
   export let data: PageData;
@@ -89,6 +93,7 @@
   let loadViewId: number | null = null;
   let layoutOpen: boolean = false;
   let layoutMode: 'save' | 'use' = 'use';
+  let duplicating: AnalysisSlim | null = null;
 
   /*
    * Where this person last looked in each analysis, kept in their browser only: reopening it returns there, and it
@@ -161,8 +166,9 @@
   }
 
   /** Selects an activity and brings it into view; the inspector shows it unless asked to stay where it is. */
-  function select(ref: AnalysisActivityRef, startMs: number, endMs: number, show: boolean = true) {
+  function select(ref: AnalysisActivityRef, startMs: number, endMs: number, show: boolean = true, followed = false) {
     keepInspector = !show;
+    following = followed;
     $selectedAnalysisActivity = ref;
     timelinePanel?.reveal(startMs, endMs);
   }
@@ -170,6 +176,8 @@
   // A newly selected activity is what the inspector shows, except in At Time (a mode the person chose) or when the
   // selection was made from the inspector to stay there (a step of the sequence shown).
   let keepInspector = false;
+  /** The selection was followed to from the inspector (a related record): the trail goes on from where it was. */
+  let following = false;
   let lastSelected: AnalysisActivityRef | null = null;
   $: if ($selectedAnalysisActivity !== lastSelected) {
     lastSelected = $selectedAnalysisActivity;
@@ -180,9 +188,18 @@
       $analysisInspectorTab !== 'time' &&
       $analysisInspectorTab !== 'editor'
     ) {
-      inspect({ kind: 'selection' });
+      if (following) {
+        inspect({ kind: 'selection' });
+      } else {
+        inspectAfresh({ kind: 'selection' });
+      }
     }
     keepInspector = false;
+    following = false;
+  }
+  // Asked to list records: the table opens if it was closed.
+  $: if ($analysisActivityTableFilter) {
+    tablePane?.expand();
   }
   // Asked to show something: the inspector opens if it was closed.
   $: if ($analysisInspectorRequests) {
@@ -320,18 +337,30 @@
             on:click={() => openLayout('use')}
           >
             <LayoutTemplate size={14} />
-            Use a layout…
+            Use a View…
           </DropdownMenu.Item>
           <DropdownMenu.Item
             class="flex cursor-pointer items-center gap-2 text-[13px]"
             on:click={() => openLayout('save')}
           >
             <Presentation size={14} />
-            Save layout as a view…
+            Save View…
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            class="flex cursor-pointer items-center gap-2 text-[13px]"
+            disabled={!$user || !featurePermissions.analysis.canCreate($user)}
+            on:click={async () => {
+              // The copy is of what is saved: anything still being saved is sent first.
+              await flushAnalysisSave();
+              duplicating = $analysis;
+            }}
+          >
+            <Copy size={14} />
+            Duplicate…
           </DropdownMenu.Item>
           <DropdownMenu.Item class="flex cursor-pointer items-center gap-2 text-[13px]" on:click={copyLink}>
             <Link size={14} />
-            Copy link to this view
+            Copy link to this time range
           </DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Root>
@@ -370,6 +399,7 @@
                   on:addSource={({ detail }) => openAddSource(detail)}
                   on:editRow={() => openInspector({ kind: 'editor' })}
                   on:loadView={() => openLayout('use')}
+                  on:saveView={() => openLayout('save')}
                   on:inspect={() => openInspector({ kind: 'selection' })}
                   on:openAtTime={() => openInspector({ kind: 'time' })}
                 />
@@ -435,7 +465,8 @@
             timelinePanel?.zoomTo(startMs, endMs);
           }}
           on:reveal={({ detail }) => timelinePanel?.reveal(detail.startMs, detail.endMs)}
-          on:select={({ detail: { endMs, inspect: show, ref, startMs } }) => select(ref, startMs, endMs, show ?? true)}
+          on:select={({ detail: { endMs, inspect: show, ref, startMs } }) =>
+            select(ref, startMs, endMs, show ?? true, true)}
           on:zoom={({ detail }) => timelinePanel?.zoomTo(detail.startMs, detail.endMs)}
         />
       </Resizable.Pane>
@@ -470,6 +501,8 @@
     loadViewOpen = true;
   }}
 />
+
+<AnalysisDuplicateDialog bind:analysis={duplicating} user={$user} />
 
 <svelte:window
   on:beforeunload={event => {

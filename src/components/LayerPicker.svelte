@@ -12,6 +12,8 @@
   export let layerItem: TimelineItemType | undefined = undefined;
   /** The item's source: only layers reading the same source can take it. Any layer when not given. */
   export let sourceId: TimelineSourceId | undefined = undefined;
+  /** The menu's heading: what choosing a row does. */
+  export let label: string = 'Add Filter to Row';
 
   const dispatch = createEventDispatcher<{
     select: { item?: TimelineItemType; layer?: Layer; row?: Row };
@@ -41,7 +43,7 @@
     aria-label={`layer-picker-${chartType}-${layerItem?.name}`}
     align="start"
   >
-    <DropdownMenu.Label size="sm">Add Filter to Row</DropdownMenu.Label>
+    <DropdownMenu.Label size="sm">{label}</DropdownMenu.Label>
     {#if rows.length < 1}
       <div class="st-typography-label empty">No rows found</div>
     {/if}

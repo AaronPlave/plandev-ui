@@ -509,6 +509,13 @@ export type AnalysisSourcesInput = {
   simulationTypeCounts: Record<number, { count: number; name: string }[]>;
   /** What is left of each source (by id) whose bound revision is gone; null when the source is gone too. */
   sourceRecovery?: Record<number, SourceRecovery | null>;
+  /** A profile of an external dataset uploaded for a simulation, from `start` (its plan's start plus its offset). */
+  subscribeExternalDatasetProfile?: (
+    datasetId: number,
+    name: string,
+    start: string,
+    context: TimelineResourceSubscriptionContext,
+  ) => TimelineResourceSubscription;
   subscribeImportedActivities: (
     binding: AnalysisSourceBinding,
     revision: AnalysisSourceRevision,
@@ -1117,8 +1124,41 @@ function createSimulationDatasetSource(
   const present = dataset ? input.simulationTypeCounts[dataset.id] : undefined;
   const plan = dataset?.simulation?.plan;
   const modelTypes = plan?.mission_model?.activity_types ?? [];
+  // External datasets uploaded for this simulation: its external resources. A simulated profile of the same name wins,
+  // as on the Plan page (the model's profiles, then the attached external datasets).
+  const simulated = new Set(catalog.map(({ name }) => name));
+  const external = new Map<string, { dataset: AnalysisPlanExternalDataset; type: ResourceType }>();
+  (plan?.external_datasets ?? [])
+    .filter(({ simulation_dataset_id }) => simulation_dataset_id === dataset?.id)
+    .forEach(each =>
+      each.dataset?.profiles.forEach(profile => {
+        if (!simulated.has(profile.name) && !external.has(profile.name)) {
+          external.set(profile.name, { dataset: each, type: { name: profile.name, schema: profile.type.schema } });
+        }
+      }),
+    );
+  const externalCatalog = [...external.values()].map(({ type }) => type);
   return {
     browserNodes: [
+      ...(externalCatalog.length
+        ? [
+            {
+              badge: `${externalCatalog.length}`,
+              children: externalCatalog.map(resourceType => ({
+                action: { item: resourceType, sourceId, typeName: 'resource' as const },
+                id: `${sourceId}/external-resource/${resourceType.name}`,
+                kind: 'item' as const,
+                label: resourceType.name,
+                tags: [resourceType.schema.type],
+                tooltip: `External dataset ${external.get(resourceType.name)?.dataset.dataset_id}, uploaded for this simulation`,
+              })),
+              id: `${sourceId}/external-resources`,
+              kind: 'group' as const,
+              label: 'External resources',
+              tooltip: 'Profiles of the external datasets uploaded for this simulation',
+            },
+          ]
+        : []),
       {
         badge: `${catalog.length}`,
         children: catalog.map(resourceType => ({
@@ -1167,17 +1207,25 @@ function createSimulationDatasetSource(
     kind: 'simulation',
     label,
     resources: {
-      catalog,
+      catalog: [...catalog, ...externalCatalog],
       loading: input.loading,
       revisionKey: dataset ? `simulation-dataset:${dataset.id}` : getUnavailableKey(unavailableReason),
-      subscribe: (name, context) =>
-        dataset && !unavailableReason
+      subscribe: (name, context) => {
+        const found = external.get(name);
+        if (dataset && !unavailableReason && found && plan?.start_time && input.subscribeExternalDatasetProfile) {
+          const start = new Date(
+            Date.parse(plan.start_time) + getIntervalInMs(found.dataset.offset_from_plan_start),
+          ).toISOString();
+          return input.subscribeExternalDatasetProfile(found.dataset.dataset_id, name, start, context);
+        }
+        return dataset && !unavailableReason
           ? input.subscribeSimulationProfile(binding, dataset, name, context)
           : createStaticResourceSubscription({
               error: unavailableReason ?? '',
               loading: input.loading,
               resource: null,
-            }),
+            });
+      },
       unavailableReason,
     },
   };

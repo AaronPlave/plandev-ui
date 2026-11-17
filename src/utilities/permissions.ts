@@ -885,6 +885,7 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
   GET_USER_SEQUENCE_FROM_SEQ_JSON: () => true,
   GET_USER_SEQUENCE_SEQ_JSON: () => true,
   GET_VIEW: () => true,
+  GET_VIEW_SUMMARIES: () => true,
   INITIAL_SIMULATION_UPDATE: (user: User | null): boolean => {
     return isUserAdmin(user) || getPermission([Queries.UPDATE_SIMULATIONS], user);
   },

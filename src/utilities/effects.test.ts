@@ -630,3 +630,27 @@ describe('Handle modal and requests in effects', () => {
     });
   });
 });
+
+describe('getView', () => {
+  it('migrates an older view in memory and never writes it', async () => {
+    const v4 = {
+      created_at: '',
+      definition: {
+        plan: { timelines: [{ id: 0, rows: [], verticalGuides: [{ id: 1, label: { text: 'L' }, timestamp: 't' }] }] },
+        version: 4,
+      },
+      id: 5,
+      name: 'Old',
+      owner: 'someone',
+      updated_at: '',
+    };
+    const request = vi.spyOn(Requests, 'reqHasura').mockResolvedValue({ view: v4 });
+    const view = await effects.getView(new URLSearchParams('?viewId=5'), mockUser);
+    expect(view?.definition.version).toBe(5);
+    expect(view?.definition.plan.timelines[0].annotations).toEqual([
+      { anchor: { kind: 'time', start: 't' }, id: 1, label: 'L' },
+    ]);
+    // One read, no update.
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+});

@@ -31,7 +31,6 @@
   import type { Annotation, AnnotationAnchor } from '../../types/timeline';
   import {
     ANNOTATION_COLOR,
-    canBeReusable,
     describeAnchor,
     getAnnotationTimes,
     getStaleReason,
@@ -316,19 +315,6 @@
             />
             Color
           </label>
-          {#if canBeReusable(of)}
-            <label
-              class="check"
-              title="Saved with this analysis's layout and brought when the layout is used in another analysis (a limit, a reference mark). Otherwise it stays with this analysis."
-            >
-              <input
-                type="checkbox"
-                checked={!!of.reusable}
-                on:change={event => updateAnnotation(of.id, { reusable: event.currentTarget.checked || undefined })}
-              />
-              Part of the layout
-            </label>
-          {/if}
         </div>
       {/if}
 
@@ -348,8 +334,10 @@
             <dt>Changed</dt>
             <dd>{time(Date.parse(of.updatedAt))}</dd>
           {/if}
-          <dt>Kept</dt>
-          <dd>{of.reusable ? 'With this analysis and its saved layouts' : 'With this analysis only'}</dd>
+          {#if of.reusable}
+            <dt>Came with</dt>
+            <dd>The View in use: replaced when another View is used</dd>
+          {/if}
         </dl>
       </Collapse>
     {/if}
@@ -401,7 +389,7 @@
           <button class="entry" style:--color={entry.color ?? ANNOTATION_COLOR} on:click={() => open(entry)}>
             <span class="line">
               <span class="name">{entry.label || 'Untitled'}</span>
-              {#if entry.reusable}<span class="tag" title="Part of the layout">Layout</span>{/if}
+              {#if entry.reusable}<span class="tag" title="Came with the View in use">View</span>{/if}
               <span class="when">{times.startMs !== undefined ? time(times.startMs) : ''}</span>
             </span>
             <span class="what"

@@ -4402,6 +4402,23 @@ const effects = {
     return false;
   },
 
+  /**
+   * A new analysis (owned by `user`) with the definition of `id` as last saved: its sources (the same revisions), View
+   * and annotations. Read from the database, so no page's unsaved or conflicting state comes with it.
+   */
+  async duplicateAnalysis(id: number, name: string, user: User | null): Promise<number | null> {
+    const original = await effects.getAnalysis(id, user);
+    if (!original) {
+      showFailureToast('Analysis Duplicate Failed');
+      return null;
+    }
+    const copy = await effects.createAnalysis(name, structuredClone(original.definition), user);
+    if (copy !== null) {
+      showSuccessToast(`Duplicated "${original.name}" as "${name}"`);
+    }
+    return copy;
+  },
+
   duplicateTimelineRow(row: Row, timeline: Timeline, timelines: Timeline[]): Row | null {
     const newRow = duplicateRow(row, timelines, timeline.id);
     if (newRow && addTimelineRowAfter(timeline, row, newRow, true)) {
@@ -6276,15 +6293,11 @@ const effects = {
           }
 
           // Otherwise perform any needed migrations
+          // Migrated in memory only: opening a view never writes it (a reader may not own it, and the stored
+          // definition stays as it was until someone saves the view on purpose, which saves the migrated form).
           const { migratedView, error, anyMigrationsApplied } = await applyViewMigrations(view);
           if (migratedView && anyMigrationsApplied) {
-            logMessage('log', `Applied migrations to view "${view.name}".`);
-            await effects.updateView(
-              migratedView.id,
-              { definition: migratedView.definition },
-              'View Automatically Migrated',
-              user,
-            );
+            logMessage('log', `Migrated view "${view.name}" in memory (not saved).`);
           }
 
           // If migration failed catch the error and return default view
@@ -6300,6 +6313,30 @@ const effects = {
     } catch (e) {
       catchError('log', 'Unable to retrieve view', e as Error);
       return null;
+    }
+  },
+
+  /**
+   * What each saved view (and each analysis's current view) shows, read only for the Views picker: the first
+   * timeline's rows and, for a view saved from an analysis, its source roles.
+   */
+  async getViewSummaries(user: User | null): Promise<{
+    analyses: { id: number; rows: Row[] | null }[];
+    views: { id: number; rows: Row[] | null; sources: Record<string, { name?: string }> | null }[];
+  }> {
+    try {
+      const data = await reqHasura<{ id: number; rows: Row[] | null; sources?: Record<string, { name?: string }> }[]>(
+        gql.GET_VIEW_SUMMARIES,
+        {},
+        user,
+      );
+      return {
+        analyses: data.analyses ?? [],
+        views: (data.views ?? []).map(({ id, rows, sources }) => ({ id, rows, sources: sources ?? null })),
+      };
+    } catch (e) {
+      catchError('log', 'Unable to read what the saved views show', e as Error);
+      return { analyses: [], views: [] };
     }
   },
 

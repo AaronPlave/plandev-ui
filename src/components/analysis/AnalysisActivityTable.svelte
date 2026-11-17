@@ -8,6 +8,7 @@
   import { createGrid, type ColDef, type GridApi, type IDatasource, type RowClassParams } from 'ag-grid-community';
   import { debounce } from 'lodash-es';
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
+  import { analysisActivityTableFilter } from '../../stores/analysis';
   import { plugins } from '../../stores/plugins';
   import type { AnalysisActivityRef, AnalysisActivityRow, AnalysisSourceBinding } from '../../types/analysis';
   import type { User } from '../../types/app';
@@ -58,6 +59,17 @@
   let version = 0;
   /** The selection this table just made itself, until it arrives back as `selected`: it needs no scrolling to. */
   let clicked: AnalysisActivityRef | null = null;
+
+  // Asked from the inspector: this source's records of this type, wherever they are.
+  $: applyRequestedFilter($analysisActivityTableFilter);
+
+  function applyRequestedFilter(request: { sourceId: string; type: string } | null) {
+    if (request) {
+      ({ sourceId, type: typeInput } = request);
+      textInput = '';
+      scope = 'all';
+    }
+  }
 
   const setText = debounce((value: string) => (text = value), 300);
   $: setText(textInput);

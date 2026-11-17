@@ -1,8 +1,8 @@
 <svelte:options immutable={true} />
 
 <!--
-  One source of the analysis in the Sources tree. Click its name to inspect it, double-click (or the caret) to open it;
-  open, it lists what can be added to the timeline. An authored sequence lists the sequence itself first, one click
+  One source of the analysis in the Sources tree. Every row of it is selected (and inspected) by a click and opened by
+  its caret or a double-click; open, it lists what can be added to the timeline (drag, or Add on hover). An authored sequence lists the sequence itself first, one click
   from its inspector. A plan lists its directives and a Simulations group: its simulations in the analysis, each a
   source of its own nested here for navigation, and the others to browse and add. Uncommon actions are in its menu.
 -->
@@ -45,7 +45,7 @@
   import CaretRightIcon from '@nasa-jpl/stellar/icons/caret_right.svg?component';
   import { CalendarRange, Database, Ellipsis, ListOrdered, Play } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
-  import { analysisInspector, inspect } from '../../stores/analysis';
+  import { analysisInspector, inspectAfresh } from '../../stores/analysis';
   import type { AnalysisPlanSimulationDataset, AnalysisSourceBinding } from '../../types/analysis';
   import type { Layer, Row } from '../../types/timeline';
   import type { SourceBrowserAction } from '../../types/timelineSource';
@@ -93,6 +93,10 @@
   $: browseOpen = !searching && !!expanded[`${binding.id}/browse`];
   $: selected = $analysisInspector.kind === 'source' && $analysisInspector.sourceId === binding.id;
   $: sequenceSelected = $analysisInspector.kind === 'sequence' && $analysisInspector.sourceId === binding.id;
+  // A row of this source's contents, when one is what Inspect shows.
+  $: selectedNodeId =
+    $analysisInspector.kind === 'node' && $analysisInspector.sourceId === binding.id ? $analysisInspector.nodeId : null;
+  $: simulationsNodeId = `${binding.id}/simulations`;
   $: icon = binding.kind === 'plan' ? CalendarRange : binding.kind === 'simulation' ? Play : Database;
   $: showSequence = entry?.sequence && (!searching || result?.labelMatch || result?.sequenceMatch);
 
@@ -124,7 +128,7 @@
       data-tree-focus
       aria-expanded={open}
       title="{label}{entry?.unavailableReason ? ` · ${entry.unavailableReason}` : ''}"
-      on:click={() => inspect({ kind: 'source', sourceId: binding.id })}
+      on:click={() => inspectAfresh({ kind: 'source', sourceId: binding.id })}
       on:dblclick={() => toggle(key, open)}
       on:keydown={event => {
         if ((event.key === 'ArrowRight' && !open) || (event.key === 'ArrowLeft' && open)) {
@@ -150,7 +154,7 @@
           <DropdownMenu.Item class="text-xs" href={entry.file.href}>Open in SeqDev</DropdownMenu.Item>
         {/if}
         {#if !readOnly}
-          <DropdownMenu.Item class="text-xs" on:click={() => inspect({ kind: 'source', sourceId: binding.id })}
+          <DropdownMenu.Item class="text-xs" on:click={() => inspectAfresh({ kind: 'source', sourceId: binding.id })}
             >Rename in this analysis…</DropdownMenu.Item
           >
           <DropdownMenu.Separator />
@@ -170,7 +174,7 @@
         style:--depth={depth + 1}
         data-tree-focus
         title="Inspect the sequence: its steps in order, their timing and arguments"
-        on:click={() => inspect({ kind: 'sequence', sourceId: binding.id })}
+        on:click={() => inspectAfresh({ kind: 'sequence', sourceId: binding.id })}
       >
         <span class="caret-slot" />
         <ListOrdered size={13} class="icon" />
@@ -186,24 +190,44 @@
       {readOnly}
       {rows}
       searchOpen={searching ? (result?.groupsOpen ?? null) : null}
+      selectable
+      selectedId={selectedNodeId}
       on:add
       on:dragstart
+      on:select={({ detail }) => inspectAfresh({ kind: 'node', nodeId: detail.id, sourceId: binding.id })}
       on:toggle
     />
     {#if !result?.nodes.length && !showSequence && entry?.unavailableReason}
       <div class="tree-row empty" style:--depth={depth + 1}><span class="caret-slot" />{entry.unavailableReason}</div>
     {/if}
     {#if binding.kind === 'plan' && (attachedShown.length || (!searching && simulations.length))}
-      <div class="tree-row group" style:--depth={depth + 1}>
+      <div
+        class="tree-row group"
+        class:selected={selectedNodeId === simulationsNodeId}
+        style:--depth={depth + 1}
+        role="treeitem"
+        aria-selected={selectedNodeId === simulationsNodeId}
+        aria-expanded={simulationsOpen}
+      >
+        <button
+          class="caret-slot"
+          tabindex={-1}
+          aria-label="{simulationsOpen ? 'Close' : 'Open'} Simulations"
+          on:click={() => toggle(simulationsKey, simulationsOpen)}
+          >{#if simulationsOpen}<CaretDownIcon />{:else}<CaretRightIcon />{/if}</button
+        >
         <button
           class="toggle"
           data-tree-focus
-          aria-expanded={simulationsOpen}
-          on:click={() => toggle(simulationsKey, simulationsOpen)}
+          on:click={() => inspectAfresh({ kind: 'node', nodeId: simulationsNodeId, sourceId: binding.id })}
+          on:dblclick={() => toggle(simulationsKey, simulationsOpen)}
+          on:keydown={event => {
+            if ((event.key === 'ArrowRight' && !simulationsOpen) || (event.key === 'ArrowLeft' && simulationsOpen)) {
+              event.preventDefault();
+              toggle(simulationsKey, simulationsOpen);
+            }
+          }}
         >
-          <span class="caret-slot"
-            >{#if simulationsOpen}<CaretDownIcon />{:else}<CaretRightIcon />{/if}</span
-          >
           <Play size={13} class="icon" />
           <span class="label">Simulations</span>
           <span class="badge" title="{attached.length} in this analysis of {simulations.length}"
