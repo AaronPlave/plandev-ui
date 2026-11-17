@@ -12,7 +12,7 @@ import type {
   TimelineItemMetadata,
   TimelineItemType,
 } from '../types/timeline';
-import type { View, ViewGrid, ViewSlim, ViewTable, ViewToggleEvent } from '../types/view';
+import type { View, ViewGrid, ViewGridSection, ViewSlim, ViewTable, ViewToggleEvent } from '../types/view';
 import { getTarget } from '../utilities/generic';
 import gql from '../utilities/gql';
 import {
@@ -44,6 +44,12 @@ export const view: Writable<View | null> = writable(null);
 export const originalView: Writable<View | null> = writable(null);
 
 export const selectedLayerId: Writable<number | null> = writable(null);
+
+/**
+ * The grid panel temporarily expanded over the plan workspace, or null. Presentation only: the view
+ * definition (and so the saved layout) is never changed by it.
+ */
+export const expandedGridSection: Writable<ViewGridSection | null> = writable(null);
 
 export const selectedRowId: Writable<number | null> = writable(null);
 

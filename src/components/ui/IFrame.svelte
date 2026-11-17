@@ -7,11 +7,12 @@
   import { activityDirectivesMap, selectActivity, selectedActivityDirectiveId } from '../../stores/activities';
   import { plan, planRevision, timeCursorMs, viewTimeRange } from '../../stores/plan';
   import { selectedSpanId, simulationDatasetId, simulationDatasetsPlan, spansMap } from '../../stores/simulation';
-  import { view } from '../../stores/views';
-  import type { ViewIFrame } from '../../types/view';
+  import { expandedGridSection, view } from '../../stores/views';
+  import type { ViewGridSection, ViewIFrame } from '../../types/view';
   import { contextMessage, originOf, parseEmbedRequest, type EmbedContext } from '../../utilities/embedBridge';
 
   export let iFrameId: number;
+  export let gridSection: ViewGridSection;
 
   /** Upper bound on context posts while the time cursor is being dragged. */
   const POST_INTERVAL_MS = 100;
@@ -24,6 +25,7 @@
   $: iFrame = $view?.definition.plan.iFrames.find(iFrame => iFrame.id === iFrameId);
   $: origin = originOf(iFrame?.src);
   $: context = {
+    expanded: $expandedGridSection === gridSection,
     planId: $plan?.id ?? null,
     // The live revision (a subscription), not the revision the page loaded with.
     planRevision: $planRevision >= 0 ? $planRevision : ($plan?.revision ?? null),
@@ -104,6 +106,11 @@
         selectActivity(directive.id, null, false);
         reveal(directive.start_time_ms);
       }
+    } else if (request?.type === 'expandPanel') {
+      // Only this panel; the user restores it from PlanDev's own control or Escape as well.
+      expandedGridSection.set(gridSection);
+    } else if (request?.type === 'restorePanel' && $expandedGridSection === gridSection) {
+      expandedGridSection.set(null);
     } else if (request?.type === 'openPlan' && request.planId !== $plan?.id) {
       // Stay in the current view; the plan page enforces the user's own permissions on the target plan.
       goto(`${base}/plans/${request.planId}${$view ? `?viewId=${$view.id}` : ''}`);

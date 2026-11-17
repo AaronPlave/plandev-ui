@@ -14,11 +14,13 @@
     Crosshair,
     FlipHorizontal2,
     LucideEdit,
+    Maximize2,
+    Minimize2,
     PlaySquare,
     Table2,
   } from 'lucide-svelte';
   import DirectiveAndSpanIcon from '../../assets/timeline-directive-and-span.svg?component';
-  import { viewUpdateGrid } from '../../stores/views';
+  import { expandedGridSection, viewUpdateGrid } from '../../stores/views';
   import type { ViewGrid, ViewGridComponent, ViewGridSection } from '../../types/view';
 
   export let gridSection: ViewGridSection;
@@ -173,3 +175,12 @@
     </DropdownMenu.Item>
   </DropdownMenu.Content>
 </DropdownMenu.Root>
+
+<button
+  class="st-button icon order-last ml-auto flex-shrink-0"
+  aria-label={$expandedGridSection === gridSection ? 'Restore panel' : 'Expand panel'}
+  title={$expandedGridSection === gridSection ? 'Restore the grid (Esc)' : 'Expand this panel over the workspace'}
+  on:click={() => expandedGridSection.set($expandedGridSection === gridSection ? null : gridSection)}
+>
+  {#if $expandedGridSection === gridSection}<Minimize2 size={14} />{:else}<Maximize2 size={14} />{/if}
+</button>

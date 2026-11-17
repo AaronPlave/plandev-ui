@@ -2,8 +2,8 @@
  * Narrow postMessage protocol between a plan's IFrame panel and the application embedded in it.
  *
  * PlanDev → embedded app: the plan context (plan, revision, simulation dataset, time cursor, selection).
- * Embedded app → PlanDev: requests to move the time cursor, select an activity, or open another plan
- * (in the current view), and a "ready" ping.
+ * Embedded app → PlanDev: requests to move the time cursor, select an activity, open another plan
+ * (in the current view), show a simulation, expand or restore its own panel, and a "ready" ping.
  *
  * Only identifiers and times cross the bridge: no credentials, tokens, or simulation results. The
  * embedded app fetches its own data with its own credentials.
@@ -12,6 +12,8 @@
 export const EMBED_PROTOCOL = 'plandev.embed.v1';
 
 export type EmbedContext = {
+  /** Whether PlanDev shows the app's panel expanded over the plan workspace. */
+  expanded: boolean;
   planId: number | null;
   planRevision: number | null;
   selectedActivityDirectiveId: number | null;
@@ -29,7 +31,10 @@ export type EmbedRequest =
   | { endMs?: number; timeMs: number; type: 'setTime' }
   | { directiveId: number | null; spanId: number | null; type: 'select' }
   | { planId: number; type: 'openPlan' }
-  | { simulationDatasetId: number; type: 'showSimulation' };
+  | { simulationDatasetId: number; type: 'showSimulation' }
+  /** Ask PlanDev to expand the app's own panel over the workspace, or to restore the grid. PlanDev decides. */
+  | { type: 'expandPanel' }
+  | { type: 'restorePanel' };
 
 export function contextMessage(context: EmbedContext) {
   return { protocol: EMBED_PROTOCOL, type: 'context', ...context };
@@ -55,7 +60,9 @@ export function parseEmbedRequest(data: unknown): EmbedRequest | null {
   const m = data as Record<string, unknown>;
   switch (m.type) {
     case 'ready':
-      return { type: 'ready' };
+    case 'expandPanel':
+    case 'restorePanel':
+      return { type: m.type };
     case 'setTime':
       if (typeof m.timeMs !== 'number' || !Number.isFinite(m.timeMs)) {
         return null;

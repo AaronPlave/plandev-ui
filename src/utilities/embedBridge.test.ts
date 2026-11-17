@@ -13,6 +13,11 @@ describe('embedBridge', () => {
 
   test('parseEmbedRequest validates protocol, type, and fields', () => {
     expect(parseEmbedRequest({ protocol: EMBED_PROTOCOL, type: 'ready' })).toEqual({ type: 'ready' });
+    expect(parseEmbedRequest({ protocol: EMBED_PROTOCOL, type: 'expandPanel' })).toEqual({ type: 'expandPanel' });
+    // Only the type crosses: a panel name or other field from the app is dropped.
+    expect(parseEmbedRequest({ gridSection: 'LeftTop', protocol: EMBED_PROTOCOL, type: 'restorePanel' })).toEqual({
+      type: 'restorePanel',
+    });
     expect(parseEmbedRequest({ protocol: EMBED_PROTOCOL, timeMs: 5, type: 'setTime' })).toEqual({
       timeMs: 5,
       type: 'setTime',
@@ -53,8 +58,9 @@ describe('embedBridge', () => {
     expect(parseEmbedRequest('ready')).toBeNull();
   });
 
-  test('contextMessage carries only identifiers and time', () => {
+  test('contextMessage carries only identifiers, time and panel state', () => {
     const msg = contextMessage({
+      expanded: false,
       planId: 7,
       planRevision: 3,
       selectedActivityDirectiveId: null,
@@ -63,6 +69,7 @@ describe('embedBridge', () => {
       timeMs: 1000,
     });
     expect(Object.keys(msg).sort()).toEqual([
+      'expanded',
       'planId',
       'planRevision',
       'protocol',

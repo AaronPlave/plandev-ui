@@ -25,6 +25,6 @@
   </svelte:fragment>
 
   <svelte:fragment slot="body">
-    <IFrame {iFrameId} />
+    <IFrame {iFrameId} {gridSection} />
   </svelte:fragment>
 </Panel>

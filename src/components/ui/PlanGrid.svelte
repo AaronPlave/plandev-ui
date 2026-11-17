@@ -1,7 +1,8 @@
 <svelte:options immutable={true} />
 
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onDestroy } from 'svelte';
+  import { expandedGridSection } from '../../stores/views';
   import type { User } from '../../types/app';
   import type { ViewGridComponent } from '../../types/view';
   import ActivityDirectivesTablePanel from '../activity/ActivityDirectivesTablePanel.svelte';
@@ -68,6 +69,15 @@
     TimelineItemsPanel,
   };
 
+  // Expansion is per page visit: leaving the plan page restores the grid.
+  onDestroy(() => expandedGridSection.set(null));
+
+  function onKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape' && $expandedGridSection !== null && !event.defaultPrevented) {
+      expandedGridSection.set(null);
+    }
+  }
+
   function onChangeColumnSizes(event: CustomEvent<string>) {
     dispatch('changeColumnSizes', event.detail);
   }
@@ -85,20 +95,40 @@
   }
 </script>
 
-<CssGrid class="plan-grid" columns={columnSizes} on:changeColumnSizes={onChangeColumnSizes}>
+<svelte:window on:keydown={onKeydown} />
+
+<!-- An expanded panel is the same element (and component instance) restyled over the grid, so an iframe in
+     it is never reloaded; the grid's sizes are untouched and come back as they were. -->
+<CssGrid class="plan-grid plan-grid-root" columns={columnSizes} on:changeColumnSizes={onChangeColumnSizes}>
+  {#if $expandedGridSection !== null}
+    <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+    <div class="plan-grid-backdrop" title="Restore the grid" on:click={() => expandedGridSection.set(null)} />
+  {/if}
   {#if !leftHidden}
     {#if leftSplit}
       <CssGrid class="plan-grid" rows={leftRowSizes} on:changeRowSizes={onChangeLeftRowSizes}>
-        <div class="plan-grid-component" data-component-name={leftComponentTop}>
+        <div
+          class="plan-grid-component"
+          class:expanded={$expandedGridSection === 'LeftTop'}
+          data-component-name={leftComponentTop}
+        >
           <svelte:component this={gridComponentsByName[leftComponentTop]} gridSection="LeftTop" {user} />
         </div>
         <CssGridGutter track={1} type="row" />
-        <div class="plan-grid-component" data-component-name={leftComponentBottom}>
+        <div
+          class="plan-grid-component"
+          class:expanded={$expandedGridSection === 'LeftBottom'}
+          data-component-name={leftComponentBottom}
+        >
           <svelte:component this={gridComponentsByName[leftComponentBottom]} gridSection="LeftBottom" {user} />
         </div>
       </CssGrid>
     {:else}
-      <div class="plan-grid-component" data-component-name={leftComponentTop}>
+      <div
+        class="plan-grid-component"
+        class:expanded={$expandedGridSection === 'LeftTop'}
+        data-component-name={leftComponentTop}
+      >
         <svelte:component this={gridComponentsByName[leftComponentTop]} gridSection="LeftTop" {user} />
       </div>
     {/if}
@@ -112,7 +142,11 @@
         <TimelinePanel {user} />
       </div>
       <CssGridGutter track={1} type="row" />
-      <div class="plan-grid-component" data-component-name={middleComponentBottom}>
+      <div
+        class="plan-grid-component"
+        class:expanded={$expandedGridSection === 'MiddleBottom'}
+        data-component-name={middleComponentBottom}
+      >
         <svelte:component this={gridComponentsByName[middleComponentBottom]} gridSection="MiddleBottom" {user} />
       </div>
     </CssGrid>
@@ -127,16 +161,28 @@
 
     {#if rightSplit}
       <CssGrid class="plan-grid" rows={rightRowSizes} on:changeRowSizes={onChangeRightRowSizes}>
-        <div class="plan-grid-component" data-component-name={rightComponentTop}>
+        <div
+          class="plan-grid-component"
+          class:expanded={$expandedGridSection === 'RightTop'}
+          data-component-name={rightComponentTop}
+        >
           <svelte:component this={gridComponentsByName[rightComponentTop]} gridSection="RightTop" {user} />
         </div>
         <CssGridGutter track={1} type="row" />
-        <div class="plan-grid-component" data-component-name={rightComponentBottom}>
+        <div
+          class="plan-grid-component"
+          class:expanded={$expandedGridSection === 'RightBottom'}
+          data-component-name={rightComponentBottom}
+        >
           <svelte:component this={gridComponentsByName[rightComponentBottom]} gridSection="RightBottom" {user} />
         </div>
       </CssGrid>
     {:else}
-      <div class="plan-grid-component" data-component-name={rightComponentTop}>
+      <div
+        class="plan-grid-component"
+        class:expanded={$expandedGridSection === 'RightTop'}
+        data-component-name={rightComponentTop}
+      >
         <svelte:component this={gridComponentsByName[rightComponentTop]} gridSection="RightTop" {user} />
       </div>
     {/if}
@@ -148,10 +194,34 @@
     overflow: auto;
   }
 
+  :global(.plan-grid-root) {
+    position: relative;
+  }
+
   .plan-grid-component {
     display: grid;
     height: 100%;
     overflow-y: auto;
     width: 100%;
+  }
+
+  /* The grid cell stays in place (so the other panels keep their tracks); its panel is lifted over the grid. */
+  .plan-grid-component.expanded > :global(*) {
+    background: var(--st-utility-white, #fff);
+    border: 1px solid var(--st-gray-30, #ccc);
+    border-radius: 4px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    height: auto;
+    inset: 8px;
+    position: absolute;
+    width: auto;
+    z-index: 30;
+  }
+
+  .plan-grid-backdrop {
+    background: rgba(0, 0, 0, 0.25);
+    inset: 0;
+    position: absolute;
+    z-index: 29;
   }
 </style>
