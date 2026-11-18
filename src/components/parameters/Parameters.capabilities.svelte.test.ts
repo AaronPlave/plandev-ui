@@ -4,6 +4,8 @@ import type { FormParameter } from '../../types/parameter';
 import { parameterCapabilities } from '../../utilities/parameters';
 import Parameters from './Parameters.svelte';
 
+vi.mock('$env/dynamic/public', () => ({ env: {} })); // https://github.com/sveltejs/kit/issues/8180
+
 const { copied } = vi.hoisted(() => ({ copied: [] as unknown[] }));
 vi.mock('../../utilities/clipboard', () => ({
   getClipboardContent: vi.fn(),

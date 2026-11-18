@@ -78,9 +78,9 @@ describe('Scheduling goal list parameters', () => {
       await fireEvent.click(getByRole('button', { name: /External events goal/ }));
       await waitFor(() => expect(container.querySelectorAll('.parameter-rec-series')).toHaveLength(2));
       const series = within(container.querySelectorAll<HTMLElement>('.parameter-rec-series')[1]);
-      const add = series.getByRole('button', { name: 'Add Value' });
-      const remove = series.getByRole('button', { name: 'Remove Value' });
-      expect((remove as HTMLButtonElement).disabled).toBe(true);
+      const add = series.getByRole('button', { name: 'Add value' });
+      const remove = series.getByRole('button', { name: 'Remove value' });
+      expect(remove.getAttribute('aria-disabled')).toBe('true');
 
       await fireEvent.click(add);
       expect(onUpdate.mock.lastCall?.[0].arguments).toEqual({ derivationGroups: ['weather'], eventTypes: [''] });
@@ -94,7 +94,7 @@ describe('Scheduling goal list parameters', () => {
       expect(onUpdate.mock.lastCall?.[0].arguments.eventTypes).toEqual(['rain']);
       await fireEvent.click(remove);
       expect(onUpdate.mock.lastCall?.[0].arguments.eventTypes).toEqual([]);
-      expect((remove as HTMLButtonElement).disabled).toBe(true);
+      expect(remove.getAttribute('aria-disabled')).toBe('true');
       await fireEvent.click(add);
       expect(onUpdate.mock.lastCall?.[0].arguments.eventTypes).toEqual(['']);
     },
@@ -109,7 +109,7 @@ describe('Scheduling goal list parameters', () => {
     await fireEvent.click(getByRole('button', { name: /External events goal/ }));
     await waitFor(() => expect(container.querySelectorAll('.parameter-rec-series')).toHaveLength(2));
     const series = within(container.querySelectorAll<HTMLElement>('.parameter-rec-series')[1]);
-    await fireEvent.click(series.getByRole('button', { name: 'Add Value' }));
+    await fireEvent.click(series.getByRole('button', { name: 'Add value' }));
     expect(onUpdate.mock.lastCall?.[0].arguments.eventTypes).toEqual(expected);
   });
 });
