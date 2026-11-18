@@ -6,6 +6,7 @@ import type { ActionDefinition } from '../types/actions';
 import type { WorkspaceTreeNode, WorkspaceTreeNodeWithFullPath } from '../types/workspace-tree-view';
 import * as requests from './requests';
 import {
+  withoutManagedFiles,
   cleanPath,
   computeMovedFilePath,
   computeTreeFilter,
@@ -2271,5 +2272,39 @@ describe('Workspace utility function tests', () => {
       expect(isPathInBreadcrumb('a', 'a/b')).toBe(false);
       expect(isPathInBreadcrumb('a/b', 'a/b/c')).toBe(false);
     });
+  });
+});
+
+describe('withoutManagedFiles', () => {
+  const file = (name: string, managedBy?: string): WorkspaceTreeNode => ({
+    metadata: managedBy ? { user: { managedBy } } : {},
+    name,
+    type: WorkspaceContentType.Sequence,
+  });
+  const dir = (name: string, contents: WorkspaceTreeNode[]): WorkspaceTreeNode => ({
+    contents,
+    name,
+    type: WorkspaceContentType.Directory,
+  });
+
+  test('hides managed files and folders holding only them, by metadata and never by name', () => {
+    const tree = [
+      dir('rust', [
+        dir('.cargo', [file('config.toml', 'fprime-wasm')]),
+        file('Cargo.toml', 'fprime-wasm'),
+        dir('src', [dir('bin', [file('startup.rs')]), file('lib.rs', 'fprime-wasm'), file('helpers.rs')]),
+        dir('out', [file('startup.wasm')]),
+        dir('empty', []),
+      ]),
+      file('Cargo.toml'), // a user's own file of the same name stays
+      file('.hidden'),
+    ];
+    const names = (nodes: WorkspaceTreeNode[]): unknown[] =>
+      nodes.map(n => (n.contents ? { [n.name ?? '']: names(n.contents) } : n.name));
+    expect(names(withoutManagedFiles(tree))).toEqual([
+      { rust: [{ src: [{ bin: ['startup.rs'] }, 'helpers.rs'] }, { out: ['startup.wasm'] }, { empty: [] }] },
+      'Cargo.toml',
+      '.hidden',
+    ]);
   });
 });

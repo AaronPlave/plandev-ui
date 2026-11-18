@@ -1,7 +1,7 @@
 <svelte:options immutable={true} />
 
 <script lang="ts">
-  import { Input } from '@nasa-jpl/stellar-svelte';
+  import { Button, Input } from '@nasa-jpl/stellar-svelte';
   import type {
     CellContextMenuEvent,
     ColumnResizedEvent,
@@ -9,11 +9,12 @@
     ICellRendererParams,
     IRowNode,
   } from 'ag-grid-community';
-  import { Search } from 'lucide-svelte';
+  import { Eye, EyeOff, Search } from 'lucide-svelte';
   import { createEventDispatcher, onMount, tick } from 'svelte';
   import { WORKSPACE_FILE_BROWSER_COLUMN_STATE_KEY } from '../../../constants/localStorage';
   import { PATH_DELIMITER } from '../../../constants/workspaces';
   import { WorkspaceContentType } from '../../../enums/workspace';
+  import { showManagedFiles } from '../../../stores/workspaces';
   import type { ActionDefinition } from '../../../types/actions';
   import type { User } from '../../../types/app';
   import type { DataGridColumnDef, DataGridRowDoubleClick, RowId } from '../../../types/data-grid';
@@ -36,13 +37,16 @@
     findNodeByPath,
     flattenWorkspaceTreeWithPaths,
     getAvailableActionsForNodes,
+    getFileManager,
     getUserDisplayNameFromIdentity,
     hasReadonlyInTree,
     shouldNodeBeVisible,
     sortWorkspaceTree,
+    withoutManagedFiles,
     type TreeSortComparator,
   } from '../../../utilities/workspaces';
   import ActivityTableMenu from '../../activity/ActivityTableMenu.svelte';
+  import Tooltip from '../../ui/Tooltip.svelte';
   import BulkActionDataGrid from '../../ui/DataGrid/BulkActionDataGrid.svelte';
   import DataGrid from '../../ui/DataGrid/DataGrid.svelte';
   import DataGridActions from '../../ui/DataGrid/DataGridActions.svelte';
@@ -357,8 +361,14 @@
     return rootNode?.contents ?? [];
   })();
 
+  // Files a tool maintains (metadata `user.managedBy`) are listed only on request.
+  $: managedFileCount = flattenWorkspaceTreeWithPaths(treeNode?.contents ?? []).filter(node =>
+    getFileManager(node),
+  ).length;
+  $: visibleRootContents = $showManagedFiles ? currentRootContents : withoutManagedFiles(currentRootContents);
+
   // Compute flattened tree with sorting from current root
-  $: sortedTree = sortWorkspaceTree(currentRootContents, createSortComparator(sortState));
+  $: sortedTree = sortWorkspaceTree(visibleRootContents, createSortComparator(sortState));
 
   $: flattenedTree = flattenWorkspaceTreeWithPaths(
     sortedTree,
@@ -781,6 +791,23 @@
       sizeVariant="xs"
       class="flex-1"
     />
+    {#if managedFileCount > 0 || $showManagedFiles}
+      <Tooltip
+        content={$showManagedFiles
+          ? 'Hide files managed by tools (project scaffolding)'
+          : `Show ${managedFileCount} file${managedFileCount === 1 ? '' : 's'} managed by tools (project scaffolding)`}
+      >
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Show managed files"
+          aria-pressed={$showManagedFiles}
+          on:click={() => ($showManagedFiles = !$showManagedFiles)}
+        >
+          {#if $showManagedFiles}<Eye size={14} />{:else}<EyeOff size={14} />{/if}
+        </Button>
+      </Tooltip>
+    {/if}
     <ActivityTableMenu
       columnDefs={metadataColumnDefs}
       {columnStates}
@@ -799,7 +826,9 @@
       ? 'Workspace is Empty'
       : currentRootContents.length < 1
         ? 'Folder is Empty'
-        : 'No Matching Files or Folders'}
+        : visibleRootContents.length < 1
+          ? 'Only managed files here: use "Show managed files"'
+          : 'No Matching Files or Folders'}
     headerHeight={26}
     rowHeight={26}
     class="workspace-file-browser"

@@ -2,13 +2,12 @@
 
 <script lang="ts">
   import { standardKeymap } from '@codemirror/commands';
-  import { syntaxTree } from '@codemirror/language';
   import { lintGutter, openLintPanel, setDiagnostics } from '@codemirror/lint';
   import { Compartment, EditorSelection, EditorState, Transaction, type Extension } from '@codemirror/state';
   import { keymap, type ViewUpdate } from '@codemirror/view';
-  import type { SyntaxNode } from '@lezer/common';
   import {
     getInputLanguage,
+    type CodeHelpStatus,
     type CommandInfoMapper,
     type InputLanguage,
     type OutputLanguage,
@@ -17,7 +16,7 @@
   } from '@nasa-jpl/plandev-sequence-languages';
   import { basicSetup, EditorView } from 'codemirror';
   import { debounce } from 'lodash-es';
-  import { FileBracesCorner } from 'lucide-svelte';
+  import { ArrowLeft, FileBracesCorner, LoaderCircle } from 'lucide-svelte';
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { activeDocumentIsDirty } from '../../stores/activeDocument';
   import { clearWorkspaceAdaptationMessages } from '../../stores/workspaceErrors';
@@ -28,7 +27,12 @@
   import { getLintDiagnostics } from '../../utilities/codemirror/lint';
   import { readOnlyChangeGuard } from '../../utilities/codemirror/readOnly';
   import { blockTheme } from '../../utilities/codemirror/themes/block';
-  import { phoenixResources } from '../../utilities/sequence-editor/adaptation-resources';
+  import {
+    codeHelpStatusField,
+    phoenixResources,
+    setCodeHelpStatus,
+  } from '../../utilities/sequence-editor/adaptation-resources';
+  import { isMacOs } from '../../utilities/browser';
   import { showFailureToast, showSuccessToast } from '../../utilities/toast';
   import {
     doesFilenameMatchExtension,
@@ -39,8 +43,10 @@
   import CssGridGutter from '../ui/CssGridGutter.svelte';
   import Panel from '../ui/Panel.svelte';
   import SectionTitle from '../ui/SectionTitle.svelte';
+  import Tooltip from '../ui/Tooltip.svelte';
   import FileMetadataBanner from '../workspace/FileMetadataBanner.svelte';
   import CommandPanel from './CommandPanel/CommandPanel.svelte';
+  import EditorCommandMenu from './EditorCommandMenu.svelte';
   import EditorToolbar from './EditorToolbar.svelte';
   import OutputToolbar from './OutputToolbar.svelte';
 
@@ -66,9 +72,13 @@
   export let userSequenceEditorColumns: string;
   export let userSequenceEditorColumnsWithFormBuilder: string;
   export let onReadOnlyChange: ((readOnly: boolean) => void) | null = null;
+  /** Where "Back" returns to after Go to Definition, e.g. `startup.rs`; null hides it. */
+  export let navigateBackLabel: string | null = null;
+  export let onNavigateBack: (() => void) | null = null;
 
   const dispatch = createEventDispatcher<{
     adaptationError: { error: Error; filePath: string };
+    definitionJump: { anchor: number; filePath: string };
     downloadInput: { filePath: string; filename: string };
     downloadOutput: { content: string; filePath: string; filename: string };
     editorViewChange: EditorView | null;
@@ -90,7 +100,9 @@
   let editorSequenceDiv: HTMLDivElement;
   let editorSequenceView: EditorView;
   let isDirty: boolean = false;
-  let selectedNode: SyntaxNode | null;
+  let codeHelpStatus: CodeHelpStatus | null = null;
+  let codeHelpNotice: 'preparing' | 'ready' | 'unavailable' | null = null;
+  let codeHelpTimer: ReturnType<typeof setTimeout> | null = null;
   let selectedOutputFormat: OutputLanguage | undefined;
   let showOutputs: boolean = true;
   let previousShowOutputs: boolean = showOutputs;
@@ -108,6 +120,9 @@
   // The adaptation may author several languages; this file's is chosen by extension.
   $: inputLanguage = getInputLanguage(sequenceAdaptation, sequenceName) ?? sequenceAdaptation.input;
   $: commandInfoMapper = inputLanguage.commandInfoMapper;
+  // Re-read whenever code help changes: formatting may need a ready language server.
+  $: canFormat = isFormatAvailable(inputLanguage, editorSequenceView, codeHelpStatus);
+  $: updateCodeHelpNotice(codeHelpStatus);
 
   // Only use input extensions if the sequence file matches the input file extensions
   $: if (phoenixContext && isInputFile && inputLanguage.getEditorExtension) {
@@ -162,7 +177,8 @@
     // Configure sequence editor.
     if (editorSequenceView) {
       editorSequenceView.dispatch({
-        effects: [compartmentAdaptation.reconfigure(inputEditorExtension)],
+        // The new extension reports its own code help status, if it has any.
+        effects: [compartmentAdaptation.reconfigure(inputEditorExtension), setCodeHelpStatus.of(null)],
       });
       // Clear any stale diagnostics
       editorSequenceView.dispatch(setDiagnostics(editorSequenceView.state, []));
@@ -270,16 +286,33 @@
     }
   }
 
-  function selectedCommandUpdateListener(viewUpdate: ViewUpdate): void {
-    // This is broken out into a different listener as debouncing this can cause cursor to move around
-    const tree = syntaxTree(viewUpdate.state);
-    // Command Node includes trailing newline and white space, move to next command
-    const selectionLine = viewUpdate.state.doc.lineAt(viewUpdate.state.selection.asSingle().main.from);
-    const leadingWhiteSpaceLength = selectionLine.text.length - selectionLine.text.trimStart().length;
-    const updatedSelectionNode = tree.resolveInner(selectionLine.from + leadingWhiteSpaceLength, 1);
-    // minimize triggering selected command view
-    if (selectedNode !== updatedSelectionNode) {
-      selectedNode = updatedSelectionNode;
+  function isFormatAvailable(language: InputLanguage, view: EditorView | undefined, _status: CodeHelpStatus | null) {
+    return !!language.format && (!view || (language.canFormat?.(view) ?? true));
+  }
+
+  /**
+   * "Preparing code help…" only once preparation takes noticeably long; "ready" is said briefly
+   * and only after that; "unavailable" stays (with the reason in its tooltip).
+   */
+  function updateCodeHelpNotice(status: CodeHelpStatus | null) {
+    if (codeHelpTimer) {
+      clearTimeout(codeHelpTimer);
+      codeHelpTimer = null;
+    }
+    if (status?.state === 'preparing') {
+      if (codeHelpNotice !== 'preparing') {
+        codeHelpNotice = null;
+        codeHelpTimer = setTimeout(() => (codeHelpNotice = 'preparing'), 800);
+      }
+    } else if (status?.state === 'ready') {
+      if (codeHelpNotice === 'preparing') {
+        codeHelpNotice = 'ready';
+        codeHelpTimer = setTimeout(() => (codeHelpNotice = null), 2500);
+      } else {
+        codeHelpNotice = null;
+      }
+    } else {
+      codeHelpNotice = status?.state === 'unavailable' ? 'unavailable' : null;
     }
   }
 
@@ -334,11 +367,21 @@
     openLintPanel(editorSequenceView);
   }
 
-  function formatDocument() {
-    let format = inputLanguage.format;
-    if (format !== undefined && phoenixContext) {
-      format(editorSequenceView, phoenixContext);
+  function formatDocument(): boolean {
+    if (!canFormat || !inputLanguage.format || !phoenixContext) {
+      return false;
     }
+    inputLanguage.format(editorSequenceView, phoenixContext);
+    return true;
+  }
+
+  function onFormatShortcut(event: KeyboardEvent): boolean {
+    const isShortcut = event.code === 'KeyF' && event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey;
+    if (isShortcut && formatDocument()) {
+      event.preventDefault();
+      return true;
+    }
+    return false;
   }
 
   function onRunAction(event: CustomEvent<{ action: ActionDefinition; parameter: string }>) {
@@ -394,15 +437,30 @@
       extensions: [
         basicSetup,
         keymap.of([...standardKeymap, shouldListenForKeyboardSave ? { key: 'Ctrl-s', mac: 'Cmd-s', run: onSave } : {}]),
+        // Shift+Alt+F formats, for every language that can (the usual language-server binding). By
+        // physical key: on macOS Option+Shift+F types "Ï", which a keymap's "Shift-Alt-f" never matches.
+        EditorView.domEventHandlers({ keydown: onFormatShortcut }),
         EditorView.lineWrapping,
         EditorView.theme({ '.cm-gutter': { 'min-height': '0px' } }),
         lintGutter(),
+        codeHelpStatusField,
         EditorView.updateListener.of(viewUpdate => {
           if (viewUpdate.docChanged) {
             sequenceUpdateListener(viewUpdate);
           }
+          const status = viewUpdate.state.field(codeHelpStatusField);
+          if (status !== codeHelpStatus) {
+            codeHelpStatus = status;
+          }
+          for (const transaction of viewUpdate.transactions) {
+            if (transaction.isUserEvent('select.definition')) {
+              dispatch('definitionJump', {
+                anchor: transaction.startState.selection.main.head,
+                filePath: sequenceFilePath,
+              });
+            }
+          }
         }),
-        EditorView.updateListener.of(selectedCommandUpdateListener),
         EditorView.updateListener.of(viewUpdate => dispatchLintChange(viewUpdate.view)),
         blockTheme,
         compartmentAdaptation.of(inputEditorExtension),
@@ -443,6 +501,9 @@
   });
 
   onDestroy(() => {
+    if (codeHelpTimer) {
+      clearTimeout(codeHelpTimer);
+    }
     dispatchLintChange.cancel();
     editorSequenceView?.destroy();
     editorOutputView?.destroy();
@@ -460,14 +521,41 @@
           {sequenceName || 'Untitled'}{readOnly || (previewOnly && !isLoading) ? ' (Read only)' : ''}
         </SectionTitle>
 
+        {#if navigateBackLabel && onNavigateBack}
+          <Tooltip content="Back to where you were before Go to definition">
+            <button class="st-button tertiary flex items-center gap-1 text-xs" on:click={onNavigateBack}>
+              <ArrowLeft size={12} />
+              {navigateBackLabel}
+            </button>
+          </Tooltip>
+        {/if}
+
+        <!-- Language intelligence (e.g. a language server): said only when it matters, and politely. -->
+        <span class="flex shrink-0 items-center gap-1 text-xs text-muted-foreground" role="status" aria-live="polite">
+          {#if codeHelpNotice === 'preparing'}
+            <LoaderCircle size={12} class="animate-spin" /> Preparing code help…
+          {:else if codeHelpNotice === 'ready'}
+            Code help ready
+          {:else if codeHelpNotice === 'unavailable'}
+            <Tooltip content={codeHelpStatus?.message ?? 'The language server is not available'}>
+              <span class="underline decoration-dotted">
+                Code help unavailable<span class="sr-only">: {codeHelpStatus?.message ?? ''}</span>
+              </span>
+            </Tooltip>
+          {/if}
+        </span>
+
         <EditorToolbar
           actions={availableActions}
           actionsDisabled={sequenceName === '' || availableActions.length === 0}
           showActions={includeActions}
           showErrorPanelButton
           onShowErrorPanel={showErrorPanel}
-          showFormatButton
+          showFormatButton={!!inputLanguage.format}
           onFormat={formatDocument}
+          formatDisabled={!canFormat}
+          formatTooltip={canFormat ? 'Format document' : 'Format document (available once code help is ready)'}
+          formatShortcut={isMacOs() ? '⇧⌥F' : 'Shift+Alt+F'}
           showCopyButton
           copyDisabled={disableCopyAndExport}
           copyTooltip="Copy sequence contents"
@@ -487,7 +575,11 @@
           saveHighlighted={isDirty}
           {onSave}
           on:runAction={onRunAction}
-        />
+        >
+          <svelte:fragment slot="start">
+            <EditorCommandMenu commands={inputLanguage.editorCommands ?? []} view={editorSequenceView} />
+          </svelte:fragment>
+        </EditorToolbar>
       </svelte:fragment>
 
       <svelte:fragment slot="body">

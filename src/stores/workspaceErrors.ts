@@ -108,7 +108,7 @@ export function setWorkspaceLintErrors(filePath: string, diagnostics: LintDiagno
         severity: d.severity,
       },
       level: d.severity === 'error' ? 'error' : d.severity === 'warning' ? 'warn' : 'info', // 'info' and 'hint' both map to 'info'
-      message: `${filePath}:${d.from.line}:${d.from.column} - ${d.message}`,
+      message: `${filePath}:${d.from.line}:${d.from.column} - ${d.source ? `[${d.source}] ` : ''}${d.message}`,
       timestamp: new Date().toISOString(),
       type: ErrorTypes.WORKSPACE_LINT_ERROR,
     }));

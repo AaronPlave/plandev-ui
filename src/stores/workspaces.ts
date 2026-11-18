@@ -1,14 +1,22 @@
 import { derived, writable, type Readable, type Writable } from 'svelte/store';
+import { WORKSPACE_SHOW_MANAGED_FILES_KEY } from '../constants/localStorage';
 import { WorkspaceContentMode } from '../enums/workspace';
 import type { Parcel } from '../types/sequencing';
 import type { Workspace } from '../types/workspace';
 import gql from '../utilities/gql';
+import { getLocalStorageItem, setLocalStorageItem } from '../utilities/localStorage';
 import { gqlSubscribable } from './subscribable';
 
 /* Writable */
 export const selectedActionDefinitionId: Writable<number | null> = writable(null);
 
 export const selectedActionRunId: Writable<number | null> = writable(null);
+
+/** Whether workspace browsers list tool-managed files (see `getFileManager`). Remembered per browser. */
+export const showManagedFiles: Writable<boolean> = writable(
+  getLocalStorageItem<boolean>(WORKSPACE_SHOW_MANAGED_FILES_KEY) ?? false,
+);
+showManagedFiles.subscribe(value => setLocalStorageItem(WORKSPACE_SHOW_MANAGED_FILES_KEY, value));
 
 export const workspaceColumns: Writable<string> = writable('1fr 3px 3fr');
 

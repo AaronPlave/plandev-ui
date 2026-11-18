@@ -7,6 +7,7 @@
   import type { CommandDictionary, FswCommand, HwCommand } from '@nasa-jpl/plandev-ampcs';
   import type { CommandInfoMapper, PhoenixContext } from '@nasa-jpl/plandev-sequence-languages';
   import { EditorView } from 'codemirror';
+  import { getInspectedNode } from '../../../utilities/sequence-editor/cursor';
   import { unquoteUnescape } from '../../../utilities/sequence-editor/sequence-utils';
   import Tab from '../../ui/Tabs/Tab.svelte';
   import TabPanel from '../../ui/Tabs/TabPanel.svelte';
@@ -87,15 +88,11 @@
       effects: StateEffect.appendConfig.of([
         EditorView.updateListener.of(viewUpdate => {
           // This is broken out into a different listener as debouncing this can cause cursor to move around
-          const tree = syntaxTree(viewUpdate.state);
-          // Command Node includes trailing newline and white space, move to next command
-          const selectionLine = viewUpdate.state.doc.lineAt(viewUpdate.state.selection.asSingle().main.from);
-          const leadingWhiteSpaceLength = selectionLine.text.length - selectionLine.text.trimStart().length;
-          const updatedSelectionNode = tree.resolveInner(selectionLine.from + leadingWhiteSpaceLength, 1);
+          const updatedSelectionNode = getInspectedNode(viewUpdate.state, commandInfoMapper);
           // minimize triggering selected command view
           if (selectedNode !== updatedSelectionNode) {
             selectedNode = updatedSelectionNode;
-            currentTree = tree;
+            currentTree = syntaxTree(viewUpdate.state);
           }
         }),
       ]),

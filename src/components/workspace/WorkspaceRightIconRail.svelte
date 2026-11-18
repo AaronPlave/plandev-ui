@@ -8,13 +8,9 @@
   import Tooltip from '../ui/Tooltip.svelte';
 
   export let activeTab: WorkspaceRightPanelTab = WorkspaceRightPanelTab.METADATA;
-  export let commandNodeName: string | null = null;
+  export let commandTabLabel: string = 'Selected Command';
   export let isSequenceFile: boolean = false;
   export let panelOpen: boolean = true;
-
-  function formatTypeName(s: string) {
-    return s.replace(/([^A-Z])(?=[A-Z])/g, '$1 ');
-  }
 
   function togglePanel(nextTab: WorkspaceRightPanelTab) {
     if (activeTab === nextTab && panelOpen) {
@@ -48,7 +44,7 @@
       <Sidebar.MenuButton
         className="flex h-[48px] w-full items-center justify-center rounded-none shadow-none hover:bg-transparent"
         isActive={activeTab === WorkspaceRightPanelTab.COMMAND && panelOpen}
-        tooltipContent={commandNodeName ? `Selected ${formatTypeName(commandNodeName)}` : 'Selected Command'}
+        tooltipContent={commandTabLabel}
         on:click={() => togglePanel(WorkspaceRightPanelTab.COMMAND)}
       >
         <TextCursorInput size={16} />

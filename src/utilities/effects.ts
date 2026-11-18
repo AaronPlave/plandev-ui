@@ -10,6 +10,8 @@ import {
 import {
   parseCdlDictionary,
   toAmpcsXml,
+  type FileStarter,
+  type FileStarterTarget,
   type PhoenixAdaptation,
   type PhoenixContext,
   type UserSequence,
@@ -27,6 +29,7 @@ import {
   activityDirectivesDB as activityDirectivesDBStore,
   selectedActivityDirectiveId as selectedActivityDirectiveIdStore,
 } from '../stores/activities';
+import { actionRuns as actionRunsStore } from '../stores/actions';
 import { catchError, clearConsoleEntries, logMessage } from '../stores/console';
 import {
   checkConstraintsQueryStatus as checkConstraintsQueryStatusStore,
@@ -74,7 +77,13 @@ import {
 } from '../stores/simulation';
 import { createTagError as createTagErrorStore } from '../stores/tags';
 import { applyViewUpdate, view as viewStore, viewUpdateRow, viewUpdateTimeline } from '../stores/views';
-import type { ActionDefinition, ActionDefinitionSetInput, ActionParametersMap, ActionRun } from '../types/actions';
+import type {
+  ActionDefinition,
+  ActionDefinitionSetInput,
+  ActionParametersMap,
+  ActionRun,
+  ActionRunSlim,
+} from '../types/actions';
 import type {
   ActivityDirective,
   ActivityDirectiveDB,
@@ -525,6 +534,25 @@ async function bulkMoveWorkspaceItems(
 /**
  * Functions that have side-effects (e.g. HTTP requests, toasts, popovers, store updates, etc.).
  */
+/** Resolves with an action run once it has finished (success or failure). */
+function waitForActionRun(id: number, timeoutMs: number = 300000): Promise<ActionRunSlim> {
+  return new Promise((resolve, reject) => {
+    let unsubscribe: () => void = () => {};
+    const timer = setTimeout(() => {
+      unsubscribe();
+      reject(new Error(`Action run ${id} did not finish in time; see its results under Actions`));
+    }, timeoutMs);
+    unsubscribe = actionRunsStore.subscribe(runs => {
+      const run = runs.find(r => r.id === id);
+      if (run && (run.status === 'success' || run.status === 'failed')) {
+        clearTimeout(timer);
+        queueMicrotask(() => unsubscribe());
+        resolve(run);
+      }
+    });
+  });
+}
+
 const effects = {
   async applyActivitiesByFilter(
     filter: SequenceFilter,
@@ -2509,6 +2537,52 @@ const effects = {
       showFailureToast('Workspace Collaborator Create Failed', e);
       return;
     }
+  },
+
+  /** Runs a file starter's Action (no parameter dialog) and waits for it; returns the created file's path. */
+  async createWorkspaceFileWithAction(
+    workspace: Workspace,
+    starter: FileStarter,
+    target: FileStarterTarget,
+    actions: ActionDefinition[],
+    user: User | null,
+  ): Promise<string | null> {
+    const { action } = starter;
+    if (!action) {
+      return null;
+    }
+    const definition = actions.find(({ archived, name }) => name === action.name && !archived);
+    if (!definition) {
+      throw new Error(`This workspace has no "${action.name}" Action, which creates ${starter.label} files`);
+    }
+    const parameterSchema = definition.versions[0]?.parameter_schema ?? {};
+    const parameterDefs: ActionParametersMap = Object.fromEntries(
+      Object.entries(parameterSchema).map(([key, schema], order) => [key, { order, schema }]),
+    );
+    const runId = await effects.createActionRun(
+      workspace,
+      definition.id,
+      parameterDefs,
+      action.parameters(target) as ArgumentsMap,
+      definition.settings,
+      user,
+    );
+    if (runId === null) {
+      return null;
+    }
+    const run = await waitForActionRun(runId);
+    if (run.status !== 'success') {
+      // The Action's report says why (e.g. "src/bin/x.rs already exists"); its first plain line suffices here.
+      const reason = run.results?.report?.split('\n').find(line => line.trim() && !line.startsWith('#'));
+      const message = reason ?? run.error?.message ?? `"${action.name}" failed (run ${runId})`;
+      logMessage('log', `Could not create ${starter.label} "${target.name}": ${message}`);
+      showFailureToast(`Could not create ${starter.label}: ${message}`);
+      return null;
+    }
+    const created = action.createdFile(target);
+    showSuccessToast(`Created ${created}`);
+    logMessage('log', `Created "${created}" with Action "${action.name}" (run ${runId}).`);
+    return created;
   },
 
   async deleteActivityDirective(id: ActivityDirectiveId, plan: Plan, user: User | null): Promise<boolean> {
@@ -6304,18 +6378,41 @@ const effects = {
     return null;
   },
 
+  /**
+   * New File: asks for the kind of file, its folder and name, then creates it, either with the
+   * starter's content or by running the starter's Action (e.g. toolchain scaffolding). Returns the
+   * path of the created file, or null.
+   */
   async newWorkspaceSequence(
     workspace: Workspace,
     workspaceContents: WorkspaceTreeNode,
     startingPath: string,
     sequenceDefinition: string,
     user: User | null,
+    starters: FileStarter[] = [],
+    actions: ActionDefinition[] = [],
+    onBusy: (busy: boolean) => void = () => {},
   ): Promise<string | null> {
-    const { confirm, value } = await showNewWorkspaceSequenceModal(workspace, workspaceContents, startingPath);
+    // A draft being saved already has content: only its name and place are asked for.
+    const { confirm, value } = await showNewWorkspaceSequenceModal(
+      workspace,
+      workspaceContents,
+      startingPath,
+      sequenceDefinition ? [] : starters,
+    );
     if (confirm) {
-      const { filePath } = value;
+      const { filePath, starter, target } = value as {
+        filePath: string;
+        starter: FileStarter | null;
+        target: FileStarterTarget | null;
+      };
       try {
-        await WorkspaceApi.saveFile(workspace.id, filePath, sequenceDefinition, false, user);
+        onBusy(true);
+        if (starter?.action && target) {
+          return await effects.createWorkspaceFileWithAction(workspace, starter, target, actions, user);
+        }
+        const content = sequenceDefinition || (starter?.content && target ? starter.content(target.name) : '');
+        await WorkspaceApi.saveFile(workspace.id, filePath, content, false, user);
 
         showSuccessToast('Workspace File Created Successfully');
         logMessage('log', `Created new workspace file "${workspace.id}/${filePath}".`);
@@ -6324,6 +6421,8 @@ const effects = {
       } catch (e) {
         catchError('log', 'Workspace file was unable to be created', e as Error);
         showFailureToast('Workspace File Creation Failed', e);
+      } finally {
+        onBusy(false);
       }
     }
 

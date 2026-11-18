@@ -7,6 +7,7 @@
   import { permissionHandler } from '../../utilities/permissionHandler';
   import { getShortISOForDate } from '../../utilities/time';
   import { getRevisionDisplayName, getUserDisplayNameFromIdentity } from '../../utilities/workspaces';
+  import Tooltip from '../ui/Tooltip.svelte';
 
   export let doesWorkingCopyMatchLatestRevision: boolean = false;
   export let isDirty: boolean = false;
@@ -15,6 +16,8 @@
   export let hasRevisions: boolean = false;
   export let matchingRevisionName: WorkspaceRevisionName | null = null;
   export let onReadOnlyChange: ((readOnly: boolean) => void) | null = null;
+
+  $: managedBy = typeof fileMetadata.user?.managedBy === 'string' ? fileMetadata.user.managedBy : null;
 </script>
 
 <div class="flex min-h-8 items-center gap-4 border-b bg-[var(--sidebar)] px-3 py-1.5 text-xs text-muted-foreground">
@@ -42,6 +45,13 @@
       <span class="font-medium">Working Copy</span>
     {/if}
   </div>
+  {#if managedBy}
+    <Tooltip
+      content="Maintained by {managedBy}, which may rewrite it. Hidden from the file list unless managed files are shown."
+    >
+      <span class="font-medium">Managed by {managedBy}</span>
+    </Tooltip>
+  {/if}
   <div
     class="ml-auto flex items-center gap-1.5"
     use:permissionHandler={{

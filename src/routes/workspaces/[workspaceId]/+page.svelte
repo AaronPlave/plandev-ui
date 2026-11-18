@@ -190,6 +190,10 @@
   let isRevisionsLoading: boolean = false;
   let isWorkspaceLoading: boolean = false;
   let lastKnownUrl: string = '';
+  // Go to Definition history, for "Back": where the cursor was before each jump.
+  let definitionBackStack: { anchor: number; path: string }[] = [];
+  let definitionNavigationToken: number = 0;
+  let pendingCrossFileJumpPath: string | null = null;
   let leftPaneApi: PaneAPI;
   let leftPanelActiveTab: string = initialUrlState.sidebarTab;
   let librarySequences: LibrarySequenceSignature[] = [];
@@ -211,7 +215,7 @@
   let revisionLoadingAbortController: AbortController | null = null;
   let rightPaneApi: PaneAPI;
   let rightPanelActiveTab: WorkspaceRightPanelTab = WorkspaceRightPanelTab.METADATA;
-  let rightPanelCommandNodeName: string | null = null;
+  let rightPanelCommandTabLabel: string = 'Selected Command';
   let rightPanelOpen: boolean = true;
   let selectedConsoleTab: WorkspaceConsoleTab = 'actions';
   let selectedFilePath: string | null = null;
@@ -387,6 +391,7 @@
     channelDictionary,
     commandDictionary,
     librarySequences,
+    openWorkspaceFile: openFileForDefinition,
     parameterDictionaries,
     sequenceFile:
       $workspaceId && $activeDocumentPath ? { path: $activeDocumentPath, workspaceId: $workspaceId } : undefined,
@@ -977,7 +982,16 @@
   async function onNewFile(event: CustomEvent<string>) {
     if ($workspace != null && workspaceTree && $user) {
       const { detail: startingPath } = event;
-      const newFilePath = await effects.newWorkspaceSequence($workspace, workspaceTree, startingPath, '', $user);
+      const newFilePath = await effects.newWorkspaceSequence(
+        $workspace,
+        workspaceTree,
+        startingPath,
+        '',
+        $user,
+        $sequenceAdaptation.fileStarters ?? [],
+        allActionsForWorkspace,
+        busy => (showLoadingSpinner = busy),
+      );
 
       if (newFilePath !== null) {
         // select & navigate to the new file
@@ -1744,6 +1758,67 @@
     });
   }
 
+  /**
+   * Go to Definition into another workspace file: open it through the usual navigation (unsaved
+   * changes prompt, permissions) and hand the language the editor once it holds the file. A later
+   * navigation supersedes an earlier one still loading.
+   */
+  async function openFileForDefinition(path: string): Promise<EditorView | null> {
+    if (!workspaceTreeMap[path]) {
+      showFailureToast(`The definition is in ${path}, which is not in this workspace`);
+      return null;
+    }
+    const token = ++definitionNavigationToken;
+    const from = { anchor: activeEditorView?.state.selection.main.head ?? 0, path: $activeDocumentPath };
+    selectedFilePath = path;
+    // ponytail: polls until the file is loaded or the navigation was declined/superseded; an event
+    // from maybeNavigate would avoid the 50 ms steps.
+    for (const started = Date.now(); Date.now() - started < 20000; ) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      if (token !== definitionNavigationToken || selectedFilePath !== path) {
+        return null;
+      }
+      if ($activeDocumentPath === path && !$activeDocumentIsLoading) {
+        await tick();
+        if (from.path) {
+          definitionBackStack = [...definitionBackStack.slice(-49), { anchor: from.anchor, path: from.path }];
+          pendingCrossFileJumpPath = path;
+        }
+        return activeEditorView;
+      }
+    }
+    return null;
+  }
+
+  function onDefinitionJump(event: CustomEvent<{ anchor: number; filePath: string }>) {
+    const { anchor, filePath } = event.detail;
+    if (pendingCrossFileJumpPath === filePath) {
+      pendingCrossFileJumpPath = null; // recorded when the file was opened
+    } else if (filePath) {
+      definitionBackStack = [...definitionBackStack.slice(-49), { anchor, path: filePath }];
+    }
+  }
+
+  async function navigateBack() {
+    const entry = definitionBackStack.at(-1);
+    if (!entry) {
+      return;
+    }
+    definitionBackStack = definitionBackStack.slice(0, -1);
+    let view: EditorView | null = activeEditorView;
+    if (entry.path !== $activeDocumentPath) {
+      const depth = definitionBackStack.length;
+      view = await openFileForDefinition(entry.path);
+      // Going back is not a new jump to come back from.
+      definitionBackStack = definitionBackStack.slice(0, depth);
+      pendingCrossFileJumpPath = null;
+    }
+    if (view) {
+      view.dispatch({ scrollIntoView: true, selection: { anchor: Math.min(entry.anchor, view.state.doc.length) } });
+      view.focus();
+    }
+  }
+
   function onGotoLine(event: CustomEvent<{ column: number; line: number }>) {
     const { column, line } = event.detail;
     if (sequenceEditorRef) {
@@ -1954,7 +2029,12 @@
                     showCommandFormBuilder={false}
                     userSequenceEditorColumns="1fr"
                     userSequenceEditorColumnsWithFormBuilder="1fr"
+                    navigateBackLabel={definitionBackStack.length
+                      ? `Back to ${definitionBackStack[definitionBackStack.length - 1].path.split('/').pop()}`
+                      : null}
+                    onNavigateBack={navigateBack}
                     on:adaptationError={onAdaptationError}
+                    on:definitionJump={onDefinitionJump}
                     on:editorViewChange={e => (activeEditorView = e.detail)}
                     on:lintChange={onLintChange}
                     on:runAction={onRunActionOnActiveFile}
@@ -2054,7 +2134,7 @@
             <WorkspaceRightPanel
               bind:activeTab={rightPanelActiveTab}
               availableActions={availableActionsForActiveFile}
-              bind:commandNodeName={rightPanelCommandNodeName}
+              bind:commandTabLabel={rightPanelCommandTabLabel}
               {doesWorkingCopyMatchLatestRevision}
               editorSequenceView={activeEditorView}
               filePath={$activeDocumentPath}
@@ -2083,7 +2163,7 @@
         <WorkspaceRightIconRail
           bind:activeTab={rightPanelActiveTab}
           bind:panelOpen={rightPanelOpen}
-          commandNodeName={rightPanelCommandNodeName}
+          commandTabLabel={rightPanelCommandTabLabel}
           isSequenceFile={activeFileIsInputSequence}
         />
       {/if}

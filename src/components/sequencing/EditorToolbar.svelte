@@ -24,6 +24,9 @@
   // Format button
   export let showFormatButton: boolean = false;
   export let onFormat: (() => void) | undefined = undefined;
+  export let formatDisabled: boolean = false;
+  export let formatTooltip: string = 'Format document';
+  export let formatShortcut: string = '';
 
   // Copy button
   export let showCopyButton: boolean = false;
@@ -69,8 +72,8 @@
   {/if}
 
   {#if showFormatButton && onFormat}
-    <Tooltip content="Format whitespace">
-      <Button variant="outline" size="icon" on:click={onFormat}>
+    <Tooltip content={formatTooltip} shortcut={formatShortcut}>
+      <Button variant="outline" size="icon" aria-label="Format document" disabled={formatDisabled} on:click={onFormat}>
         <Braces size={16} />
       </Button>
     </Tooltip>

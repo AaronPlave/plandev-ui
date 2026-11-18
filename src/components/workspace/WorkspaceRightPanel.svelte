@@ -8,6 +8,7 @@
   import type {
     ArgTextDef,
     CommandInfoMapper,
+    DictionaryItemAt,
     PhoenixContext,
     TimeTagInfo,
   } from '@nasa-jpl/plandev-sequence-languages';
@@ -15,8 +16,10 @@
   import { WorkspaceRightPanelTab } from '../../enums/workspace';
   import type { ActionParameterPair, WorkspaceFileRevision, WorkspaceRevisionName } from '../../types/workspace';
   import type { WorkspaceFileMetadata } from '../../types/workspace-tree-view';
+  import { getInspectedNode } from '../../utilities/sequence-editor/cursor';
   import { unquoteUnescape } from '../../utilities/sequence-editor/sequence-utils';
   import CommandDictionaryComponent from '../sequencing/CommandPanel/CommandDictionary.svelte';
+  import DictionaryItemDetails from '../sequencing/CommandPanel/DictionaryItemDetails.svelte';
   import SelectedCommand from '../sequencing/CommandPanel/SelectedCommand.svelte';
   import Panel from '../ui/Panel.svelte';
   import SectionTitle from '../ui/SectionTitle.svelte';
@@ -28,7 +31,8 @@
   export let activeTab: WorkspaceRightPanelTab = WorkspaceRightPanelTab.METADATA;
   export let availableActions: ActionParameterPair[] = [];
   export let commandInfoMapper: CommandInfoMapper | null = null;
-  export let commandNodeName: string | null = null;
+  /** The command tab's title, e.g. "Selected Command" (also the icon rail's tooltip). */
+  export let commandTabLabel: string = 'Selected Command';
   export let doesWorkingCopyMatchLatestRevision: boolean = false;
   export let editorSequenceView: EditorView | null = null;
   export let fileMetadata: WorkspaceFileMetadata | null = null;
@@ -68,6 +72,7 @@
   let commandNameNode: SyntaxNode | null = null;
   let commandNode: SyntaxNode | null = null;
   let currentTree: Tree;
+  let dictionaryItem: DictionaryItemAt | null = null;
   let listenerAttached: boolean = false;
   let selectedCommandDefinition: (FswCommand | HwCommand) | null = null;
   let selectedNode: SyntaxNode | null = null;
@@ -76,7 +81,17 @@
 
   $: commandDictionary = phoenixContext?.commandDictionary ?? emptyCommandDictionary;
 
-  $: commandNode = commandInfoMapper?.getContainingCommand?.(selectedNode) ?? null;
+  // Languages where most code is not a command (Rust) inspect dictionary items at the cursor instead.
+  $: isInspector = !!commandInfoMapper?.getDictionaryItemAt;
+  $: dictionaryItem =
+    editorSequenceView && commandInfoMapper?.getDictionaryItemAt
+      ? commandInfoMapper.getDictionaryItemAt(selectedNode, editorSequenceView, phoenixContext)
+      : null;
+  $: commandNode = isInspector
+    ? dictionaryItem?.kind === 'command'
+      ? dictionaryItem.node
+      : null
+    : (commandInfoMapper?.getContainingCommand?.(selectedNode) ?? null);
   $: commandNameNode = commandInfoMapper?.getNameNode?.(commandNode) ?? null;
   $: commandName =
     commandNameNode &&
@@ -100,8 +115,12 @@
       ? (commandInfoMapper?.getVariablesInScope?.(editorSequenceView, currentTree, commandNode?.from) ?? [])
       : [];
 
-  // Expose commandNode name to parent for icon rail tooltip
-  $: commandNodeName = commandNode?.name ?? null;
+  // Expose the tab title to the parent for the icon rail tooltip
+  $: commandTabLabel = isInspector
+    ? 'At cursor'
+    : commandNode
+      ? `Selected ${formatTypeName(commandNode.name)}`
+      : 'Selected Command';
 
   function formatTypeName(s: string) {
     return s.replace(/([^A-Z])(?=[A-Z])/g, '$1 ');
@@ -119,13 +138,10 @@
     editorSequenceView.dispatch({
       effects: StateEffect.appendConfig.of([
         EditorView.updateListener.of(viewUpdate => {
-          const tree = syntaxTree(viewUpdate.state);
-          const selectionLine = viewUpdate.state.doc.lineAt(viewUpdate.state.selection.asSingle().main.from);
-          const leadingWhiteSpaceLength = selectionLine.text.length - selectionLine.text.trimStart().length;
-          const updatedSelectionNode = tree.resolveInner(selectionLine.from + leadingWhiteSpaceLength, 1);
+          const updatedSelectionNode = getInspectedNode(viewUpdate.state, commandInfoMapper);
           if (selectedNode !== updatedSelectionNode) {
             selectedNode = updatedSelectionNode;
-            currentTree = tree;
+            currentTree = syntaxTree(viewUpdate.state);
           }
         }),
       ]),
@@ -145,32 +161,39 @@
       <div class="grid h-full grid-rows-[min-content_auto]">
         <Sidebar.Header className="p-0">
           <PanelHeader>
-            <SectionTitle>
-              {commandNode ? `Selected ${formatTypeName(commandNode.name)}` : 'Selected Command'}
-            </SectionTitle>
+            <SectionTitle>{commandTabLabel}</SectionTitle>
           </PanelHeader>
         </Sidebar.Header>
         <Sidebar.Content className="h-full overflow-auto">
-          <SelectedCommand
-            {commandDef}
-            {commandName}
-            {commandNode}
-            {argInfoArray}
-            {variablesInScope}
-            {commandNameNode}
-            {commandDictionary}
-            {commandInfoMapper}
-            {editorSequenceView}
-            readOnly={!hasEditPermission || !!fileMetadata?.readOnly}
-            {timeTagNode}
-            on:selectCommandDefinition={onSelectCommandDefinition}
-          />
+          {#if dictionaryItem && dictionaryItem.kind !== 'command'}
+            <DictionaryItemDetails kind={dictionaryItem.kind} name={dictionaryItem.name} {phoenixContext} />
+          {:else if isInspector && !commandDef}
+            <div class="px-2 py-9 text-center text-xs text-muted-foreground">
+              No dictionary item at cursor.
+              <div class="pt-1">Put the cursor in a command call, a telemetry read or a parameter read.</div>
+            </div>
+          {:else}
+            <SelectedCommand
+              {commandDef}
+              {commandName}
+              {commandNode}
+              {argInfoArray}
+              {variablesInScope}
+              {commandNameNode}
+              {commandDictionary}
+              {commandInfoMapper}
+              {editorSequenceView}
+              readOnly={!hasEditPermission || !!fileMetadata?.readOnly}
+              {timeTagNode}
+              on:selectCommandDefinition={onSelectCommandDefinition}
+            />
+          {/if}
         </Sidebar.Content>
       </div>
     {:else}
       <Panel overflowYBody="hidden" padBody>
         <svelte:fragment slot="header">
-          <SectionTitle><span class="p-2">Selected Command</span></SectionTitle>
+          <SectionTitle><span class="p-2">{commandTabLabel}</span></SectionTitle>
         </svelte:fragment>
         <svelte:fragment slot="body">
           <div class="p-2 text-muted-foreground">

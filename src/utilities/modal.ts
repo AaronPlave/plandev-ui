@@ -48,6 +48,7 @@ import WorkspaceRevisionPreviewModal from '../components/modals/WorkspaceRevisio
 import WorkspaceRevisionRestoreModal from '../components/modals/WorkspaceRevisionRestoreModal.svelte';
 import WorkspaceSaveConflictModal from '../components/modals/WorkspaceSaveConflictModal.svelte';
 import NewSequenceTemplateModal from '../components/sequence-templates/NewSequenceTemplateModal.svelte';
+import type { FileStarter } from '@nasa-jpl/plandev-sequence-languages';
 import type { WorkspaceContentType } from '../enums/workspace';
 import { type ActionDefinition } from '../types/actions';
 import type { ActivityDirectiveDeletionMap, ActivityDirectiveId } from '../types/activity';
@@ -695,6 +696,7 @@ export async function showNewWorkspaceSequenceModal(
   currentWorkspace: Workspace,
   currentWorkspaceContents: WorkspaceTreeNode,
   startingPath: string = '',
+  starters: FileStarter[] = [],
 ): Promise<ModalElementValue> {
   return new Promise(resolve => {
     if (browser) {
@@ -705,6 +707,7 @@ export async function showNewWorkspaceSequenceModal(
           props: {
             currentWorkspace,
             currentWorkspaceContents,
+            starters,
             startingPath,
           },
           target,
@@ -712,6 +715,7 @@ export async function showNewWorkspaceSequenceModal(
         target.resolve = resolve;
 
         newWorkspaceSequenceModal.$on('confirm', (e: CustomEvent<{ filePath: string }>) => {
+          // detail also carries the chosen starter and its target, for starters that run an Action
           target.replaceChildren();
           target.resolve = null;
           resolve({ confirm: true, value: e.detail });

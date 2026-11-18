@@ -140,6 +140,8 @@ export interface LintDiagnostic {
   from: { column: number; line: number };
   message: string;
   severity: LintSeverity;
+  /** Which check reported it, e.g. `rustc` or `mission rules`, when the linter says. */
+  source?: string;
   to: { column: number; line: number };
 }
 

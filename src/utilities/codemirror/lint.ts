@@ -11,6 +11,7 @@ export function getLintDiagnostics(view: EditorView): LintDiagnostic[] {
       from: { column: from - fromLine.from, line: fromLine.number },
       message: d.message,
       severity: d.severity,
+      source: d.source,
       to: { column: to - toLine.from, line: toLine.number },
     });
   });

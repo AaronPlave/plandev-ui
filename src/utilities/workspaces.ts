@@ -330,6 +330,29 @@ export function incrementFilename(filename: string): string {
  * @param depth (Internal) The current depth level in the tree. Defaults to 0 for root level.
  * @returns An array containing all nodes from the tree, each with its 'fullPath', 'depth', and 'hasChildren'.
  */
+/**
+ * A file a tool maintains (e.g. a toolchain's project scaffolding), as recorded in its metadata
+ * (`user.managedBy`) by whoever wrote it. Never inferred from the file's name.
+ */
+export function getFileManager(node: Pick<WorkspaceTreeNode, 'metadata'> | null | undefined): string | null {
+  const managedBy = node?.metadata?.user?.managedBy;
+  return typeof managedBy === 'string' && managedBy ? managedBy : null;
+}
+
+/** The tree without managed files, nor folders that hold only managed files. Empty folders stay. */
+export function withoutManagedFiles(nodes: WorkspaceTreeNode[]): WorkspaceTreeNode[] {
+  return nodes.flatMap(node => {
+    if (node.type !== WorkspaceContentType.Directory) {
+      return getFileManager(node) ? [] : [node];
+    }
+    if (!node.contents?.length) {
+      return [node];
+    }
+    const contents = withoutManagedFiles(node.contents);
+    return contents.length ? [{ ...node, contents }] : [];
+  });
+}
+
 export function flattenWorkspaceTreeWithPaths(
   nodes: WorkspaceTreeNode[],
   currentPath: string[] = [],
