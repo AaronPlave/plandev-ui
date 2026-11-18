@@ -17,11 +17,12 @@
   import type { GqlSubscribable } from '../../types/subscribable';
   import gql from '../../utilities/gql';
   import { featurePermissions } from '../../utilities/permissions';
-  import { tooltip } from '../../utilities/tooltip';
+  import PropertyField from '../form/PropertyField.svelte';
   import EditableDropdown from '../ui/EditableDropdown.svelte';
   import Highlight from '../ui/Highlight.svelte';
 
   export let activityDirective: ActivityDirective | null | undefined;
+  /** The activity itself is not editable here (e.g. previewing a revision): presets are shown, never changed. */
   export let disabled: boolean = false;
   export let hasChanges: boolean = false;
   export let highlightKeysMap: Record<string, boolean> = {};
@@ -59,6 +60,7 @@
         plan.model as Model,
         activityPreset,
       ),
+      selectUnavailableReason: 'You do not have permission to apply this preset to the activity',
       value: activityPreset.id,
     }));
 
@@ -68,11 +70,29 @@
     const selectedPreset = $activityPresets.find(
       activityPreset => activityPreset.id === activityDirective?.applied_preset?.preset_id,
     );
-    if (selectedPreset !== undefined) {
-      hasDeletePermission = featurePermissions.activityPresets.canDelete(user, plan, selectedPreset) && !$planReadOnly;
-      hasUpdatePermission = featurePermissions.activityPresets.canUpdate(user, plan, selectedPreset) && !$planReadOnly;
-    }
+    hasDeletePermission =
+      selectedPreset !== undefined &&
+      featurePermissions.activityPresets.canDelete(user, plan, selectedPreset) &&
+      !$planReadOnly;
+    hasUpdatePermission =
+      selectedPreset !== undefined &&
+      featurePermissions.activityPresets.canUpdate(user, plan, selectedPreset) &&
+      !$planReadOnly;
   }
+  $: selectedPresetName =
+    $activityPresets.find(activityPreset => activityPreset.id === activityDirective?.applied_preset?.preset_id)?.name ??
+    null;
+  // The preset control is shown as an editor whenever the user can do anything with presets here. Applying a preset to
+  // this activity and creating/updating/deleting a (model-scoped) preset are separate permissions, so it's the union.
+  // Otherwise the applied preset is shown as plain information.
+  $: presetEditable =
+    !disabled &&
+    !$planReadOnly &&
+    (hasAssignPermission ||
+      hasCreatePermission ||
+      hasUpdatePermission ||
+      hasDeletePermission ||
+      options.some(option => option.hasSelectPermission));
 
   function onDeletePreset(event: CustomEvent<DropdownOptionValue>) {
     const { detail: activityPresetId } = event;
@@ -102,42 +122,55 @@
 </script>
 
 <Highlight highlight={highlightKeysMap.activity_preset}>
-  <div class="activity-preset-input-container">
-    <div class="preset-input-container st-input w-full">
-      <!-- svelte-ignore a11y-label-has-associated-control -->
-      <label class="label" use:tooltip={{ content: 'Choose activity preset', placement: 'top' }}> Preset </label>
-      <EditableDropdown
-        {disabled}
-        canSaveOver={hasChanges}
-        {hasCreatePermission}
-        {hasDeletePermission}
-        {hasUpdatePermission}
-        {options}
-        optionLabel="preset"
-        placeholder="None"
-        planReadOnly={$planReadOnly}
-        selectedOptionValue={activityDirective?.applied_preset?.preset_id}
-        showPlaceholderOption={hasAssignPermission}
-        on:deleteOption={onDeletePreset}
-        on:saveNewOption={onSaveNewPreset}
-        on:saveOption={onSavePreset}
-        on:selectOption={onSelectPreset}
-      />
-    </div>
+  <!-- The hairline always closes this row so it separates from the parameter list that follows. The row sits directly
+       above the parameters, so it uses the same label column and gap to keep the values aligned. -->
+  <div class="preset-row">
+    <PropertyField
+      divider
+      editable={presetEditable}
+      label="Preset"
+      name="preset"
+      title="Choose activity preset"
+      value={selectedPresetName}
+    >
+      <div class="activity-preset-input-container">
+        <EditableDropdown
+          canSaveOver={hasChanges}
+          {hasCreatePermission}
+          {hasDeletePermission}
+          {hasUpdatePermission}
+          {options}
+          optionLabel="preset"
+          placeholder="None"
+          planReadOnly={$planReadOnly}
+          selectedOptionValue={activityDirective?.applied_preset?.preset_id}
+          showPlaceholderOption={hasAssignPermission}
+          on:deleteOption={onDeletePreset}
+          on:saveNewOption={onSaveNewPreset}
+          on:saveOption={onSavePreset}
+          on:selectOption={onSelectPreset}
+        />
+      </div>
+    </PropertyField>
   </div>
 </Highlight>
 
 <style>
+  .preset-row {
+    --property-column-gap: 4px;
+    --property-label-width: min(100px, 36cqw);
+    container-type: inline-size;
+  }
+
+  @container (min-width: 340px) {
+    .preset-row :global(.property-field) {
+      --property-label-width: min(116px, 36cqw);
+    }
+  }
+
   .activity-preset-input-container {
     --aerie-menu-item-template-columns: 1fr;
     align-items: center;
     display: grid;
-  }
-
-  .preset-input-container {
-    display: grid;
-    grid-template-rows: repeat(2, min-content);
-    position: relative;
-    row-gap: 4px;
   }
 </style>

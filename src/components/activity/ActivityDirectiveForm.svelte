@@ -36,7 +36,7 @@
   import { isInstantiationError } from '../../utilities/errors';
   import { classNames, keyByBoolean } from '../../utilities/generic';
   import { getArguments, getFormParameters, parameterCapabilities } from '../../utilities/parameters';
-  import { permissionHandler } from '../../utilities/permissionHandler';
+  import { availability, availabilityOf } from '../../utilities/availability';
   import { featurePermissions } from '../../utilities/permissions';
   import { pluralize } from '../../utilities/text';
   import { formatDate, getDoyTime, getIntervalFromDoyRange } from '../../utilities/time';
@@ -46,12 +46,13 @@
   import ActivityMetadataField from '../activityMetadata/ActivityMetadataField.svelte';
   import DatePickerField from '../form/DatePickerField.svelte';
   import Field from '../form/Field.svelte';
-  import Input from '../form/Input.svelte';
+  import PropertyField from '../form/PropertyField.svelte';
   import ExtraneousParameters from '../parameters/ExtraneousParameters.svelte';
   import Parameters from '../parameters/Parameters.svelte';
   import ActivityStatusesRollup from '../ui/ActivityStatusesRollup.svelte';
   import Highlight from '../ui/Highlight.svelte';
   import RestrictionBanner from '../ui/RestrictionBanner.svelte';
+  import TagList from '../ui/Tags/TagList.svelte';
   import TagsInput from '../ui/Tags/TagsInput.svelte';
   import ActivityAnchorForm from './ActivityAnchorForm.svelte';
   import ActivityPresetInput from './ActivityPresetInput.svelte';
@@ -100,6 +101,8 @@
     ? PlanStatusMessages.READ_ONLY
     : 'You do not have permission to update this activity';
   $: canEditParameters = editable && hasUpdatePermission;
+  // The start time is derived (not editable) while the activity is anchored to another activity.
+  $: canEditStartTime = canEditParameters && activityDirective.anchor_id === null;
   $: parametersRestrictionReason = !editable
     ? revision
       ? 'You are previewing a previous revision of this activity.'
@@ -517,9 +520,10 @@
       <div>
         <button
           class="st-button primary"
-          use:permissionHandler={{
-            hasPermission: hasUpdatePermission,
-            permissionError: updatePermissionError,
+          use:availability={{
+            ...availabilityOf(hasUpdatePermission, updatePermissionError),
+            label: 'Restore this revision',
+            placement: 'top',
           }}
           on:click|stopPropagation={() => revision && restoreRevision(revision.revision)}
         >
@@ -554,56 +558,32 @@
       <Collapse title="Definition" contentClass="px-1">
         {#if showActivityName}
           <Highlight highlight={highlightKeysMap.name}>
-            <Input layout="inline">
-              <label use:tooltip={{ content: 'Activity Name', placement: 'top' }} for="activityName">
-                Activity Name
-              </label>
-              <input
-                class="st-input w-full"
-                disabled
-                id="activityName"
-                name="activityName"
-                value={activityDirective.name}
-              />
-            </Input>
+            <PropertyField label="Activity Name" name="activityName" value={activityDirective.name} />
           </Highlight>
         {/if}
 
         <Highlight highlight={highlightKeysMap.type}>
-          <Input layout="inline">
-            <label use:tooltip={{ content: 'Activity Type', placement: 'top' }} for="activity-type">
-              Activity Type
-            </label>
-            <input
-              class="st-input w-full"
-              disabled
-              name="activity-type"
-              id="activity-type"
-              value={activityDirective.type}
-            />
-          </Input>
+          <PropertyField label="Activity Type" name="activity-type" value={activityDirective.type} />
         </Highlight>
 
         <Highlight highlight={highlightKeysMap.start_offset}>
-          <DatePickerField
-            useFallback={!$plugins.time.enableDatePicker}
-            disabled={!editable || activityDirective.anchor_id !== null}
-            field={startTimeField}
-            label={`Start Time (${$plugins.time.primary.label}) - ${$plugins.time.primary.formatString}`}
-            layout="inline"
+          <!-- Start time is a derived value (not editable) while the activity is anchored to another activity. -->
+          <PropertyField
+            editable={canEditStartTime}
+            label={`Start Time (${$plugins.time.primary.label})`}
             name="start-time"
-            use={[
-              [
-                permissionHandler,
-                {
-                  hasPermission: hasUpdatePermission,
-                  permissionError: updatePermissionError,
-                },
-              ],
-            ]}
-            on:change={onUpdateStartTime}
-            on:keydown={onUpdateStartTime}
-          />
+            title={`Start Time - ${$plugins.time.primary.formatString}`}
+            value={startTime}
+          >
+            <DatePickerField
+              useFallback={!$plugins.time.enableDatePicker}
+              field={startTimeField}
+              layout={null}
+              name="start-time"
+              on:change={onUpdateStartTime}
+              on:keydown={onUpdateStartTime}
+            />
+          </PropertyField>
         </Highlight>
 
         <ActivityAnchorForm
@@ -622,137 +602,72 @@
         />
 
         <Highlight highlight={highlightKeysMap.tags}>
-          <Input layout="inline">
-            <label use:tooltip={{ content: 'Tags', placement: 'top' }} for="activityDirectiveTags"> Tags </label>
+          <PropertyField
+            editable={canEditParameters}
+            label="Tags"
+            name="activityDirectiveTags"
+            title="Tags"
+            value={null}
+          >
             <TagsInput
               name="Directive tags"
-              disabled={!hasUpdatePermission}
               options={tags}
               selected={activityDirective.tags.map(({ tag }) => tag)}
-              use={[
-                [
-                  permissionHandler,
-                  {
-                    hasPermission: hasUpdatePermission,
-                    permissionError: updatePermissionError,
-                  },
-                ],
-              ]}
               on:change={onTagsInputChange}
             />
-          </Input>
+            <TagList slot="read" tags={activityDirective.tags.map(({ tag }) => tag)} />
+          </PropertyField>
         </Highlight>
       </Collapse>
     </fieldset>
     <fieldset>
       <Collapse title="Metadata" contentClass="px-1" defaultExpanded={false}>
+        <!-- Everything here is informational: plain text, never an input. -->
         <Highlight highlight={highlightKeysMap.id}>
-          <Input layout="inline">
-            <label use:tooltip={{ content: 'Activity ID', placement: 'top' }} for="id"> ID</label>
-            <input class="st-input w-full" disabled name="id" id="id" value={activityDirective.id} />
-          </Input>
+          <PropertyField label="ID" name="id" title="Activity ID" value={activityDirective.id} />
         </Highlight>
-
         <Highlight highlight={highlightKeysMap.created_at}>
-          <Input layout="inline">
-            <label use:tooltip={{ content: 'Creation Time (UTC)', placement: 'top' }} for="creationTime">
-              Creation Time (UTC)
-            </label>
-            <input
-              class="st-input w-full"
-              disabled
-              name="creationTime"
-              value={activityDirective.created_at}
-              id="creationTime"
-            />
-          </Input>
+          <PropertyField
+            label="Creation Time (UTC)"
+            name="creationTime"
+            title="Creation Time (UTC)"
+            value={activityDirective.created_at}
+          />
         </Highlight>
-
         <Highlight highlight={highlightKeysMap.last_modified_at}>
-          <Input layout="inline">
-            <label use:tooltip={{ content: 'Last Modified Time (UTC)', placement: 'top' }} for="lastModifiedTime">
-              Last Modified Time (UTC)
-            </label>
-            <input
-              class="st-input w-full"
-              disabled
-              name="lastModifiedTime"
-              id="lastModifiedTime"
-              value={activityDirective.last_modified_at}
-            />
-          </Input>
+          <PropertyField
+            label="Last Modified Time (UTC)"
+            name="lastModifiedTime"
+            title="Last Modified Time (UTC)"
+            value={activityDirective.last_modified_at}
+          />
         </Highlight>
-
         <Highlight highlight={highlightKeysMap.last_modified_by}>
-          <Input layout="inline">
-            <label use:tooltip={{ content: 'Last Modified By', placement: 'top' }} for="modifiedBy">
-              Last Modified By
-            </label>
-            <input
-              class="st-input w-full"
-              disabled
-              name="modifiedBy"
-              value={activityDirective.last_modified_by}
-              id="modifiedBy"
-            />
-          </Input>
+          <PropertyField
+            label="Last Modified By"
+            name="modifiedBy"
+            title="Last Modified By"
+            value={activityDirective.last_modified_by}
+          />
         </Highlight>
-
         <Highlight highlight={highlightKeysMap.last_modified_by}>
-          <Input layout="inline">
-            <label use:tooltip={{ content: 'Created By', placement: 'top' }} for="createdBy"> Created By </label>
-            <input
-              class="st-input w-full"
-              disabled
-              name="createdBy"
-              value={activityDirective.created_by}
-              id="createdBy"
-            />
-          </Input>
+          <PropertyField label="Created By" name="createdBy" title="Created By" value={activityDirective.created_by} />
         </Highlight>
-
         <Highlight highlight={highlightKeysMap.source_scheduling_goal_id}>
-          <Input layout="inline">
-            <label
-              use:tooltip={{
-                content:
-                  'Source Scheduling Goal ID - The ID of the scheduling goal that created this activity directive',
-                placement: 'top',
-              }}
-              for="sourceSchedulingGoalId"
-            >
-              Source Scheduling Goal ID
-            </label>
-            <input
-              class="st-input w-full"
-              disabled
-              name="sourceSchedulingGoalId"
-              id="sourceSchedulingGoalId"
-              value={activityDirective.source_scheduling_goal_id ?? 'None'}
-            />
-          </Input>
+          <PropertyField
+            label="Source Scheduling Goal ID"
+            name="sourceSchedulingGoalId"
+            title="Source Scheduling Goal ID - The ID of the scheduling goal that created this activity directive"
+            value={activityDirective.source_scheduling_goal_id}
+          />
         </Highlight>
-
         <Highlight highlight={highlightKeysMap.source_scheduling_goal_invocation_id}>
-          <Input layout="inline">
-            <label
-              use:tooltip={{
-                content:
-                  'Source Scheduling Goal Invocation ID - The ID of the scheduling goal invocation (run) that created this activity directive',
-                placement: 'top',
-              }}
-              for="sourceSchedulingGoalInvocationId"
-            >
-              Source Scheduling Goal Invocation ID
-            </label>
-            <input
-              class="st-input w-full"
-              disabled
-              name="sourceSchedulingGoalInvocationId"
-              id="sourceSchedulingGoalInvocationId"
-              value={activityDirective.source_scheduling_goal_invocation_id ?? 'None'}
-            />
-          </Input>
+          <PropertyField
+            label="Source Scheduling Goal Invocation ID"
+            name="sourceSchedulingGoalInvocationId"
+            title="Source Scheduling Goal Invocation ID - The ID of the scheduling goal invocation (run) that created this activity directive"
+            value={activityDirective.source_scheduling_goal_invocation_id}
+          />
         </Highlight>
       </Collapse>
     </fieldset>
@@ -762,20 +677,18 @@
         error={parametersWithErrorsCount > 0}
         title={`Parameters${parametersWithErrorsCount > 0 ? ` (${parametersWithErrorsCount} invalid)` : ''}`}
       >
-        <div class="activity-preset" class:editable={canEditParameters}>
-          <ActivityPresetInput
-            {modelId}
-            {activityDirective}
-            disabled={!editable}
-            hasChanges={numOfUserChanges > 0}
-            {user}
-            plan={$plan}
-            on:applyPreset={onApplyPresetToActivity}
-            on:deletePreset={onDeletePreset}
-            on:saveNewPreset={onSaveNewPreset}
-            on:savePreset={onSavePreset}
-          />
-        </div>
+        <ActivityPresetInput
+          {modelId}
+          {activityDirective}
+          disabled={!editable}
+          hasChanges={numOfUserChanges > 0}
+          {user}
+          plan={$plan}
+          on:applyPreset={onApplyPresetToActivity}
+          on:deletePreset={onDeletePreset}
+          on:saveNewPreset={onSaveNewPreset}
+          on:savePreset={onSavePreset}
+        />
         <Parameters
           capabilities={parameterCapabilities(editable && hasUpdatePermission, parametersRestrictionReason)}
           {formParameters}
@@ -964,13 +877,6 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
-  }
-
-  /* Editable parameter rows have no hairlines of their own, so the preset block gets the one separator. */
-  .activity-preset.editable {
-    border-bottom: 1px solid hsl(var(--border));
-    margin-bottom: 4px;
-    padding-bottom: 6px;
   }
 
   .activity-description {

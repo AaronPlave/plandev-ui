@@ -18,7 +18,7 @@ test.beforeAll(async ({ browser }) => {
 
   await setup.plan.fillSimulationTemplateName('Template 1');
 
-  await setup.plan.panelSimulation.getByRole('button', { name: 'Enter a unique name for the new template' }).click();
+  await setup.plan.panelSimulation.getByRole('button', { name: 'Save as new template' }).click();
   await setup.plan.panelSimulation.locator('.dropdown-header').waitFor({ state: 'detached' });
 
   await setup.page.waitForFunction(() => document.querySelector('.selected-display-value')?.innerHTML === 'Template 1');
@@ -28,7 +28,7 @@ test.beforeAll(async ({ browser }) => {
 
   await setup.plan.fillSimulationTemplateName('Template 2');
 
-  await setup.plan.panelSimulation.getByRole('button', { name: 'Enter a unique name for the new template' }).click();
+  await setup.plan.panelSimulation.getByRole('button', { name: 'Save as new template' }).click();
   await setup.plan.panelSimulation.locator('.dropdown-header').waitFor({ state: 'detached' });
 
   await setup.page.waitForFunction(() => document.querySelector('.selected-display-value')?.innerHTML === 'Template 2');

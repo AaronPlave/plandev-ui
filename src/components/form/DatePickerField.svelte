@@ -73,11 +73,13 @@
   <div class="[&_fieldset]:p-0">
     <Field {field} on:change={onChange}>
       <Input {layout}>
-        <div use:tooltip={{ content: 'Start Time', placement: 'top' }}>
-          <Label size="sm" class="flex {layout === 'stacked' ? 'pb-0.5' : ''}" for={name}>
-            {label}
-          </Label>
-        </div>
+        {#if label}
+          <div use:tooltip={{ content: 'Start Time', placement: 'top' }}>
+            <Label size="sm" class="flex {layout === 'stacked' ? 'pb-0.5' : ''}" for={name}>
+              {label}
+            </Label>
+          </div>
+        {/if}
         <InputStellar
           sizeVariant="xs"
           autocomplete="off"

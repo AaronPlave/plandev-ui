@@ -4,6 +4,8 @@ export type SelectedDropdownOptionValue = DropdownOptionValue | null;
 export type DropdownOption = {
   display: string;
   hasSelectPermission?: boolean;
+  /** Why the option can't be selected when `hasSelectPermission` is false. */
+  selectUnavailableReason?: string;
   /** An optional second line shown under `display` in the menu. */
   subtitle?: string;
   /** Hover text for the option in the menu, e.g. the full text of a truncated `display`. */

@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/svelte';
+import { cleanup, fireEvent, render } from '@testing-library/svelte';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ActivityDirective, ActivityDirectivesMap } from '../../types/activity';
 import ActivityAnchorForm from './ActivityAnchorForm.svelte';
@@ -94,20 +94,20 @@ describe('Activity Anchor Form component', () => {
   it('Should not render the form if no anchor is initially present', () => {
     const activityDirective: ActivityDirective = activityDirectivesMap[12];
 
-    const { getByRole } = render(ActivityAnchorForm, {
+    const { getAllByRole } = render(ActivityAnchorForm, {
       activityDirective,
       activityDirectivesMap,
       anchorId: activityDirective.anchor_id,
       isAnchoredToStart: activityDirective.anchored_to_start,
       startOffset: activityDirective.start_offset,
     });
-    expect(getByRole('group').getElementsByClassName('content')[0].getAttribute('aria-hidden')).toEqual('true');
+    expect(getAllByRole('group')[0].getElementsByClassName('content')[0].getAttribute('aria-hidden')).toEqual('true');
   });
 
   it('Should render the form when an anchor is initially present', () => {
     const activityDirective: ActivityDirective = activityDirectivesMap[13];
 
-    const { getByRole } = render(ActivityAnchorForm, {
+    const { getAllByRole } = render(ActivityAnchorForm, {
       activityDirective,
       activityDirectivesMap,
       anchorId: activityDirective.anchor_id,
@@ -115,6 +115,47 @@ describe('Activity Anchor Form component', () => {
       startOffset: activityDirective.start_offset,
     });
 
-    expect(getByRole('group').getElementsByClassName('content')[0].getAttribute('aria-hidden')).toEqual('false');
+    expect(getAllByRole('group')[0].getElementsByClassName('content')[0].getAttribute('aria-hidden')).toEqual('false');
+  });
+
+  describe('editable vs read-only', () => {
+    const props = () => {
+      const activityDirective: ActivityDirective = activityDirectivesMap[13];
+      return {
+        activityDirective,
+        activityDirectivesMap,
+        anchorId: activityDirective.anchor_id,
+        isAnchoredToStart: activityDirective.anchored_to_start,
+        startOffset: activityDirective.start_offset,
+      };
+    };
+    const value = (container: HTMLElement, name: string) =>
+      container.querySelector(`[data-field="${name}"] [data-testid="read-value"]`)?.textContent?.trim();
+
+    it('shows the anchor, edge and offset as plain information (no inputs) when the user cannot edit', () => {
+      const { container } = render(ActivityAnchorForm, { ...props(), hasUpdatePermission: false });
+      expect(value(container, 'anchor-id')).toBe('12 - parent 1');
+      expect(value(container, 'anchored-to-start')).toBe('Start');
+      expect(value(container, 'start-offset')).toContain('10m');
+      expect(container.querySelector('input, [role="combobox"], .anchor-boundary')).toBeNull();
+    });
+
+    it('is also read-only when the plan is read-only or the activity is not editable (disabled)', () => {
+      const readOnlyPlan = render(ActivityAnchorForm, { ...props(), hasUpdatePermission: true, planReadOnly: true });
+      expect(readOnlyPlan.container.querySelector('input, [role="combobox"]')).toBeNull();
+      readOnlyPlan.unmount();
+      const disabled = render(ActivityAnchorForm, { ...props(), disabled: true, hasUpdatePermission: true });
+      expect(disabled.container.querySelector('input, [role="combobox"]')).toBeNull();
+    });
+
+    it('offers the editors, and dispatches an edge change, when the user can edit', async () => {
+      const edges: boolean[] = [];
+      const { component, container, getByRole } = render(ActivityAnchorForm, { ...props(), hasUpdatePermission: true });
+      component.$on('updateAnchorEdge', (e: CustomEvent<boolean>) => edges.push(e.detail));
+      expect(container.querySelector('[role="combobox"]')).not.toBeNull();
+      expect(container.querySelector('input[name="start-offset"]')).not.toBeNull();
+      await fireEvent.click(getByRole('button', { name: 'End' }));
+      expect(edges).toEqual([false]);
+    });
   });
 });

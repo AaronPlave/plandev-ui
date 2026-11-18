@@ -3,6 +3,17 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { DropdownOptions } from '../../types/dropdown';
 import EditableDropdown from './EditableDropdown.svelte';
 
+// Unavailable actions stay focusable and explained (aria-disabled + aria-describedby) rather than natively disabled.
+function expectUnavailable(button: HTMLElement, reason: RegExp) {
+  expect(button.getAttribute('aria-disabled')).toBe('true');
+  const description = button.getAttribute('aria-describedby');
+  expect(description && document.getElementById(description)?.textContent).toMatch(reason);
+}
+
+function expectAvailable(button: HTMLElement) {
+  expect(button.getAttribute('aria-disabled')).toBeNull();
+}
+
 describe('Editable Dropdown component', () => {
   const options: DropdownOptions = [
     {
@@ -35,7 +46,7 @@ describe('Editable Dropdown component', () => {
     });
 
     await fireEvent.click(getByText('None'));
-    expect(getByRole('button', { name: 'Enter a unique name for the new preset' }).className).toContain('disabled');
+    expectUnavailable(getByRole('button', { name: 'Save as new preset' }), /unique/i);
   });
 
   it('Save new option button should be disabled when a non-unique name is provided', async () => {
@@ -47,7 +58,7 @@ describe('Editable Dropdown component', () => {
 
     await fireEvent.click(getByText('None'));
     await fireEvent.input(getByPlaceholderText('Enter preset name'), { target: { value: 'Preset Test 3' } });
-    expect(getByRole('button', { name: 'Enter a unique name for the new preset' }).className).toContain('disabled');
+    expectUnavailable(getByRole('button', { name: 'Save as new preset' }), /unique/i);
   });
 
   it('Save new option button should be clickable ', async () => {
@@ -59,6 +70,29 @@ describe('Editable Dropdown component', () => {
 
     await fireEvent.click(getByText('None'));
     await fireEvent.input(getByPlaceholderText('Enter preset name'), { target: { value: 'Preset Test 1' } });
-    expect(getByRole('button', { name: 'Enter a unique name for the new preset' }).className).not.toContain('disabled');
+    expectAvailable(getByRole('button', { name: 'Save as new preset' }));
+  });
+
+  it('permission and state are separate reasons, each explained, and an unavailable save never dispatches', async () => {
+    const saved: string[] = [];
+    const { component, getByText, getByRole, getByPlaceholderText } = render(EditableDropdown, {
+      hasCreatePermission: false,
+      optionLabel: 'preset',
+      options,
+      placeholder: 'None',
+      planReadOnly: false,
+    });
+    component.$on('saveNewOption', (e: CustomEvent<string>) => saved.push(e.detail));
+
+    await fireEvent.click(getByText('None'));
+    await fireEvent.input(getByPlaceholderText('Enter preset name'), { target: { value: 'Brand new' } });
+    const create = getByRole('button', { name: 'Save as new preset' });
+    expectUnavailable(create, /permission to save a new preset/i);
+    await fireEvent.click(create);
+    expect(saved).toEqual([]);
+
+    // Nothing selected: saving over / deleting are unavailable for a state reason, not a permission one.
+    expectUnavailable(getByRole('button', { name: 'Save preset changes' }), /select a preset/i);
+    expectUnavailable(getByRole('button', { name: 'Delete preset' }), /select a preset/i);
   });
 });

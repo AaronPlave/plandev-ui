@@ -14,8 +14,7 @@
     SelectedDropdownOptionValue,
   } from '../../types/dropdown';
   import { getTarget } from '../../utilities/generic';
-  import { permissionHandler } from '../../utilities/permissionHandler';
-  import { tooltip } from '../../utilities/tooltip';
+  import { availability, availabilityOf, type Availability } from '../../utilities/availability';
   import SearchableDropdown from './SearchableDropdown.svelte';
 
   export let canSaveOver: boolean = false;
@@ -76,6 +75,53 @@
         return previousValue || dropdownOption.display === optionName;
       }, false);
   $: selectedOption = options.find(option => option.value === selectedOptionValue);
+
+  $: saveNewAvailability = ((): Availability => {
+    const denied = availabilityOf(
+      hasCreatePermission,
+      planReadOnly
+        ? PlanStatusMessages.READ_ONLY
+        : `You do not have permission to save a new ${upperFirst(optionLabel).toLowerCase()}`,
+    );
+    if (!denied.available) {
+      return denied;
+    }
+    const valid = !!optionName && isOptionNameChanged && !isOptionNameDuped;
+    return availabilityOf(valid, getSaveNewTooltip(optionName));
+  })();
+  $: saveAvailability = ((): Availability => {
+    const denied = availabilityOf(
+      updatePermission,
+      planReadOnly
+        ? PlanStatusMessages.READ_ONLY
+        : `You do not have permission to save this ${upperFirst(optionLabel).toLowerCase()}`,
+    );
+    if (!denied.available) {
+      return denied;
+    }
+    if (!selectedOption) {
+      return availabilityOf(false, `Select a ${optionLabel.toLowerCase()} to save changes to`);
+    }
+    if (isOptionNameDuped) {
+      return availabilityOf(false, `You must enter a unique ${optionLabel.toLowerCase()} name`);
+    }
+    return availabilityOf(isOptionNameChanged || canSaveOver, 'Change the name or the parameters to save');
+  })();
+  $: deleteAvailability = ((): Availability => {
+    const denied = availabilityOf(
+      deletePermission,
+      planReadOnly
+        ? PlanStatusMessages.READ_ONLY
+        : `You do not have permission to delete this ${upperFirst(optionLabel).toLowerCase()}`,
+    );
+    if (!denied.available) {
+      return denied;
+    }
+    if (!selectedOption) {
+      return availabilityOf(false, `Select a ${optionLabel.toLowerCase()} to delete`);
+    }
+    return availabilityOf(!isOptionNameChanged, `Save or revert the name change before deleting`);
+  })();
 
   function getSaveNewTooltip(inputText: string) {
     if (requireUniqueDisplayNames) {
@@ -164,49 +210,28 @@
         value={optionName}
         on:input={onUpdateOptionName}
       />
+      <!-- Each action is available or not for its own reason: a permission, or the current state of the name/selection.
+           The reason is always discoverable (tooltip + aria-describedby); none of these are natively disabled. -->
       <button
-        use:tooltip={{
-          content: getSaveNewTooltip(optionName),
-          disabled: !hasCreatePermission,
-          placement: 'top',
-        }}
+        use:availability={{ ...saveNewAvailability, label: getSaveNewTooltip(optionName), placement: 'top' }}
         class="icon st-button"
-        class:disabled={!optionName || !isOptionNameChanged || isOptionNameDuped}
-        use:permissionHandler={{
-          hasPermission: hasCreatePermission,
-          permissionError: planReadOnly
-            ? PlanStatusMessages.READ_ONLY
-            : `You do not have permission to save a new ${upperFirst(optionLabel)}`,
-        }}
+        aria-label={`Save as new ${optionLabel.toLowerCase()}`}
         on:click|stopPropagation={onSaveNewOption}
       >
         <PlusIcon />
       </button>
       <button
-        use:tooltip={{ content: getSaveTooltip(optionName), disabled: !updatePermission, placement: 'top' }}
+        use:availability={{ ...saveAvailability, label: getSaveTooltip(optionName), placement: 'top' }}
         class="icon st-button"
-        class:disabled={isOptionNameDuped}
-        disabled={!(!!selectedOption && (isOptionNameChanged || canSaveOver))}
-        use:permissionHandler={{
-          hasPermission: updatePermission,
-          permissionError: planReadOnly
-            ? PlanStatusMessages.READ_ONLY
-            : `You do not have permission to save this ${upperFirst(optionLabel)}`,
-        }}
+        aria-label={`Save ${optionLabel.toLowerCase()} changes`}
         on:click|stopPropagation={onSaveOption}
       >
         <SaveIcon />
       </button>
       <button
-        use:tooltip={{ content: `Delete ${optionLabel.toLowerCase()}`, disabled: !updatePermission, placement: 'top' }}
+        use:availability={{ ...deleteAvailability, label: `Delete ${optionLabel.toLowerCase()}`, placement: 'top' }}
         class="icon st-button"
-        disabled={!selectedOption || isOptionNameChanged}
-        use:permissionHandler={{
-          hasPermission: deletePermission,
-          permissionError: planReadOnly
-            ? PlanStatusMessages.READ_ONLY
-            : `You do not have permission to delete this ${upperFirst(optionLabel)}`,
-        }}
+        aria-label={`Delete ${optionLabel.toLowerCase()}`}
         on:click|stopPropagation={onDeleteOption}
       >
         <TrashIcon />
@@ -216,11 +241,6 @@
 </SearchableDropdown>
 
 <style>
-  .st-button.disabled {
-    cursor: not-allowed;
-    opacity: var(--st-button-disabled-opacity);
-  }
-
   .dropdown-header {
     display: flex;
     flex: 1;

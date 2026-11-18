@@ -38,13 +38,12 @@
   import Collapse from '../Collapse.svelte';
   import Field from '../form/Field.svelte';
   import PropertyField from '../form/PropertyField.svelte';
-  import ReadValue from '../form/ReadValue.svelte';
   import AsyncContentState from '../ui/AsyncContentState.svelte';
   import CardList from '../ui/CardList.svelte';
   import FilterToggleButton from '../ui/FilterToggleButton.svelte';
   import ProgressRadial from '../ui/ProgressRadial.svelte';
   import PlanCollaboratorInput from '../ui/Tags/PlanCollaboratorInput.svelte';
-  import TagChip from '../ui/Tags/Tag.svelte';
+  import TagList from '../ui/Tags/TagList.svelte';
   import TagsInput from '../ui/Tags/TagsInput.svelte';
   import AvailabilityButton from '../ui/AvailabilityButton.svelte';
   import RestrictionBanner from '../ui/RestrictionBanner.svelte';
@@ -289,13 +288,7 @@
         </PropertyField>
         <PropertyField editable={hasPlanUpdatePermission} label="Tags" name="tags" value={null}>
           <TagsInput options={tags} selected={planTags} on:change={onTagsInputChange} />
-          <div slot="read" class="flex flex-wrap gap-[2px]" data-testid="tags-read">
-            {#each planTags as tag (tag.id)}
-              <TagChip {tag} removable={false} />
-            {:else}
-              <ReadValue value={null} />
-            {/each}
-          </div>
+          <TagList slot="read" tags={planTags} />
         </PropertyField>
       </Collapse>
     </fieldset>

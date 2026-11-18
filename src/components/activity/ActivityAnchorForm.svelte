@@ -2,15 +2,13 @@
 
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import { PlanStatusMessages } from '../../enums/planStatusMessages';
   import type { ActivityDirective, ActivityDirectiveId, ActivityDirectivesMap } from '../../types/activity';
   import type { DropdownOptions, SelectedDropdownOptionValue } from '../../types/dropdown';
   import { getTarget } from '../../utilities/generic';
-  import { permissionHandler } from '../../utilities/permissionHandler';
   import { convertDurationStringToInterval, convertUsToDurationString, getIntervalInMs } from '../../utilities/time';
-  import { tooltip } from '../../utilities/tooltip';
   import Collapse from '../Collapse.svelte';
-  import Input from '../form/Input.svelte';
+  import PropertyField from '../form/PropertyField.svelte';
+  import ReadValue from '../form/ReadValue.svelte';
   import Highlight from '../ui/Highlight.svelte';
   import SearchableDropdown from '../ui/SearchableDropdown.svelte';
 
@@ -48,9 +46,10 @@
     value: anchorableActivity.id,
   }));
   $: startOffsetError = validateStartOffset(startOffsetString, activityDirective);
-  $: updatePermissionError = planReadOnly
-    ? PlanStatusMessages.READ_ONLY
-    : 'You do not have permission to update this anchor';
+  // Editing the anchor is one decision (the caller's permission, the plan not being read-only, and the activity being
+  // editable at all). When it's false every anchor property is shown as plain information.
+  $: canEdit = !disabled && hasUpdatePermission && !planReadOnly;
+  $: anchorText = anchoredActivity ? formatActivityDirectiveAnchorText(anchoredActivity) : 'To Plan';
 
   $: if (startOffset) {
     const offsetString = convertUsToDurationString(getIntervalInMs(startOffset) * 1000, true);
@@ -115,13 +114,13 @@
   }
 
   function onAnchorToStart() {
-    if (!disabled) {
+    if (canEdit) {
       updateAnchorEdge(true);
     }
   }
 
   function onAnchorToEnd() {
-    if (!disabled) {
+    if (canEdit) {
       updateAnchorEdge(false);
     }
   }
@@ -149,83 +148,83 @@
 >
   <div class="anchor-form">
     <Highlight highlight={highlightKeysMap.anchor_id}>
-      <Input layout="inline">
-        <label use:tooltip={{ content: 'Activity to anchor to', placement: 'top' }} for="anchor_id">
-          Relative to
-        </label>
+      <PropertyField
+        editable={canEdit}
+        label="Relative to"
+        name="anchor-id"
+        title="Activity to anchor to"
+        value={anchorText}
+      >
         <SearchableDropdown
-          {disabled}
-          hasUpdatePermission={hasUpdatePermission && !planReadOnly}
           options={searchableOptions}
           placeholder="To Plan"
           searchPlaceholder="Search Directives"
           selectTooltip="Set Anchor"
           name="Set Anchor"
           selectedOptionValues={typeof anchorId === 'number' ? [anchorId] : []}
-          {updatePermissionError}
           on:change={onSelectAnchor}
         />
-      </Input>
+      </PropertyField>
     </Highlight>
     <Highlight highlight={highlightKeysMap.anchored_to_start}>
-      <Input layout="inline">
-        <label
-          use:tooltip={{ content: 'Where to anchor to activity directive', placement: 'top' }}
-          for="isAnchoredToStart"
-        >
-          Anchor
-        </label>
-        <div class="anchor-boundaries">
-          <div
+      <PropertyField
+        editable={canEdit}
+        label="Anchor"
+        name="anchored-to-start"
+        title="Where to anchor to activity directive"
+        value={isAnchoredToStart ? 'Start' : 'End'}
+      >
+        <div class="anchor-boundaries" role="group" aria-label="Anchor edge">
+          <button
+            type="button"
             class:st-button={isAnchoredToStart}
             class="secondary anchor-boundary"
             class:selected={isAnchoredToStart}
-            class:disabled
-            role="none"
-            use:permissionHandler={{
-              hasPermission: hasUpdatePermission && !planReadOnly,
-              permissionError: updatePermissionError,
-            }}
+            aria-pressed={isAnchoredToStart}
             on:click={onAnchorToStart}
           >
             Start
-          </div>
-          <div
+          </button>
+          <button
+            type="button"
             class:st-button={!isAnchoredToStart}
             class="secondary anchor-boundary"
             class:selected={!isAnchoredToStart}
-            class:disabled
-            use:permissionHandler={{
-              hasPermission: hasUpdatePermission && !planReadOnly,
-              permissionError: updatePermissionError,
-            }}
+            aria-pressed={!isAnchoredToStart}
             on:click={onAnchorToEnd}
-            role="none"
           >
             End
-          </div>
+          </button>
         </div>
-      </Input>
+      </PropertyField>
     </Highlight>
     <Highlight highlight={highlightKeysMap.start_offset}>
-      <Input layout="inline">
-        <label use:tooltip={{ content: 'The offset duration for the anchor', placement: 'top' }} for="start-offset">
-          Offset
-        </label>
+      <PropertyField
+        editable={canEdit}
+        label="Offset"
+        name="start-offset"
+        title="The offset duration for the anchor"
+        value={startOffsetString}
+      >
         <input
           class="st-input w-full"
           class:error={!!startOffsetError}
-          {disabled}
+          aria-invalid={startOffsetError ? true : undefined}
+          aria-label="Offset"
           name="start-offset"
-          use:permissionHandler={{
-            hasPermission: hasUpdatePermission && !planReadOnly,
-            permissionError: updatePermissionError,
-          }}
           bind:value={startOffsetString}
           on:change={onUpdateStartOffset}
-          use:tooltip={{ content: startOffsetError, placement: 'top' }}
         />
-      </Input>
+        <svelte:fragment slot="read">
+          <ReadValue value={startOffsetString} />
+          {#if startOffsetError}
+            <div class="text-red-500" data-testid="anchor-offset-error">{startOffsetError}</div>
+          {/if}
+        </svelte:fragment>
+      </PropertyField>
+      {#if canEdit && startOffsetError}
+        <div class="px-2 pb-1 text-xs text-red-500" data-testid="anchor-offset-error">{startOffsetError}</div>
+      {/if}
     </Highlight>
   </div>
 </Collapse>
@@ -248,6 +247,13 @@
     text-align: center;
   }
 
+  /* The selected edge is a Stellar `.st-button`; the other one is a bare button that should look like plain text. */
+  .anchor-boundaries .anchor-boundary:not(.selected) {
+    background: transparent;
+    border: 0;
+    font: inherit;
+  }
+
   .anchor-boundaries .anchor-boundary:hover {
     color: var(--st-black);
   }
@@ -256,10 +262,6 @@
     background-color: var(--st-white);
     color: inherit;
     cursor: default;
-  }
-
-  .anchor-boundaries .anchor-boundary.disabled {
-    cursor: not-allowed;
   }
 
   :global(.anchor-collapse.collapse-root .content) {

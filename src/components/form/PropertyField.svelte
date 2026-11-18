@@ -24,10 +24,16 @@
   export let empty: string = 'None';
   /** Tooltip for the label (e.g. a longer description). */
   export let title: string | undefined = undefined;
+  /**
+   * Whether a hairline closes the row. By default only read-only rows have one (editable rows are separated by their
+   * inputs); pass `true` to force it, e.g. to separate an editable row from a following read-only list.
+   */
+  export let divider: boolean | undefined = undefined;
 
   const labelId = `property-label-${Math.random().toString(36).slice(2, 9)}`;
 
   $: readOnly = !editable;
+  $: hasDivider = divider ?? readOnly;
 </script>
 
 <!--
@@ -45,6 +51,7 @@
 <div
   class="property-field"
   class:read-only={readOnly}
+  class:divider={hasDivider}
   class:stacked={layout === 'stacked'}
   class:has-action={$$slots.action}
   role="group"
@@ -74,7 +81,7 @@
 <style>
   .property-field {
     align-items: start;
-    column-gap: 8px;
+    column-gap: var(--property-column-gap, 8px);
     display: grid;
     grid-template-columns: var(--property-label-width, 100px) minmax(0, 1fr);
     min-height: 28px;
@@ -125,7 +132,7 @@
     padding-left: 0;
   }
 
-  .property-field.read-only {
+  .property-field.divider {
     border-bottom: 1px solid hsl(var(--border));
   }
 

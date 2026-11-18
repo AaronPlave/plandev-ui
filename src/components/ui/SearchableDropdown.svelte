@@ -15,6 +15,7 @@
   import { PlanStatusMessages } from '../../enums/planStatusMessages';
   import type { DropdownOption, DropdownOptions, SelectedDropdownOptionValue } from '../../types/dropdown';
   import { classNames, getTarget } from '../../utilities/generic';
+  import { availability, availabilityOf } from '../../utilities/availability';
   import { permissionHandler } from '../../utilities/permissionHandler';
   import { tooltip } from '../../utilities/tooltip';
   import Input from '../form/Input.svelte';
@@ -285,16 +286,19 @@
           {@const selected =
             !!selectedOptions.find(o => o.value === displayedOption.value) ||
             (!!showPlaceholderOption && selectedOptions.length === 0 && index === 0 && !displayedOption.value)}
+          <!-- Menu items activate on mouseup/Enter, so the item's own `disabled` is what blocks selection; the
+               availability action adds the explanation (aria-describedby + tooltip). -->
           <MenuItem
             className="min-h-9 py-2"
+            disabled={displayedOption.hasSelectPermission === false}
             {selected}
             use={[
               [
-                permissionHandler,
-                {
-                  hasPermission: displayedOption.hasSelectPermission ?? true,
-                  permissionError: 'You do not have permission to select this',
-                },
+                availability,
+                availabilityOf(
+                  displayedOption.hasSelectPermission ?? true,
+                  displayedOption.selectUnavailableReason ?? 'You do not have permission to select this',
+                ),
               ],
             ]}
             on:click={event => onSelectOption(displayedOption, event.detail)}
