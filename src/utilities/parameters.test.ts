@@ -12,6 +12,7 @@ import {
   pathMatchesPattern,
   redactSecrets,
   SECRET_MASK,
+  UNRECOGNIZED_MASK,
 } from './parameters';
 
 describe('getArgument', () => {
@@ -651,7 +652,9 @@ describe('redactSecrets', () => {
     expect(redactSecrets('', { type: 'secret' })).toBe('');
     expect(redactSecrets(null, { type: 'secret' })).toBeNull();
     expect(redactSecrets(undefined, { type: 'secret' })).toBeUndefined();
-    expect(redactSecrets({ a: 1 }, undefined)).toEqual({ a: 1 });
+    expect(redactSecrets(undefined, undefined)).toBeUndefined();
+    expect(redactSecrets(null, undefined)).toBeNull();
+    expect(redactSecrets('', undefined)).toBe('');
   });
 
   test('masks secrets inside structs and preserves the rest', () => {
@@ -697,5 +700,81 @@ describe('redactSecrets', () => {
     const redacted = redactSecrets(value, schema as any);
     expect(redacted).toEqual({ label: 'L', tokens: [{ inner: [mask, mask] }, { inner: [] }] });
     expect(JSON.stringify(redacted)).not.toContain(secret);
+  });
+
+  describe('values the schema does not describe', () => {
+    const unknown = UNRECOGNIZED_MASK;
+    const structSchema = { items: { host: { type: 'string' }, token: { type: 'secret' } }, type: 'struct' } as any;
+
+    test('hides an unknown field inside an otherwise known struct, keeping recognized siblings', () => {
+      const value = { extra: secret, host: 'example.org', token: secret };
+      const redacted = redactSecrets(value, structSchema);
+      expect(redacted).toEqual({ extra: unknown, host: 'example.org', token: mask });
+      expect(JSON.stringify(redacted)).not.toContain(secret);
+    });
+
+    test('hides a value with no schema at all, whatever its type', () => {
+      expect(redactSecrets(secret, undefined)).toBe(unknown);
+      expect(redactSecrets({ a: secret }, undefined)).toBe(unknown);
+      expect(redactSecrets([secret], undefined)).toBe(unknown);
+      expect(redactSecrets(7, undefined)).toBe(unknown);
+      expect(redactSecrets(false, undefined)).toBe(unknown);
+    });
+
+    test('hides an unknown structured subtree as a whole, including anything secret-looking nested in it', () => {
+      const value = { host: 'h', nested: { deeper: [{ token: secret }], token: secret } };
+      const redacted = redactSecrets(value, structSchema);
+      expect(redacted).toEqual({ host: 'h', nested: unknown });
+      expect(JSON.stringify(redacted)).not.toContain(secret);
+    });
+
+    test('hides unknown properties among recognized ones inside series items', () => {
+      const schema = { items: structSchema, type: 'series' } as any;
+      const value = [
+        { host: 'a', surprise: secret, token: secret },
+        { host: 'b', token: secret },
+      ];
+      const redacted = redactSecrets(value, schema);
+      expect(redacted).toEqual([
+        { host: 'a', surprise: unknown, token: mask },
+        { host: 'b', token: mask },
+      ]);
+      expect(JSON.stringify(redacted)).not.toContain(secret);
+    });
+
+    test('does not treat inherited names as known fields', () => {
+      const redacted = redactSecrets({ constructor: secret, toString: secret }, structSchema);
+      expect(redacted).toEqual({ constructor: unknown, toString: unknown });
+    });
+
+    test('hides a value whose shape does not match its schema (it cannot be classified)', () => {
+      expect(redactSecrets(secret, structSchema)).toBe(unknown);
+      expect(redactSecrets([secret], structSchema)).toBe(unknown);
+      expect(redactSecrets({ a: secret }, { items: { type: 'string' }, type: 'series' } as any)).toBe(unknown);
+      expect(redactSecrets({ token: secret }, { type: 'string' })).toBe(unknown);
+      expect(redactSecrets([{ token: secret }], { type: 'int' })).toBe(unknown);
+    });
+
+    test('keeps recognized scalars, including a list of options', () => {
+      expect(redactSecrets('x', { type: 'string' })).toBe('x');
+      expect(redactSecrets(0, { type: 'int' })).toBe(0);
+      expect(redactSecrets(false, { type: 'boolean' })).toBe(false);
+      expect(redactSecrets(['a', 'b'], { label: 'L', options: [], type: 'options-multiple' } as any)).toEqual([
+        'a',
+        'b',
+      ]);
+    });
+
+    test('preserves empty values inside structures, recognized or not', () => {
+      const redacted = redactSecrets({ extra: null, host: '', other: '', token: undefined }, structSchema);
+      expect(redacted).toEqual({ extra: null, host: '', other: '', token: undefined });
+    });
+
+    test('never mutates the input, even when it hides things', () => {
+      const value = { extra: { token: secret }, host: 'h', token: secret };
+      const before = JSON.stringify(value);
+      redactSecrets(value, structSchema);
+      expect(JSON.stringify(value)).toBe(before);
+    });
   });
 });

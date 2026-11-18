@@ -17,7 +17,13 @@
   /** How many trailing characters of a longer final segment stay bound to the unit. */
   const TAIL_SPLIT = 4;
 
+  /** A plain numeric literal: sign, digits, optional fraction, optional exponent. */
+  const NUMERIC = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+  /** Digits and their punctuation (times, durations, decimals): never split, even when long. */
+  const NUMBER_LIKE = /^[\d.:+\-eE]+$/;
+
   let isEmpty: boolean;
+  let isNumber: boolean;
   let text: string;
   let head: string[];
   let tail: string;
@@ -25,12 +31,17 @@
 
   $: isEmpty = value === null || value === undefined || value === '';
   $: text = isEmpty ? empty : format ? format(value) : String(value);
-  $: hasTail = !!unit && !isEmpty;
+  $: isNumber = !isEmpty && NUMERIC.test(text.trim());
+  $: hasTail = !!unit && !isEmpty && !isNumber;
   $: ({ head, tail } = split(softBreakSegments(text), hasTail));
 
   /**
    * Everything wraps normally except, when there is a unit, the final portion of the value, which is kept together with
    * the unit so the unit is never orphaned on a line of its own. The rest of a long value is free to wrap.
+   * A numeric literal is different: it is never broken (precision and legibility). The unit follows it on the same
+   * line when there is room and moves to the next line when there isn't; if the number alone is wider than the column
+   * it scrolls horizontally in place, ending in an ellipsis so the cut is visible. The full text stays in the DOM, so
+   * selection and copy always yield the complete number.
    */
   function split(segments: string[], keepTail: boolean): { head: string[]; tail: string } {
     if (!keepTail) {
@@ -38,7 +49,8 @@
     }
     const last = segments[segments.length - 1] ?? '';
     const before = segments.slice(0, -1);
-    if (last.length > TAIL_MAX) {
+    // Only prose-like tokens are split to keep the unit company; a number-like one is never cut.
+    if (last.length > TAIL_MAX && !NUMBER_LIKE.test(last)) {
       return { head: [...before, last.slice(0, -TAIL_SPLIT)], tail: last.slice(-TAIL_SPLIT) };
     }
     return { head: before, tail: last };
@@ -49,11 +61,13 @@
   Read-only presentation of a value: full-contrast, selectable, wrapping (never truncated). This is plain text,
   not a disabled input, so selection and copy work natively and nothing moves when permissions change.
 -->
-<span class="read-value" class:empty={isEmpty} class:with-unit={hasTail} data-testid="read-value"
-  >{#each head as segment, i}{segment}{#if i < head.length - 1 || hasTail}<wbr />{/if}{/each}{#if hasTail}<span
-      class="nowrap"
-      data-testid="read-value-tail">{tail}{' '}<span class="unit">{unit}</span></span
-    >{/if}</span
+<span class="read-value" class:empty={isEmpty} data-testid="read-value"
+  >{#if isNumber}<span class="number" data-testid="read-value-number">{text}</span>{#if unit}{' '}<span class="unit"
+        >{unit}</span
+      >{/if}{:else}{#each head as segment, i}{segment}{#if i < head.length - 1 || hasTail}<wbr
+        />{/if}{/each}{#if hasTail}<span class="nowrap" data-testid="read-value-tail"
+        >{tail}{' '}<span class="unit">{unit}</span></span
+      >{/if}{/if}</span
 >
 
 <style>
@@ -70,6 +84,17 @@
   }
 
   .nowrap {
+    white-space: nowrap;
+  }
+
+  /* Never broken: if it is wider than the column it scrolls in place (ellipsis marks the cut) instead of wrapping. */
+  .number {
+    display: inline-block;
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    text-overflow: ellipsis;
+    vertical-align: top;
     white-space: nowrap;
   }
 

@@ -12,7 +12,7 @@
 
   /**
    * Details for one parameter: what it is, what it means, what it is now, where it came from, what can be done.
-   * Opens on click/tap/Enter of the information button (or Alt+Enter from the row); closes on Esc or outside click and
+   * Opens on click/tap/Enter of the information button (or Alt+Enter from an editor in the row); closes on Esc or outside click and
    * returns focus to the button. It stays open while text is selected in it. Placement flips/clamps to the viewport.
    */
   export let capabilities: ParameterCapabilities;
@@ -21,11 +21,12 @@
   /** Full dotted path of a nested parameter (e.g. `location.position.x`). */
   export let path: string = '';
   /**
-   * Whether the button is a Tab stop. Off by default: a list of N parameters would otherwise cost N extra Tab stops.
-   * Keyboard users open details with Alt+Enter from the value (read-only lists: Enter on the active row); the button
-   * stays in the accessibility tree and clickable.
+   * Whether the button is a Tab stop. On by default: in a form it is an ordinary control after its value, found by Tab
+   * like everything else (Alt+Enter from the value is only a shortcut to it). The read-only list turns it off because
+   * it is a single-tab-stop tree that opens details with Enter on the active row; the button stays clickable and in
+   * the accessibility tree.
    */
-  export let tabbable: boolean = false;
+  export let tabbable: boolean = true;
 
   const dispatch = createEventDispatcher<{ reset: FormParameter }>();
 

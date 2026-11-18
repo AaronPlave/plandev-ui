@@ -85,7 +85,7 @@ describe('Parameters: editable vs read-only presentation', () => {
     document.body.innerHTML = '';
   });
 
-  it('editable: type-specific editors, no tree semantics, no hairlines, ⓘ is not a Tab stop (Alt+Enter opens details)', async () => {
+  it('editable: type-specific editors, no tree semantics, no hairlines, ⓘ is a normal Tab stop after its value', async () => {
     const { container, getAllByRole, getByTestId } = render(Parameters, { formParameters: params() });
     await ready(container, 'biteSchedule', 'location');
 
@@ -95,9 +95,16 @@ describe('Parameters: editable vs read-only presentation', () => {
     expect(container.querySelector('input[type="password"]')).not.toBeNull();
     expect(container.querySelectorAll('.parameter-row.read-only').length).toBe(0);
     for (const info of Array.from(container.querySelectorAll('[data-parameter-info]'))) {
-      expect(info.getAttribute('tabindex')).toBe('-1');
+      expect(info.getAttribute('tabindex')).toBe('0');
       expect(info.getAttribute('aria-keyshortcuts')).toBe('Alt+Enter');
+      expect(info.getAttribute('aria-label')).toMatch(/^Details for /);
+      expect(info.tagName).toBe('BUTTON');
     }
+    // Discoverable by Tab: within a row the details button comes after the value control in document order.
+    const row = container.querySelector('[data-parameter-name="biteSize"]') as HTMLElement;
+    const input = row.querySelector('input') as HTMLElement;
+    const info = row.querySelector('[data-parameter-info]') as HTMLElement;
+    expect(input.compareDocumentPosition(info) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(getAllByRole('button', { name: /Add value|Remove value/ }).length).toBe(2);
   });
 
@@ -243,6 +250,9 @@ describe('Parameters: read-only keyboard navigation', () => {
     for (const info of Array.from(container.querySelectorAll('[data-parameter-info]'))) {
       expect(info.getAttribute('tabindex')).toBe('-1');
     }
+    // The shortcut is announced with the list, not left to be discovered.
+    const hint = container.querySelector(`#${tree.getAttribute('aria-describedby')}`);
+    expect(hint?.textContent).toMatch(/arrow keys.*Enter to show\s+details/s);
     const active = () => container.querySelector('[data-active]')?.getAttribute('data-parameter-name');
 
     await fireEvent.focus(tree);
@@ -430,6 +440,48 @@ describe('Parameter details', () => {
       expect(String(copied[0])).not.toContain(secret);
       expect(JSON.parse(String(copied[0]))[0].token).toBe('••••••••');
 
+      expect(document.body.innerHTML).not.toContain(secret);
+    });
+
+    it('hides values the schema does not describe, in both the details and the copied JSON', async () => {
+      copied.length = 0;
+      const incomplete: FormParameter[] = [
+        {
+          errors: null,
+          name: 'link',
+          order: 0,
+          schema: { items: { host: { type: 'string' }, token: { type: 'secret' } }, type: 'struct' },
+          value: {
+            extra: `${secret}-extra`,
+            host: 'c.example.org',
+            nested: { deeper: [`${secret}-deep`] },
+            token: `${secret}-token`,
+          },
+          valueSource: 'mission',
+        },
+      ];
+      const { container, findByTestId, getByRole } = render(Parameters, {
+        ...(capabilities ? { capabilities } : {}),
+        formParameters: incomplete,
+      });
+      await ready(container, 'link');
+      await fireEvent.click(getByRole('button', { name: 'Details for link' }));
+      const details = await findByTestId('parameter-details');
+      const json = details.querySelector('[data-testid="parameter-details-json"]') as HTMLElement;
+      expect(json.textContent).toContain('c.example.org');
+      expect(json.textContent).toContain('[hidden: not in schema]');
+      expect(json.textContent).not.toContain(secret);
+
+      await fireEvent.click(getByRole('button', { name: 'Copy as JSON' }));
+      expect(JSON.parse(String(copied[0]))).toEqual({
+        extra: '[hidden: not in schema]',
+        host: 'c.example.org',
+        nested: '[hidden: not in schema]',
+        token: '••••••••',
+      });
+      expect(String(copied[0])).not.toContain(secret);
+      // The stored value is untouched.
+      expect((incomplete[0].value as Record<string, unknown>).extra).toBe(`${secret}-extra`);
       expect(document.body.innerHTML).not.toContain(secret);
     });
   });

@@ -116,6 +116,7 @@
         {formParameter}
         {parameterType}
         {path}
+        tabbable={!readOnly}
         on:reset={() => dispatch('reset', formParameter)}
       />
     {/if}

@@ -29,6 +29,7 @@
     ActivityStatusRollup,
   } from '../../types/console';
   import type { FieldStore } from '../../types/form';
+  import type { Model } from '../../types/model';
   import type { Argument, ArgumentsMap, FormParameter, ParameterName } from '../../types/parameter';
   import type { ActivityDirectiveTagsInsertInput, Tag, TagsChangeEvent } from '../../types/tags';
   import { getActivityMetadata } from '../../utilities/activities';
@@ -40,6 +41,7 @@
   import { featurePermissions } from '../../utilities/permissions';
   import { pluralize } from '../../utilities/text';
   import { formatDate, getDoyTime, getIntervalFromDoyRange } from '../../utilities/time';
+  import { showFailureToast } from '../../utilities/toast';
   import { tooltip } from '../../utilities/tooltip';
   import { required } from '../../utilities/validators';
   import Collapse from '../Collapse.svelte';
@@ -339,10 +341,20 @@
     }
   }
 
+  /**
+   * "Save as new preset" creates a model-scoped preset and then applies it to this activity. Creating a preset and
+   * applying one to this activity are separate permissions, so each is checked here, when the action runs, rather
+   * than assumed from what the control showed. Creating without applying is a complete, successful outcome.
+   */
   async function onSaveNewPreset(event: CustomEvent<{ name: string }>) {
     const {
       detail: { name },
     } = event;
+    if (!$plan || !editable || $planReadOnly || !featurePermissions.activityPresets.canCreate(user, $plan)) {
+      showFailureToast('Preset Not Created: you do not have permission to create presets here');
+      return;
+    }
+
     const createdActivityPreset = await effects.createActivityPreset(
       getDisplayedArguments(),
       activityDirective.type,
@@ -350,8 +362,20 @@
       modelId,
       user,
     );
-    if (createdActivityPreset !== null) {
+    if (createdActivityPreset === null) {
+      // createActivityPreset has already reported the failure; nothing was created, so nothing is applied.
+      return;
+    }
+
+    const canApply =
+      hasUpdatePermission &&
+      !$planReadOnly &&
+      featurePermissions.activityPresets.canAssign(user, $plan, $plan.model as Model, createdActivityPreset);
+    if (canApply) {
       await applyPresetToActivity(createdActivityPreset, 0);
+    } else {
+      // The preset exists (reported by createActivityPreset); say plainly that this activity was left unchanged.
+      showFailureToast(`Preset "${createdActivityPreset.name}" created but not applied: you cannot apply it here`);
     }
   }
 

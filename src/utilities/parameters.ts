@@ -49,34 +49,57 @@ export const READ_ONLY_PARAMETERS: ParameterCapabilities = parameterCapabilities
 /** What a secret is shown as wherever its value would otherwise appear. Fixed length: the real length isn't leaked. */
 export const SECRET_MASK = '••••••••';
 
+/** What stands in for a value the schema doesn't describe, so it can't be shown to be nonsecret. */
+export const UNRECOGNIZED_MASK = '[hidden: not in schema]';
+
+const isEmptyValue = (value: unknown): boolean => value === null || value === undefined || value === '';
+const isScalar = (value: unknown): boolean => typeof value !== 'object' && typeof value !== 'function';
+
 /**
- * Returns a copy of `value` with every `secret` descendant (per `schema`) replaced by {@link SECRET_MASK}, recursing
- * through structs and series. Empty secrets (null/undefined/'') are left as-is, nonsecret data is preserved, and the
- * input is never mutated. Use it for anything that serializes a structured parameter value for display or export.
+ * Returns a copy of `value` that is safe to display or export as JSON, never mutating the input. Walking `schema`
+ * through structs and series:
+ *   - `secret` values become {@link SECRET_MASK};
+ *   - anything the schema doesn't account for (a property with no schema entry, a subtree with no schema, or a value
+ *     whose shape doesn't match its schema) becomes {@link UNRECOGNIZED_MASK}, because it can't be shown to be
+ *     nonsecret. Its siblings that are recognized are unaffected;
+ *   - empty values (null/undefined/'') and recognized nonsecret data are preserved.
+ * Use it for anything that serializes a structured parameter value.
  */
 export function redactSecrets(value: any, schema: ValueSchema | ActionValueSchema | undefined): any {
-  if (value === null || value === undefined || !schema) {
+  if (isEmptyValue(value)) {
     return value;
+  }
+  if (!schema) {
+    return UNRECOGNIZED_MASK;
   }
   switch (schema.type) {
     case 'secret':
-      return value === '' ? value : SECRET_MASK;
+      return SECRET_MASK;
     case 'struct': {
       if (typeof value !== 'object' || Array.isArray(value)) {
-        return value;
+        return UNRECOGNIZED_MASK;
       }
       const items = (schema as ValueSchemaStruct).items ?? {};
-      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactSecrets(item, items[key])]));
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [
+          key,
+          redactSecrets(item, Object.prototype.hasOwnProperty.call(items, key) ? items[key] : undefined),
+        ]),
+      );
     }
     case 'series': {
       if (!Array.isArray(value)) {
-        return value;
+        return UNRECOGNIZED_MASK;
       }
       const items = (schema as ValueSchemaSeries).items;
       return value.map(item => redactSecrets(item, items));
     }
     default:
-      return value;
+      // A scalar type holds a scalar (options-multiple holds a list of them); anything structured here is unexpected.
+      return isScalar(value) ||
+        ((schema.type as string) === 'options-multiple' && Array.isArray(value) && value.every(isScalar))
+        ? value
+        : UNRECOGNIZED_MASK;
   }
 }
 

@@ -1,5 +1,9 @@
 <svelte:options immutable={true} />
 
+<script context="module" lang="ts">
+  let instances = 0;
+</script>
+
 <script lang="ts">
   import type { FormParameter, ParameterCapabilities, ParameterName, ParameterType } from '../../types/parameter';
   import { compare } from '../../utilities/generic';
@@ -17,6 +21,8 @@
   export let highlightKeysMap: Record<string, boolean> = {};
   export let parameterType: ParameterType = 'activity';
   export let parameterToFlash: ParameterName | null = null;
+
+  const hintId = `parameters-hint-${++instances}`;
 
   let container: HTMLDivElement;
   let activeRowId: string | null = null;
@@ -77,7 +83,7 @@
     const target = event.target as HTMLElement;
 
     if (!readOnly) {
-      // Editable: Tab reaches each control and its details button; Alt+Enter opens details from the value.
+      // Editable: Tab reaches each control and then its details button; Alt+Enter is a shortcut from the value.
       if (event.key === 'Enter' && event.altKey) {
         const row = target.closest<HTMLElement>('[data-parameter-row]');
         if (row) {
@@ -168,12 +174,19 @@
   role={readOnly ? 'tree' : undefined}
   aria-label={readOnly ? 'Parameters' : undefined}
   aria-activedescendant={readOnly ? activeRowId : undefined}
+  aria-describedby={readOnly ? hintId : undefined}
   tabindex={readOnly ? 0 : undefined}
   data-testid="parameters"
   on:click={onClick}
   on:focus={onFocus}
   on:keydown={onKeydown}
 >
+  {#if readOnly}
+    <span id={hintId} class="sr-only">
+      Use the up and down arrow keys to move between parameters, left and right to collapse or expand, and Enter to show
+      details.
+    </span>
+  {/if}
   <div class="parameters-inner">
     {#each sortedFormParameters as formParameter (formParameter.name)}
       <Highlight
@@ -254,5 +267,10 @@
     background: hsl(var(--accent));
     outline: 2px solid hsl(var(--ring));
     outline-offset: -2px;
+  }
+
+  /* The active row's details button is what Enter opens, so it reads as the row's action while the list has focus. */
+  .parameters-container:focus-visible :global([data-parameter-row][data-active] .parameter-details-trigger) {
+    color: hsl(var(--foreground));
   }
 </style>
