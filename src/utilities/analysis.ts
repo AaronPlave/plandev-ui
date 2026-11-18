@@ -224,8 +224,9 @@ export function getExternalEventId(
 ): number {
   const text = `${event.derivation_group_name}\u0000${event.source_key}\u0000${event.event_type_name}\u0000${event.event_key}`;
   let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i);
+  // By code point, as merlin.analysis_external_event_id does (UTF-16 units would differ outside the BMP).
+  for (const char of text) {
+    hash ^= char.codePointAt(0) as number;
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
   return EXTERNAL_EVENT_ID_BASE + (hash & 0x7fffffff);

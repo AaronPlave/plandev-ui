@@ -2152,6 +2152,20 @@ const gql = {
     }
   `,
 
+  GET_SPANS_OF_DIRECTIVE: `#graphql
+    query GetSpansOfDirective($datasetIds: [Int!]!, $directive: jsonb!) {
+      spans: ${Queries.SPANS}(
+        where: { attributes: { _contains: $directive }, dataset_id: { _in: $datasetIds } }
+        order_by: { start_offset: asc }
+      ) {
+        dataset_id
+        duration
+        span_id
+        start_offset
+      }
+    }
+  `,
+
   GET_TYPESCRIPT_CONSTRAINTS: `#graphql
     query GetTypeScriptConstraints($model_id: Int!) {
       dslTypeScriptResponse: ${Queries.CONSTRAINTS_DSL_TYPESCRIPT}(missionModelId: $model_id) {

@@ -30,6 +30,8 @@ import { getIntervalInMs, getUnixEpochTimeFromInterval } from './time';
 export type AnalysisActivityDetails = {
   /** What the product's adapter recorded as limiting the record (`metadata.dataQuality`). */
   cautions?: string[];
+  /** A simulated span only: the directive it was simulated from, as the span records it (attributes.directiveId). */
+  directiveId?: number;
   endInvalid?: string;
   /**
    * The recorded end. Null when there is none to use: a plan directive has none, and an end the product wrote before
@@ -216,6 +218,7 @@ export async function loadAnalysisActivityDetails(
   const startMs = getUnixEpochTimeFromInterval(dataset.simulation_start_time, span.start_offset);
   const plan = dataset.simulation?.plan;
   return {
+    directiveId: span.attributes.directiveId,
     endMs: startMs + getIntervalInMs(span.duration),
     fields: [
       ['Span id', `${span.span_id}`],

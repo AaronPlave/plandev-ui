@@ -383,7 +383,15 @@
         {/if}
       </dl>
     </Collapse>
-    <AnalysisGeneratedLinks {bindings} details={current} {revisions} {user} />
+    <AnalysisGeneratedLinks
+      {bindings}
+      {datasets}
+      details={current}
+      {revisions}
+      {sourceLabels}
+      {user}
+      on:select={({ detail }) => dispatch('select', detail)}
+    />
     {#if current.related}
       <AnalysisRecordStructure
         details={current}

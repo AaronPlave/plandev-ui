@@ -6077,6 +6077,28 @@ const effects = {
     }
   },
 
+  /**
+   * The spans simulated from a directive (the root span of each run records the directive's id), in these simulation
+   * datasets. Null on failure.
+   */
+  async getSpansOfDirective(
+    simulationDatasetIds: number[],
+    directiveId: number,
+    user: User | null,
+  ): Promise<Pick<Span, 'dataset_id' | 'duration' | 'span_id' | 'start_offset'>[] | null> {
+    try {
+      const data = await reqHasura<Pick<Span, 'dataset_id' | 'duration' | 'span_id' | 'start_offset'>[]>(
+        gql.GET_SPANS_OF_DIRECTIVE,
+        { datasetIds: simulationDatasetIds, directive: { directiveId } },
+        user,
+      );
+      return data.spans ?? [];
+    } catch (e) {
+      catchError('log', 'Unable to read the simulated activities of the directive', e as Error);
+      return null;
+    }
+  },
+
   async getTags(user: User | null): Promise<Tag[]> {
     try {
       const query = convertToQuery(gql.SUB_TAGS);

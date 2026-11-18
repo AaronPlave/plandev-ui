@@ -830,6 +830,20 @@ it('an external event has a stable id of its own, apart from any directive, and 
   expect(isExternalEventId(id)).toBe(true);
   expect(isExternalEventId(123)).toBe(false);
   expect(getExternalEventId({ ...event, event_key: 'VIEW_2' })).not.toBe(id);
+  // The ids merlin.analysis_external_event_id gives the same events (run against Postgres), outside the BMP too.
+  const synthetic = {
+    derivation_group_name: 'SYNTHETIC Tour Plan A context',
+    source_key: 'SYNTHETIC_tourA_context_v1.json',
+  };
+  expect(getExternalEventId({ ...synthetic, event_key: 'ECLIPSE_001', event_type_name: 'SYNTHETIC_ECLIPSE' })).toBe(
+    3259527336,
+  );
+  expect(
+    getExternalEventId({ ...synthetic, event_key: 'Pass – Canberra é→', event_type_name: 'SYNTHETIC_DSN_VIEW' }),
+  ).toBe(4036373868);
+  expect(getExternalEventId({ ...synthetic, event_key: 'Pass 🛰 astral', event_type_name: 'SYNTHETIC_DSN_VIEW' })).toBe(
+    2404006543,
+  );
   const span = externalEventToSpan('source-1', event);
   expect(span).toMatchObject({ durationMs: 5.5 * 3_600_000, recordKind: 'External event', type: 'DSN_VIEW' });
   expect(getActivityRefFromSpan(span)).toEqual({ activityId: id, sourceId: 'source-1' });

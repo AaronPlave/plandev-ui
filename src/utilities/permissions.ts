@@ -878,6 +878,7 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
   GET_SOURCE_REVISION_STATUS: () => true,
   GET_SPAN: () => true,
   GET_SPANS: () => true,
+  GET_SPANS_OF_DIRECTIVE: () => true,
   GET_TYPESCRIPT_CONSTRAINTS: () => true,
   GET_TYPESCRIPT_SCHEDULING: () => true,
   GET_UPLOADED_FILENAME: () => true,
