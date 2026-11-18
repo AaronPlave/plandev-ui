@@ -4,6 +4,12 @@ import type { FormParameter } from '../../types/parameter';
 import { parameterCapabilities } from '../../utilities/parameters';
 import Parameters from './Parameters.svelte';
 
+const { copied } = vi.hoisted(() => ({ copied: [] as unknown[] }));
+vi.mock('../../utilities/clipboard', () => ({
+  getClipboardContent: vi.fn(),
+  setClipboardContent: (content: unknown) => copied.push(content),
+}));
+
 const secret = 'hunter2-super-secret';
 
 function params(): FormParameter[] {
@@ -79,7 +85,7 @@ describe('Parameters: editable vs read-only presentation', () => {
     document.body.innerHTML = '';
   });
 
-  it('editable: type-specific editors, no tree semantics, no hairlines, one ⓘ per row in the tab order', async () => {
+  it('editable: type-specific editors, no tree semantics, no hairlines, ⓘ is not a Tab stop (Alt+Enter opens details)', async () => {
     const { container, getAllByRole, getByTestId } = render(Parameters, { formParameters: params() });
     await ready(container, 'biteSchedule', 'location');
 
@@ -89,7 +95,8 @@ describe('Parameters: editable vs read-only presentation', () => {
     expect(container.querySelector('input[type="password"]')).not.toBeNull();
     expect(container.querySelectorAll('.parameter-row.read-only').length).toBe(0);
     for (const info of Array.from(container.querySelectorAll('[data-parameter-info]'))) {
-      expect(info.getAttribute('tabindex')).toBe('0');
+      expect(info.getAttribute('tabindex')).toBe('-1');
+      expect(info.getAttribute('aria-keyshortcuts')).toBe('Alt+Enter');
     }
     expect(getAllByRole('button', { name: /Add value|Remove value/ }).length).toBe(2);
   });
@@ -137,14 +144,16 @@ describe('Parameters: editable vs read-only presentation', () => {
     expect(document.body.innerHTML).not.toContain(secret);
   });
 
-  it('secrets: editable is masked until shown, and Show/Hide toggles it', async () => {
-    const { container, getByRole } = render(Parameters, { formParameters: params() });
+  it('secrets: editable stays a plain password input (no reveal control) and still edits and validates', async () => {
+    const formParameters = params();
+    const { container, queryByRole } = render(Parameters, { formParameters });
     const input = container.querySelector('[data-parameter-name="uplinkToken"] input') as HTMLInputElement;
     expect(input.type).toBe('password');
-    await fireEvent.click(getByRole('button', { name: 'Show uplinkToken' }));
-    expect(input.type).toBe('text');
-    await fireEvent.click(getByRole('button', { name: 'Hide uplinkToken' }));
+    expect(queryByRole('button', { name: /Show|Hide/ })).toBeNull();
+    await fireEvent.input(input, { target: { value: 'new-token' } });
+    await fireEvent.change(input);
     expect(input.type).toBe('password');
+    expect(formParameters[3].value).toBe('new-token');
   });
 
   it('shows validation errors under the control in both modes (aria wiring in editable mode)', () => {
@@ -371,5 +380,57 @@ describe('Parameter details', () => {
     const details = await findByTestId('parameter-details');
     expect(details.querySelector('[data-testid="parameter-details-json"]')?.textContent).toContain('"frame": "MOON"');
     expect(details.textContent).toContain('Copy as JSON');
+  });
+
+  describe.each([
+    ['view-only', readOnly],
+    ['editable', undefined],
+  ])('nested secrets in details and Copy as JSON (%s)', (_label, capabilities) => {
+    const nested = (): FormParameter[] => [
+      {
+        errors: null,
+        name: 'connections',
+        order: 0,
+        schema: {
+          items: {
+            items: {
+              host: { type: 'string' },
+              ports: { items: { type: 'secret' }, type: 'series' },
+              token: { type: 'secret' },
+            },
+            type: 'struct',
+          },
+          type: 'series',
+        },
+        value: [
+          { host: 'a.example.org', ports: [`${secret}-p1`], token: `${secret}-1` },
+          { host: 'b.example.org', ports: [], token: `${secret}-2` },
+        ],
+        valueSource: 'mission',
+      },
+    ];
+
+    it('shows and copies only the sanitized representation', async () => {
+      copied.length = 0;
+      const { container, findByTestId, getByRole } = render(Parameters, {
+        ...(capabilities ? { capabilities } : {}),
+        formParameters: nested(),
+      });
+      await ready(container, 'connections');
+      await fireEvent.click(getByRole('button', { name: 'Details for connections' }));
+      const details = await findByTestId('parameter-details');
+      const json = details.querySelector('[data-testid="parameter-details-json"]') as HTMLElement;
+      expect(json.textContent).toContain('a.example.org');
+      expect(json.textContent).toContain('••••••••');
+      expect(json.textContent).not.toContain(secret);
+
+      await fireEvent.click(getByRole('button', { name: 'Copy as JSON' }));
+      expect(copied.length).toBe(1);
+      expect(String(copied[0])).toContain('b.example.org');
+      expect(String(copied[0])).not.toContain(secret);
+      expect(JSON.parse(String(copied[0]))[0].token).toBe('••••••••');
+
+      expect(document.body.innerHTML).not.toContain(secret);
+    });
   });
 });

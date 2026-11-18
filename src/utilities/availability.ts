@@ -73,6 +73,8 @@ export function attachAvailability(node: HTMLElement, initial?: AvailabilityPara
   let touchTimer: ReturnType<typeof setTimeout> | null = null;
   const originalDescribedBy = node.getAttribute('aria-describedby');
   const hadTitle = node.hasAttribute('title');
+  // True while the aria-label on the node was put there by this action (so it can follow `label` and be removed).
+  let ownsAriaLabel = false;
 
   const guard = (event: Event) => {
     if (params.available) {
@@ -144,16 +146,25 @@ export function attachAvailability(node: HTMLElement, initial?: AvailabilityPara
       node.removeAttribute('aria-disabled');
       node.removeAttribute('data-unavailable');
       removeDescription();
-      if (label && !node.getAttribute('aria-label') && !node.textContent?.trim()) {
-        node.setAttribute('aria-label', label);
-      }
+      syncAriaLabel(label);
     } else {
       node.setAttribute('aria-disabled', 'true');
       node.setAttribute('data-unavailable', 'true');
       setDescription(reason ?? '');
       tip?.hide();
-      if (label && !node.getAttribute('aria-label') && !node.textContent?.trim()) {
+      syncAriaLabel(label);
+    }
+  }
+
+  /** Icon-only controls get `label` as their accessible name; a name the caller provided is never overwritten. */
+  function syncAriaLabel(label: string | undefined) {
+    if (ownsAriaLabel || (!node.getAttribute('aria-label') && !node.textContent?.trim())) {
+      if (label) {
         node.setAttribute('aria-label', label);
+        ownsAriaLabel = true;
+      } else if (ownsAriaLabel) {
+        node.removeAttribute('aria-label');
+        ownsAriaLabel = false;
       }
     }
   }
@@ -210,6 +221,9 @@ export function attachAvailability(node: HTMLElement, initial?: AvailabilityPara
       tip?.destroy();
       tip = null;
       removeDescription();
+      if (ownsAriaLabel) {
+        node.removeAttribute('aria-label');
+      }
       node.removeAttribute('aria-disabled');
       node.removeAttribute('data-unavailable');
     },

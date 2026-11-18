@@ -3,6 +3,7 @@
 <script lang="ts">
   import type { FormParameter } from '../../types/parameter';
   import type { ValueSchemaVariant } from '../../types/schema';
+  import { SECRET_MASK } from '../../utilities/parameters';
   import { convertUsToDurationString } from '../../utilities/time';
   import ReadValue from '../form/ReadValue.svelte';
 
@@ -11,9 +12,6 @@
    * how to show each type without an editor, so the type-specific editors don't each need a read-only branch.
    */
   export let formParameter: FormParameter;
-
-  /** Secrets always render the same fixed-length mask: neither the value nor its length is shown. */
-  const SECRET_MASK = '••••••••';
 
   $: unit = (formParameter.schema as { metadata?: { unit?: { value?: string } } }).metadata?.unit?.value;
   $: text = display(formParameter);

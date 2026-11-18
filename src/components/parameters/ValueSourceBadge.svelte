@@ -55,6 +55,7 @@
     font-size: 10px;
     line-height: 12px;
     text-align: center;
+    user-select: none;
     width: 12px;
   }
 

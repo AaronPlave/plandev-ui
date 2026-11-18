@@ -10,6 +10,8 @@ import {
   getValueSchemaDefaultValue,
   isRecParameter,
   pathMatchesPattern,
+  redactSecrets,
+  SECRET_MASK,
 } from './parameters';
 
 describe('getArgument', () => {
@@ -632,5 +634,68 @@ describe('getFormParameters for file ref params', () => {
     expect(getErrors(pinned, { path: 'a.seq' })).toEqual(['Select a revision for each file']);
     expect(getErrors(pinned, { path: 'a.seq', revision: 'b' })).toBeNull();
     expect(getErrors(pinned)).toBeNull();
+  });
+});
+
+describe('redactSecrets', () => {
+  const secret = 'hunter2-super-secret';
+  const mask = SECRET_MASK;
+
+  test('masks a top-level secret and leaves other types alone', () => {
+    expect(redactSecrets(secret, { type: 'secret' })).toBe(mask);
+    expect(redactSecrets('plain', { type: 'string' })).toBe('plain');
+    expect(redactSecrets(3, { type: 'int' })).toBe(3);
+  });
+
+  test('keeps empty secrets empty (nothing to hide) and tolerates missing schema or value', () => {
+    expect(redactSecrets('', { type: 'secret' })).toBe('');
+    expect(redactSecrets(null, { type: 'secret' })).toBeNull();
+    expect(redactSecrets(undefined, { type: 'secret' })).toBeUndefined();
+    expect(redactSecrets({ a: 1 }, undefined)).toEqual({ a: 1 });
+  });
+
+  test('masks secrets inside structs and preserves the rest', () => {
+    const schema = { items: { host: { type: 'string' }, token: { type: 'secret' } }, type: 'struct' } as const;
+    const value = { host: 'example.org', token: secret };
+    expect(redactSecrets(value, schema as any)).toEqual({ host: 'example.org', token: mask });
+    expect(value.token).toBe(secret); // input not mutated
+  });
+
+  test('masks secrets inside series', () => {
+    expect(redactSecrets([secret, 'other'], { items: { type: 'secret' }, type: 'series' })).toEqual([mask, mask]);
+  });
+
+  test('masks secrets in a struct within a series', () => {
+    const schema = {
+      items: { items: { name: { type: 'string' }, token: { type: 'secret' } }, type: 'struct' },
+      type: 'series',
+    };
+    const value = [
+      { name: 'a', token: `${secret}-1` },
+      { name: 'b', token: `${secret}-2` },
+    ];
+    const redacted = redactSecrets(value, schema as any);
+    expect(redacted).toEqual([
+      { name: 'a', token: mask },
+      { name: 'b', token: mask },
+    ]);
+    expect(JSON.stringify(redacted)).not.toContain(secret);
+  });
+
+  test('masks secrets in a series within a struct, and in deeper mixtures', () => {
+    const schema = {
+      items: {
+        label: { type: 'string' },
+        tokens: {
+          items: { items: { inner: { items: { type: 'secret' }, type: 'series' } }, type: 'struct' },
+          type: 'series',
+        },
+      },
+      type: 'struct',
+    };
+    const value = { label: 'L', tokens: [{ inner: [secret, secret] }, { inner: [] }] };
+    const redacted = redactSecrets(value, schema as any);
+    expect(redacted).toEqual({ label: 'L', tokens: [{ inner: [mask, mask] }, { inner: [] }] });
+    expect(JSON.stringify(redacted)).not.toContain(secret);
   });
 });

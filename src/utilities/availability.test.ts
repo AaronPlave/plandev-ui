@@ -136,6 +136,25 @@ describe('availability', () => {
     expect(document.querySelectorAll('[id^="availability-reason-"]').length).toBe(0);
   });
 
+  it('keeps its label in sync as it changes, but never overwrites a name the caller provided', () => {
+    const icon = document.createElement('button');
+    document.body.appendChild(icon);
+    const handle = attachAvailability(icon, { available: true, label: 'Save' });
+    handle.update({ available: true, label: 'Save changes' });
+    expect(icon.getAttribute('aria-label')).toBe('Save changes');
+    handle.destroy();
+    expect(icon.hasAttribute('aria-label')).toBe(false);
+
+    const named = document.createElement('button');
+    named.setAttribute('aria-label', 'Delete preset');
+    document.body.appendChild(named);
+    const namedHandle = attachAvailability(named, { available: false, label: 'Some tooltip', reason: 'No' });
+    namedHandle.update({ available: false, label: 'Other tooltip', reason: 'No' });
+    expect(named.getAttribute('aria-label')).toBe('Delete preset');
+    namedHandle.destroy();
+    expect(named.getAttribute('aria-label')).toBe('Delete preset');
+  });
+
   it('shows the reason on activation attempts (touch) and hides it again', () => {
     const button = makeButton();
     attachAvailability(button, { available: false, reason: 'No permission' });

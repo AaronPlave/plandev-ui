@@ -46,6 +46,40 @@ export function parameterCapabilities(editable: boolean, reason?: string): Param
 /** Capabilities for parameters that are informational by nature (computed attributes, schema listings, ...). */
 export const READ_ONLY_PARAMETERS: ParameterCapabilities = parameterCapabilities(false);
 
+/** What a secret is shown as wherever its value would otherwise appear. Fixed length: the real length isn't leaked. */
+export const SECRET_MASK = '••••••••';
+
+/**
+ * Returns a copy of `value` with every `secret` descendant (per `schema`) replaced by {@link SECRET_MASK}, recursing
+ * through structs and series. Empty secrets (null/undefined/'') are left as-is, nonsecret data is preserved, and the
+ * input is never mutated. Use it for anything that serializes a structured parameter value for display or export.
+ */
+export function redactSecrets(value: any, schema: ValueSchema | ActionValueSchema | undefined): any {
+  if (value === null || value === undefined || !schema) {
+    return value;
+  }
+  switch (schema.type) {
+    case 'secret':
+      return value === '' ? value : SECRET_MASK;
+    case 'struct': {
+      if (typeof value !== 'object' || Array.isArray(value)) {
+        return value;
+      }
+      const items = (schema as ValueSchemaStruct).items ?? {};
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactSecrets(item, items[key])]));
+    }
+    case 'series': {
+      if (!Array.isArray(value)) {
+        return value;
+      }
+      const items = (schema as ValueSchemaSeries).items;
+      return value.map(item => redactSecrets(item, items));
+    }
+    default:
+      return value;
+  }
+}
+
 /**
  * Formats a parameter value according to its schema type for display purposes.
  * @param value - The parameter value to format

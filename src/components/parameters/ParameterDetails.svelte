@@ -7,7 +7,7 @@
   import type { FormParameter, ParameterCapabilities, ParameterType } from '../../types/parameter';
   import { setClipboardContent } from '../../utilities/clipboard';
   import { isMacOs } from '../../utilities/browser';
-  import { formatParameterValue } from '../../utilities/parameters';
+  import { formatParameterValue, redactSecrets } from '../../utilities/parameters';
   import AvailabilityButton from '../ui/AvailabilityButton.svelte';
 
   /**
@@ -20,8 +20,12 @@
   export let parameterType: ParameterType = 'activity';
   /** Full dotted path of a nested parameter (e.g. `location.position.x`). */
   export let path: string = '';
-  /** Take the button out of the tab order (read-only lists are a single tab stop with arrow-key navigation). */
-  export let tabbable: boolean = true;
+  /**
+   * Whether the button is a Tab stop. Off by default: a list of N parameters would otherwise cost N extra Tab stops.
+   * Keyboard users open details with Alt+Enter from the value (read-only lists: Enter on the active row); the button
+   * stays in the accessibility tree and clickable.
+   */
+  export let tabbable: boolean = false;
 
   const dispatch = createEventDispatcher<{ reset: FormParameter }>();
 
@@ -41,7 +45,10 @@
   $: typeLine = [typeLabel(schema.type), unit ? `unit: ${unit}` : null, formParameter.required ? 'required' : null]
     .filter(Boolean)
     .join(' · ');
-  $: serialised = isStructured && formParameter.value != null ? JSON.stringify(formParameter.value, null, 2) : null;
+  $: serialised =
+    isStructured && formParameter.value != null
+      ? JSON.stringify(redactSecrets(formParameter.value, schema as never), null, 2)
+      : null;
 
   const sourceLabels: Record<string, string> = {
     mission: 'model',
@@ -80,6 +87,7 @@
     class="parameter-details-trigger"
     aria-label="Details for {formParameter.name}"
     data-parameter-info
+    aria-keyshortcuts="Alt+Enter"
     tabindex={tabbable ? 0 : -1}
   >
     <Info size={14} />
