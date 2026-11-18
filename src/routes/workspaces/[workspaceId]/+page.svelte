@@ -1763,7 +1763,7 @@
    * changes prompt, permissions) and hand the language the editor once it holds the file. A later
    * navigation supersedes an earlier one still loading.
    */
-  async function openFileForDefinition(path: string): Promise<EditorView | null> {
+  async function openFileForDefinition(path: string, recordJump: boolean = true): Promise<EditorView | null> {
     if (!workspaceTreeMap[path]) {
       showFailureToast(`The definition is in ${path}, which is not in this workspace`);
       return null;
@@ -1780,7 +1780,7 @@
       }
       if ($activeDocumentPath === path && !$activeDocumentIsLoading) {
         await tick();
-        if (from.path) {
+        if (from.path && recordJump) {
           definitionBackStack = [...definitionBackStack.slice(-49), { anchor: from.anchor, path: from.path }];
           pendingCrossFileJumpPath = path;
         }
@@ -1804,19 +1804,18 @@
     if (!entry) {
       return;
     }
-    definitionBackStack = definitionBackStack.slice(0, -1);
     let view: EditorView | null = activeEditorView;
     if (entry.path !== $activeDocumentPath) {
-      const depth = definitionBackStack.length;
-      view = await openFileForDefinition(entry.path);
       // Going back is not a new jump to come back from.
-      definitionBackStack = definitionBackStack.slice(0, depth);
-      pendingCrossFileJumpPath = null;
+      view = await openFileForDefinition(entry.path, false);
+      if (!view) {
+        return; // the user stayed (unsaved changes) or another navigation won: keep the entry
+      }
     }
-    if (view) {
-      view.dispatch({ scrollIntoView: true, selection: { anchor: Math.min(entry.anchor, view.state.doc.length) } });
-      view.focus();
-    }
+    // Only now, once there: by identity, as other jumps may have been recorded meanwhile.
+    definitionBackStack = definitionBackStack.filter(e => e !== entry);
+    view?.dispatch({ scrollIntoView: true, selection: { anchor: Math.min(entry.anchor, view.state.doc.length) } });
+    view?.focus();
   }
 
   function onGotoLine(event: CustomEvent<{ column: number; line: number }>) {
