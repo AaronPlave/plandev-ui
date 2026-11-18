@@ -58,3 +58,18 @@ export function safeStringify(value: unknown, space?: number): string {
     }
   }
 }
+
+/** A byte count for people: 0 B, 512 B, 1.5 KiB, 12 MiB. Empty for an unknown size. */
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null || !Number.isFinite(bytes)) {
+    return '';
+  }
+  const units = ['B', 'KiB', 'MiB', 'GiB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return unit === 0 ? `${value} B` : `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}

@@ -1398,6 +1398,9 @@ const workspacePermissions: Record<WorkspaceKeys, (user: User | null, ...args: a
   saveFile: (user: User | null, workspace: Workspace): boolean => {
     return isUserAdmin(user) || getRoleWorkspacePermission(['write_file_directory'], user, workspace);
   },
+  searchWorkspace: (user: User | null, workspace: Workspace): boolean => {
+    return isUserAdmin(user) || getRoleWorkspacePermission(['read_file_directory'], user, workspace);
+  },
   setFileMetadata: (user: User | null, workspace: Workspace): boolean => {
     return isUserAdmin(user) || getRoleWorkspacePermission(['write_file_directory'], user, workspace);
   },

@@ -37,6 +37,7 @@
   export let editorSequenceView: EditorView | null = null;
   export let fileMetadata: WorkspaceFileMetadata | null = null;
   export let filePath: string | null = null;
+  export let fileSize: number | null = null;
   export let hasEditPermission: boolean = false;
   export let hasCreateRevisionPermission: boolean = false;
   export let hasRestoreRevisionPermission: boolean = false;
@@ -233,7 +234,7 @@
       </Panel>
     {/if}
   {:else if activeTab === WorkspaceRightPanelTab.METADATA}
-    <WorkspaceMetadataPanel {filePath} {fileMetadata} {hasEditPermission} on:updateUserMetadata />
+    <WorkspaceMetadataPanel {filePath} {fileMetadata} {fileSize} {hasEditPermission} on:updateUserMetadata />
   {:else if activeTab === WorkspaceRightPanelTab.REVISIONS}
     <WorkspaceRevisionsPanel
       {availableActions}

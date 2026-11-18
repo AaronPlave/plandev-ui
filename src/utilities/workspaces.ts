@@ -19,6 +19,7 @@ import type {
 } from '../types/workspace';
 import type {
   WorkspaceFileMetadata,
+  WorkspaceSearchResult,
   WorkspaceTreeMap,
   WorkspaceTreeNode,
   WorkspaceTreeNodeWithFullPath,
@@ -1286,6 +1287,22 @@ export const WorkspaceApi = {
       false,
     );
     return etag;
+  },
+  /** Case-insensitive text search of the saved files under `folder` ('' for the whole workspace). */
+  async searchWorkspace(
+    workspaceId: number,
+    folder: string,
+    text: string,
+    user: User | null,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceSearchResult> {
+    return reqWorkspace<WorkspaceSearchResult>(
+      `${joinPath([workspaceId, folder])}?search=${encodeURIComponent(text)}`,
+      'GET',
+      null,
+      user,
+      signal,
+    );
   },
   async setFileMetadata(
     workspaceId: number,

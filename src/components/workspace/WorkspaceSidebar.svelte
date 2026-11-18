@@ -23,6 +23,7 @@
   import WorkspaceCollaboratorInput from '../ui/Tags/WorkspaceCollaboratorInput.svelte';
   import PanelHeader from './PanelHeader.svelte';
   import WorkspaceFileBrowser from './WorkspaceFileBrowser/WorkspaceFileBrowser.svelte';
+  import WorkspaceSearchPanel from './WorkspaceSearchPanel.svelte';
   import WorkspaceTabHeader from './WorkspaceTabHeader.svelte';
 
   const dispatch = createEventDispatcher<{
@@ -188,6 +189,14 @@
           </Sidebar.Group>
         </Sidebar.Content>
       </div>
+    {:else if activeTab === 'search'}
+      <WorkspaceSearchPanel
+        folder={currentBreadcrumbPath}
+        {user}
+        workspaceId={workspace?.id ?? null}
+        {workspaceTree}
+        on:openMatch
+      />
     {:else if activeTab === 'actions'}
       <ActionSidebarList
         {actions}

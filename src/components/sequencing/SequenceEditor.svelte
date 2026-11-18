@@ -46,7 +46,7 @@
   import Tooltip from '../ui/Tooltip.svelte';
   import FileMetadataBanner from '../workspace/FileMetadataBanner.svelte';
   import CommandPanel from './CommandPanel/CommandPanel.svelte';
-  import EditorCommandMenu from './EditorCommandMenu.svelte';
+  import EditorContextMenu from './EditorContextMenu.svelte';
   import EditorToolbar from './EditorToolbar.svelte';
   import OutputToolbar from './OutputToolbar.svelte';
 
@@ -94,6 +94,7 @@
   let compartmentOutputAdaptation: Compartment;
   let compartmentReadonly: Compartment;
   let disableCopyAndExport: boolean = true;
+  let editorContextMenu: EditorContextMenu | null = null;
   let editorHeights: string = '1.88fr 3px 80px';
   let editorOutputDiv: HTMLDivElement;
   let editorOutputView: EditorView;
@@ -575,11 +576,7 @@
           saveHighlighted={isDirty}
           {onSave}
           on:runAction={onRunAction}
-        >
-          <svelte:fragment slot="start">
-            <EditorCommandMenu commands={inputLanguage.editorCommands ?? []} view={editorSequenceView} />
-          </svelte:fragment>
-        </EditorToolbar>
+        />
       </svelte:fragment>
 
       <svelte:fragment slot="body">
@@ -594,7 +591,22 @@
             {onReadOnlyChange}
           />
         {/if}
-        <div class="p-2" bind:this={editorSequenceDiv} />
+        <!-- Languages with editor commands get a right-click menu (with Cut/Copy/Paste); others keep the browser's. -->
+        <!-- svelte-ignore a11y-no-static-element-interactions -->
+        <div
+          class="p-2"
+          bind:this={editorSequenceDiv}
+          on:contextmenu={event => {
+            if (inputLanguage.editorCommands?.length) {
+              editorContextMenu?.show(event);
+            }
+          }}
+        />
+        <EditorContextMenu
+          bind:this={editorContextMenu}
+          commands={inputLanguage.editorCommands ?? []}
+          view={editorSequenceView}
+        />
       </svelte:fragment>
     </Panel>
 

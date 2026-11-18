@@ -32,6 +32,7 @@
   } from '../../../types/workspace-tree-view';
   import { getLocalStorageItem } from '../../../utilities/localStorage';
   import { featurePermissions } from '../../../utilities/permissions';
+  import { formatBytes } from '../../../utilities/text';
   import {
     computeTreeFilter,
     findNodeByPath,
@@ -182,6 +183,31 @@
 
   // Metadata column definitions (reusable for column picker)
   const metadataColumnDefs: DataGridColumnDef<WorkspaceTreeNodeWithFullPath>[] = [
+    {
+      cellClass: 'text-right',
+      cellRenderer: (params: ICellRendererParams<WorkspaceTreeNodeWithFullPath>) => {
+        const size = params.data?.size;
+        if (size == null || params.data?.type === WorkspaceContentType.Directory) {
+          return '';
+        }
+        const span = document.createElement('span');
+        span.textContent = formatBytes(size);
+        span.title = `${size.toLocaleString()} bytes`;
+        return span;
+      },
+      colId: 'size',
+      comparator: () => 0,
+      field: 'size',
+      headerName: 'Size',
+      hide: false,
+      minWidth: 50,
+      resizable: true,
+      sortable: true,
+      sortingOrder: ['asc', 'desc'],
+      suppressSizeToFit: true,
+      valueGetter: params => params.data?.size ?? null,
+      width: 64,
+    },
     {
       colId: 'lastEditedBy',
       comparator: () => 0,
@@ -478,6 +504,9 @@
           comparison = aPath.localeCompare(bPath);
         } else if (colId === 'type') {
           comparison = (a.type ?? '').localeCompare(b.type ?? '');
+        } else if (colId === 'size') {
+          // Unknown sizes sort below every known one.
+          comparison = (a.size ?? -1) - (b.size ?? -1);
         } else if (colId === 'user') {
           const aVal = a.metadata?.user ? JSON.stringify(a.metadata.user) : '';
           const bVal = b.metadata?.user ? JSON.stringify(b.metadata.user) : '';

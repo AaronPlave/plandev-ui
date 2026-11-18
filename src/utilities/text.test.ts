@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { padNumber, pluralize, safeStringify, sanitizeCmdkValue } from './text';
+import { formatBytes, padNumber, pluralize, safeStringify, sanitizeCmdkValue } from './text';
 
 describe('sanitizeCmdkValue', () => {
   test('returns plain text unchanged', () => {
@@ -86,5 +86,15 @@ describe('safeStringify', () => {
     const obj = { id: 123n };
     const result = safeStringify(obj);
     expect(result).toBe('[object Object]');
+  });
+});
+
+describe('formatBytes', () => {
+  test('binary units, empty for unknown', () => {
+    expect(formatBytes(0)).toBe('0 B');
+    expect(formatBytes(1023)).toBe('1023 B');
+    expect(formatBytes(1536)).toBe('1.5 KiB');
+    expect(formatBytes(20 * 1024 * 1024)).toBe('20 MiB');
+    expect(formatBytes(undefined)).toBe('');
   });
 });

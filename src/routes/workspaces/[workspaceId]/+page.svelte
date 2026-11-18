@@ -104,6 +104,7 @@
   } from '../../../types/workspace';
   import type {
     WorkspaceFileMetadata,
+    WorkspaceSearchMatch,
     WorkspaceTreeMap,
     WorkspaceTreeNode,
     WorkspaceTreeNodeWithFullPath,
@@ -1497,8 +1498,8 @@
     const tab = event.detail;
     if (tab === 'actions') {
       await switchToContentMode(WorkspaceContentMode.ActionRunsList);
-    } else if (tab === 'settings') {
-      leftPanelActiveTab = 'settings'; // settings doesn't have a content mode, so just update the active tab
+    } else if (tab === 'settings' || tab === 'search') {
+      leftPanelActiveTab = tab; // no content mode of their own, so just update the active tab
     } else {
       await switchToContentMode(WorkspaceContentMode.File);
     }
@@ -1706,6 +1707,13 @@
   }
 
   function onGlobalKeydown(event: KeyboardEvent) {
+    if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'f') {
+      event.preventDefault();
+      leftPanelActiveTab = 'search';
+      sidebarPanelOpen = true;
+      tick().then(() => document.querySelector<HTMLInputElement>('input[aria-label="Find in workspace"]')?.focus());
+      return;
+    }
     if (isSaveEvent(event)) {
       event.preventDefault();
       // Don't save while a modal is open — Ctrl/Cmd+S would stack another save under it.
@@ -1816,6 +1824,18 @@
     definitionBackStack = definitionBackStack.filter(e => e !== entry);
     view?.dispatch({ scrollIntoView: true, selection: { anchor: Math.min(entry.anchor, view.state.doc.length) } });
     view?.focus();
+  }
+
+  /** A "Find in workspace" result: open its file (asking about unsaved edits as any navigation does), then its line. */
+  async function onOpenSearchMatch(event: CustomEvent<WorkspaceSearchMatch>) {
+    const { column, line, path } = event.detail;
+    const view = path === $activeDocumentPath ? activeEditorView : await openFileForDefinition(path, false);
+    if (!view) {
+      return;
+    }
+    const target = view.state.doc.line(Math.min(line, view.state.doc.lines));
+    view.dispatch({ scrollIntoView: true, selection: { anchor: Math.min(target.from + column - 1, target.to) } });
+    view.focus();
   }
 
   function onGotoLine(event: CustomEvent<{ column: number; line: number }>) {
@@ -1962,6 +1982,7 @@
             on:selectAction={onSelectAction}
             on:selectAllRuns={onSelectAllRuns}
             on:openInNewTab={onOpenInNewTab}
+            on:openMatch={onOpenSearchMatch}
           />
         </Resizable.Pane>
 
@@ -2138,6 +2159,7 @@
               editorSequenceView={activeEditorView}
               filePath={$activeDocumentPath}
               fileMetadata={activeFileMetadata}
+              fileSize={$activeDocumentPath ? (workspaceTreeMap[$activeDocumentPath]?.size ?? null) : null}
               hasEditPermission={hasEditFilePermission}
               {hasCreateRevisionPermission}
               {hasRestoreRevisionPermission}

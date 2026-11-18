@@ -20,6 +20,9 @@
     hide: void;
   }>();
 
+  /** Where focus goes when the menu closes (default: the menu's own hidden trigger). */
+  export let closeFocus: HTMLElement | undefined = undefined;
+
   let buttonRef: HTMLButtonElement;
 
   export function hide(notify = false): void {
@@ -63,6 +66,7 @@
 </script>
 
 <ContextMenu.Root
+  {closeFocus}
   onOpenChange={open => {
     if (!open) {
       hide(true);

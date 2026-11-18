@@ -9,6 +9,7 @@
   import { minimalSetup } from 'codemirror';
   import { createEventDispatcher, onDestroy } from 'svelte';
   import type { WorkspaceFileMetadata } from '../../types/workspace-tree-view';
+  import { formatBytes } from '../../utilities/text';
   import { getShortISOForDate } from '../../utilities/time';
   import { getUserDisplayNameFromIdentity } from '../../utilities/workspaces';
   import SectionTitle from '../ui/SectionTitle.svelte';
@@ -21,6 +22,8 @@
 
   export let filePath: string | null = null;
   export let fileMetadata: WorkspaceFileMetadata | null = null;
+  /** Bytes, from the workspace listing (not stored in the metadata). */
+  export let fileSize: number | null = null;
   export let hasEditPermission: boolean = false;
 
   let compartmentReadonly: Compartment = new Compartment();
@@ -177,6 +180,12 @@
         <Sidebar.Menu className="h-full text-xs">
           {#if fileMetadata}
             <div class="flex flex-col gap-4 p-3">
+              {#if fileSize != null}
+                <div class="flex flex-col gap-0.5">
+                  <span class="font-medium text-muted-foreground">Size</span>
+                  <span>{fileSize.toLocaleString()} bytes{fileSize >= 1024 ? ` (${formatBytes(fileSize)})` : ''}</span>
+                </div>
+              {/if}
               {#if fileMetadata.createdBy}
                 <div class="flex flex-col gap-0.5">
                   <span class="font-medium text-muted-foreground">Created by</span>
