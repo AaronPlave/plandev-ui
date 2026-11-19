@@ -1092,9 +1092,11 @@ export const WorkspaceApi = {
     filePath: string,
     user: User | null,
     signal?: AbortSignal,
+    /** Newest first; the server's default is 100 and its maximum 1000. */
+    limit?: number,
   ): Promise<WorkspaceFileHistoryEntry[]> {
     const { data } = await reqWorkspaceWithEtag<{ history: WorkspaceFileHistoryEntry[] }>(
-      `${joinPath(['history', workspaceId, filePath])}`,
+      `${joinPath(['history', workspaceId, filePath])}${limit ? `?limit=${limit}` : ''}`,
       'GET',
       null,
       user,

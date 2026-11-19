@@ -51,6 +51,8 @@
   import OutputToolbar from './OutputToolbar.svelte';
 
   export let availableActions: { action: ActionDefinition; parameter: string }[] = [];
+  /** Artifacts built from this file; the banner links to them. */
+  export let buildCount: number = 0;
   export let doesWorkingCopyMatchLatestRevision: boolean = false;
   export let fileMetadata: WorkspaceFileMetadata | null = null;
   export let phoenixContext: PhoenixContext | undefined;
@@ -72,6 +74,7 @@
   export let userSequenceEditorColumns: string;
   export let userSequenceEditorColumnsWithFormBuilder: string;
   export let onReadOnlyChange: ((readOnly: boolean) => void) | null = null;
+  export let onShowBuilds: (() => void) | null = null;
   /** Where "Back" returns to after Go to Definition, e.g. `startup.rs`; null hides it. */
   export let navigateBackLabel: string | null = null;
   export let onNavigateBack: (() => void) | null = null;
@@ -85,6 +88,7 @@
     lintChange: { diagnostics: LintDiagnostic[]; filePath: string };
     runAction: { action: ActionDefinition; parameter: string };
     save: string;
+    saveOutput: { filePath: string; formatName: string; input: string; output: string; outputPath: string };
     sequenceInputUpdate: { filePath: string; input: string };
     sequenceOutputUpdate: { filePath: string; output?: string };
   }>();
@@ -338,6 +342,36 @@
     }
   }
 
+  function outputPathFor(format: OutputLanguage): string {
+    return replaceFileExtension(sequenceFilePath, inputLanguage.fileExtension, format.fileExtension);
+  }
+
+  /** Generated fresh from the editor text, not the debounced preview, so input and output belong together. */
+  function saveOutputToWorkspace(): void {
+    if (!selectedOutputFormat?.toOutputFormat || !phoenixContext) {
+      return;
+    }
+    const input = editorSequenceView.state.doc.toString();
+    let output: string | undefined;
+    try {
+      output = selectedOutputFormat.toOutputFormat(input, phoenixContext, sequenceName);
+    } catch (e) {
+      showFailureToast(`${selectedOutputFormat.name} could not be generated: ${(e as Error).message}`);
+      return;
+    }
+    if (output === undefined) {
+      showFailureToast(`${selectedOutputFormat.name} produced no output`);
+      return;
+    }
+    dispatch('saveOutput', {
+      filePath: sequenceFilePath,
+      formatName: selectedOutputFormat.name,
+      input,
+      output,
+      outputPath: outputPathFor(selectedOutputFormat),
+    });
+  }
+
   function downloadInputFormat(name: string): void {
     dispatch('downloadInput', { filePath: sequenceFilePath, filename: name });
   }
@@ -582,7 +616,9 @@
       <svelte:fragment slot="body">
         {#if fileMetadata}
           <FileMetadataBanner
+            {buildCount}
             {doesWorkingCopyMatchLatestRevision}
+            {onShowBuilds}
             {fileMetadata}
             hasEditPermission={!previewOnly}
             hasRevisions={revisionList.length > 0}
@@ -622,6 +658,9 @@
               isPreviewOpen={toggleSeqJsonPreview}
               outputLanguages={sequenceAdaptation.outputs}
               outputDisabled={disableCopyAndExport}
+              saveTargetPath={!previewOnly && !readOnly && selectedOutputFormat?.toOutputFormat
+                ? outputPathFor(selectedOutputFormat)
+                : null}
               downloadOptions={selectedOutputFormat
                 ? getDownloadOptionsForFile(
                     replaceFileExtension(sequenceName, inputLanguage.fileExtension, selectedOutputFormat.fileExtension),
@@ -632,6 +671,7 @@
                 : []}
               on:copyOutput={copyOutputFormatToClipboard}
               on:downloadOutput={downloadOutputFormat}
+              on:saveOutput={saveOutputToWorkspace}
               on:togglePreview={toggleSeqJsonEditor}
             />
           </div>

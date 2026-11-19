@@ -341,6 +341,7 @@ import {
   type BulkOperationResponses,
   type MoveFileOperation,
 } from './workspaces';
+import { getBuildProvenance, sha256Hex, type BuildProvenance } from './buildProvenance';
 
 function throwPermissionError(attemptedAction: string): never {
   throw Error(`You do not have permission to: ${attemptedAction}.`);
@@ -7000,6 +7001,67 @@ const effects = {
       catchError('log', 'Run Action Failed', e as Error);
       showFailureToast('Run Action Failed');
       return null;
+    }
+  },
+
+  /**
+   * Saves an adaptation output generated from a saved source as a workspace artifact: read-only, with
+   * the source's path, saved version and hashes recorded (`user.build`), and a revision per save.
+   * Refuses to replace a file that was not generated from this source. Returns whether it saved.
+   */
+  async saveSequenceOutputToWorkspace(
+    workspaceId: number,
+    source: { path: string; text: string },
+    output: { formatName: string; path: string; text: string },
+    existing: WorkspaceFileMetadata | null,
+    dictionary: { mission: string; version: string } | null,
+    user: User | null,
+  ): Promise<boolean> {
+    try {
+      const previous = existing ? getBuildProvenance(existing.user) : null;
+      if (existing && previous?.source !== source.path) {
+        throw new Error(`${output.path} exists and was not generated from ${source.path}; rename or remove it first.`);
+      }
+      if (existing?.readOnly) {
+        await WorkspaceApi.setFileMetadata(workspaceId, output.path, { readOnly: false }, user);
+      }
+      await WorkspaceApi.saveFile(workspaceId, output.path, output.text, true, user);
+      const sourceSha256 = await sha256Hex(source.text);
+      const history = await WorkspaceApi.getFileHistory(workspaceId, source.path, user, undefined, 50);
+      const latest = history.find(entry => entry.contentChanged);
+      const sourceCommit =
+        latest &&
+        (await sha256Hex(await WorkspaceApi.getFileAtCommit(workspaceId, source.path, latest.commit, user))) ===
+          sourceSha256
+          ? latest.commit
+          : null;
+      const build: BuildProvenance = {
+        builtAt: new Date().toISOString(),
+        bytes: new TextEncoder().encode(output.text).length,
+        dictionary,
+        inputs: [{ path: source.path.split('/').pop() ?? source.path, sha256: sourceSha256 }],
+        producer: { kind: 'adaptation-output', name: output.formatName },
+        sha256: await sha256Hex(output.text),
+        source: source.path,
+        sourceCommit,
+        sourceRevision: null,
+        sourceSha256,
+      };
+      await WorkspaceApi.setFileMetadata(workspaceId, output.path, { readOnly: true, user: { build } }, user);
+      await WorkspaceApi.createFileRevision(
+        workspaceId,
+        output.path,
+        null,
+        `Generated from ${source.path} (${output.formatName})`,
+        user,
+      );
+      showSuccessToast(`Saved ${output.path}`);
+      logMessage('log', `Saved ${output.formatName} output of "${source.path}" as "${output.path}".`);
+      return true;
+    } catch (e) {
+      catchError('log', 'Saving the output failed', e as Error);
+      showFailureToast('Saving the output failed', e);
+      return false;
     }
   },
 

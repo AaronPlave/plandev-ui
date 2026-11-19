@@ -8,8 +8,8 @@
   import { getUserStore } from '../../stores/user';
   import { parcel, workspaceId } from '../../stores/workspaces';
   import type { UserStore } from '../../types/app';
-  import { projectFolder, sha256Hex, type BuildProvenance } from '../../utilities/buildProvenance';
-  import { showWorkspaceFileComparisonModal } from '../../utilities/modal';
+  import { compareSourceWithBuild } from '../../utilities/buildCompare';
+  import { checkFreshness, sha256Hex, type BuildProvenance, type Freshness } from '../../utilities/buildProvenance';
   import { getShortISOForDate } from '../../utilities/time';
   import { getRevisionDisplayName, WorkspaceApi } from '../../utilities/workspaces';
 
@@ -17,34 +17,27 @@
   export let filePath: string;
   export let provenance: BuildProvenance;
 
-  const dispatch = createEventDispatcher<{ openFile: string }>();
+  const dispatch = createEventDispatcher<{ openActionRun: number; openFile: string }>();
   const user: UserStore = getUserStore();
-  const HISTORY_SCAN_LIMIT = 30;
 
-  type Check = {
-    artifactMatches: boolean | null;
-    changed: string[];
-    missing: string[];
-    sourceChanged: boolean;
-  };
-
-  let check: Check | null = null;
+  let check: Freshness | null = null;
   let checkError: string | null = null;
   let checking: boolean = false;
   let comparing: boolean = false;
   let compareNote: string | null = null;
 
-  $: folder = projectFolder(provenance);
   $: parcelDictionary = $commandDictionaries.find(d => d.id === $parcel?.command_dictionary_id) ?? null;
-  $: dictionaryNote = !parcelDictionary
-    ? null
-    : parcelDictionary.mission === provenance.dictionary.mission &&
-        parcelDictionary.version === provenance.dictionary.version
-      ? 'same mission and version as the parcel dictionary'
-      : `the parcel now uses ${parcelDictionary.mission} ${parcelDictionary.version}`;
+  $: dictionaryNote =
+    !parcelDictionary || !provenance.dictionary
+      ? null
+      : parcelDictionary.mission === provenance.dictionary.mission &&
+          parcelDictionary.version === provenance.dictionary.version
+        ? 'same mission and version as the parcel dictionary'
+        : `the parcel now uses ${parcelDictionary.mission} ${parcelDictionary.version}`;
   $: toolchainRows = Object.entries(provenance.toolchain ?? {}).filter(
     (entry): entry is [string, string] => typeof entry[1] === 'string',
   );
+  $: runId = provenance.producer.kind === 'action' ? (provenance.producer.runId ?? null) : null;
   $: if (filePath || provenance) {
     runCheck();
   }
@@ -58,27 +51,11 @@
     }
   }
 
-  /** Compares the recorded content hashes with the files as saved now. */
   async function runCheck() {
     checking = true;
     checkError = null;
     try {
-      const inputs = folder === null ? [] : provenance.inputs;
-      const [artifactHash, sourceHash, ...inputHashes] = await Promise.all([
-        hashOf(filePath),
-        hashOf(provenance.source),
-        ...inputs.map(input => hashOf(`${folder}${input.path}`)),
-      ]);
-      check = {
-        artifactMatches: artifactHash === null ? null : artifactHash === provenance.sha256,
-        // Other inputs (helpers, Cargo.toml, the project's dictionary copy); the source is reported on its own.
-        changed: inputs
-          .filter((input, i) => inputHashes[i] !== null && inputHashes[i] !== input.sha256)
-          .map(input => input.path)
-          .filter(path => `${folder}${path}` !== provenance.source),
-        missing: inputs.filter((_, i) => inputHashes[i] === null).map(i => i.path),
-        sourceChanged: sourceHash !== provenance.sourceSha256,
-      };
+      check = await checkFreshness(provenance, filePath, hashOf);
     } catch (e) {
       checkError = (e as Error).message;
     } finally {
@@ -86,39 +63,11 @@
     }
   }
 
-  /**
-   * The source as built against the source now. Built from a revision: that revision. Built from the
-   * working copy: the saved version in the source's history whose content hash is the recorded one.
-   */
   async function compareSource() {
     comparing = true;
     compareNote = null;
     try {
-      const history = await WorkspaceApi.getFileHistory($workspaceId, provenance.source, $user);
-      let leftCommit: string | null = null;
-      if (!provenance.sourceRevision) {
-        for (const entry of history.filter(e => e.contentChanged).slice(0, HISTORY_SCAN_LIMIT)) {
-          const content = await WorkspaceApi.getFileAtCommit($workspaceId, provenance.source, entry.commit, $user);
-          if ((await sha256Hex(content)) === provenance.sourceSha256) {
-            leftCommit = entry.commit;
-            break;
-          }
-        }
-        if (!leftCommit) {
-          compareNote = `The built source is not among the last ${HISTORY_SCAN_LIMIT} saved versions of ${provenance.source}.`;
-          return;
-        }
-      }
-      showWorkspaceFileComparisonModal({
-        history,
-        leftCommit,
-        leftFilePath: provenance.source,
-        leftRevisionName: provenance.sourceRevision,
-        rightFilePath: provenance.source,
-        type: null,
-        user: $user,
-        workspaceId: $workspaceId,
-      });
+      compareNote = await compareSourceWithBuild(provenance, $workspaceId, $user);
     } catch (e) {
       compareNote = (e as Error).message;
     } finally {
@@ -132,20 +81,40 @@
   <dl class="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1">
     <dt class="text-muted-foreground">Source</dt>
     <dd class="break-all">
-      <button class="text-left underline" on:click={() => dispatch('openFile', provenance.source)}
-        >{provenance.source}</button
-      >
+      {#if check?.sourceChanged === null}
+        {provenance.source}
+        <div class="text-muted-foreground">Not in the workspace at this path now (deleted or moved).</div>
+      {:else}
+        <button class="text-left underline" on:click={() => dispatch('openFile', provenance.source)}
+          >{provenance.source}</button
+        >
+      {/if}
       {#if provenance.sourceRevision}
         @ revision {getRevisionDisplayName(provenance.sourceRevision)}
+      {:else if provenance.sourceCommit}
+        (saved version <span class="font-mono" title={provenance.sourceCommit}
+          >{provenance.sourceCommit.slice(0, 8)}</span
+        >)
       {:else}
         (saved working copy)
+      {/if}
+    </dd>
+    <dt class="text-muted-foreground">Built by</dt>
+    <dd>
+      {provenance.producer.kind === 'action'
+        ? `Action “${provenance.producer.name}”`
+        : `${provenance.producer.name} output, saved from the editor`}
+      {#if runId !== null}
+        <button class="underline" on:click={() => runId !== null && dispatch('openActionRun', runId)}
+          >run {runId}</button
+        >
       {/if}
     </dd>
     <dt class="text-muted-foreground">Built</dt>
     <dd>{getShortISOForDate(new Date(provenance.builtAt))}</dd>
     <dt class="text-muted-foreground">Result</dt>
     <dd>
-      Compiled{#if provenance.verify}; {provenance.verify.ok
+      {provenance.producer.kind === 'action' ? 'Compiled' : 'Generated'}{#if provenance.verify}; {provenance.verify.ok
           ? 'verified (loads within sequencer limits)'
           : 'verify failed'}{:else if provenance.source.endsWith('.rs')}; verify result not recorded{/if}
     </dd>
@@ -155,13 +124,19 @@
     {/if}
     <dt class="text-muted-foreground">Artifact</dt>
     <dd class="break-all font-mono" title={provenance.sha256}>sha256 {provenance.sha256.slice(0, 16)}…</dd>
-    <dt class="text-muted-foreground">Dictionary</dt>
-    <dd class="break-words">
-      {provenance.dictionary.mission}
-      {provenance.dictionary.version}
-      <span class="font-mono" title={provenance.dictionary.sha256}>({provenance.dictionary.sha256.slice(0, 12)}…)</span>
-      {#if dictionaryNote}<div class="text-muted-foreground">{dictionaryNote}</div>{/if}
-    </dd>
+    {#if provenance.dictionary}
+      <dt class="text-muted-foreground">Dictionary</dt>
+      <dd class="break-words">
+        {provenance.dictionary.mission}
+        {provenance.dictionary.version}
+        {#if provenance.dictionary.sha256}
+          <span class="font-mono" title={provenance.dictionary.sha256}
+            >({provenance.dictionary.sha256.slice(0, 12)}…)</span
+          >
+        {/if}
+        {#if dictionaryNote}<div class="text-muted-foreground">{dictionaryNote}</div>{/if}
+      </dd>
+    {/if}
     {#each toolchainRows as [tool, version]}
       <dt class="text-muted-foreground">{tool}</dt>
       <dd class="break-words">{version}</dd>
@@ -184,11 +159,15 @@
       {#if check.artifactMatches === false}
         <div class="text-destructive">This file's content differs from what the build wrote.</div>
       {/if}
-      {#if !check.sourceChanged && !check.changed.length}
+      {#if check.sourceChanged === false && !check.changed.length}
         <div>Source and all recorded inputs are unchanged since this build.</div>
       {:else}
         <div>
-          {check.sourceChanged ? 'The source has changed since this build.' : 'The source is unchanged.'}
+          {check.sourceChanged === null
+            ? 'The source is not at its recorded path; it is not looked for elsewhere.'
+            : check.sourceChanged
+              ? 'The source has changed since this build.'
+              : 'The source is unchanged.'}
           {#if check.changed.length}
             Other changed inputs: {check.changed.join(', ')}.
           {/if}
@@ -206,7 +185,7 @@
     {/if}
     <div class="flex gap-2">
       <Button size="sm" variant="outline" disabled={checking} on:click={runCheck}>Check again</Button>
-      <Button size="sm" variant="outline" disabled={comparing} on:click={compareSource}
+      <Button size="sm" variant="outline" disabled={comparing || check?.sourceChanged === null} on:click={compareSource}
         >Compare source with build</Button
       >
     </div>

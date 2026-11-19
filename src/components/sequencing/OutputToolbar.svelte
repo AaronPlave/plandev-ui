@@ -4,7 +4,7 @@
   import type { OutputLanguage } from '@nasa-jpl/plandev-sequence-languages';
 
   import { Button, Label } from '@nasa-jpl/stellar-svelte';
-  import { Clipboard, PanelBottomClose, PanelBottomOpen } from 'lucide-svelte';
+  import { Clipboard, FileOutput, PanelBottomClose, PanelBottomOpen } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
   import type { DownloadMenuOption } from '../../types/dropdown';
   import DownloadMenu from '../ui/DownloadMenu.svelte';
@@ -15,10 +15,13 @@
   export let outputDisabled: boolean = false;
   export let selectedOutputFormat: OutputLanguage | undefined;
   export let downloadOptions: DownloadMenuOption[] = [];
+  /** Offer saving the output as a workspace file (with its source recorded); null hides it. */
+  export let saveTargetPath: string | null = null;
 
   const dispatch = createEventDispatcher<{
     copyOutput: void;
     downloadOutput: { name: string };
+    saveOutput: void;
     togglePreview: void;
   }>();
 
@@ -58,6 +61,19 @@
         <Clipboard size={16} />
       </Button>
     </Tooltip>
+    {#if saveTargetPath}
+      <Tooltip content="Save as {saveTargetPath} in the workspace, recording this source and its hash">
+        <Button
+          variant="outline"
+          aria-label="Save output to workspace"
+          size="icon"
+          on:click={() => dispatch('saveOutput')}
+          disabled={outputDisabled}
+        >
+          <FileOutput size={16} />
+        </Button>
+      </Tooltip>
+    {/if}
     <DownloadMenu
       align="end"
       size="icon"

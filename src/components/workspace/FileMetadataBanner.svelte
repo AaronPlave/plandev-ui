@@ -11,6 +11,8 @@
   import { getRevisionDisplayName, getUserDisplayNameFromIdentity } from '../../utilities/workspaces';
   import Tooltip from '../ui/Tooltip.svelte';
 
+  /** Artifacts whose provenance names this file as their source. */
+  export let buildCount: number = 0;
   export let doesWorkingCopyMatchLatestRevision: boolean = false;
   export let isDirty: boolean = false;
   export let fileMetadata: WorkspaceFileMetadata;
@@ -18,6 +20,7 @@
   export let hasRevisions: boolean = false;
   export let matchingRevisionName: WorkspaceRevisionName | null = null;
   export let onReadOnlyChange: ((readOnly: boolean) => void) | null = null;
+  export let onShowBuilds: (() => void) | null = null;
 
   $: generatedFrom = getGeneratedFrom(fileMetadata.user);
   $: builtFrom = getBuildProvenance(fileMetadata.user)?.source ?? null;
@@ -62,6 +65,11 @@
   {/if}
   {#if builtFrom}
     <span class="font-medium" title="Build output; see Metadata for its provenance">Built from {builtFrom}</span>
+  {/if}
+  {#if buildCount && onShowBuilds}
+    <button class="font-medium underline" title="Show the artifacts built from this file" on:click={onShowBuilds}
+      >{buildCount} build{buildCount === 1 ? '' : 's'}</button
+    >
   {/if}
   {#if managedBy}
     <Tooltip

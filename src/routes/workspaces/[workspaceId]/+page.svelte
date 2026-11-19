@@ -110,6 +110,7 @@
     WorkspaceTreeNodeWithFullPath,
   } from '../../../types/workspace-tree-view';
   import { getFileArgumentForPaths, getStatusForActionRun } from '../../../utilities/actions';
+  import { findBuildArtifacts } from '../../../utilities/buildProvenance';
   import { setClipboardContent } from '../../../utilities/clipboard';
   import effects from '../../../utilities/effects';
   import { ErrorTypes } from '../../../utilities/errors';
@@ -317,6 +318,7 @@
   }
 
   $: activeFileMetadata = ($activeDocumentPath && workspaceTreeMap[$activeDocumentPath]?.metadata) || null;
+  $: activeBuildArtifacts = $activeDocumentPath ? findBuildArtifacts(workspaceFileList, $activeDocumentPath) : [];
 
   $: activeFileIsSequence =
     $activeDocumentPath === null ||
@@ -908,7 +910,7 @@
   }
 
   async function saveBeforeOperation(
-    operation: 'moving' | 'renaming' | 'downloading' | 'running action',
+    operation: 'moving' | 'renaming' | 'downloading' | 'running action' | 'generating output',
   ): Promise<boolean> {
     const operationVerb =
       operation === 'moving'
@@ -917,10 +919,18 @@
           ? 'Rename'
           : operation === 'downloading'
             ? 'Download'
-            : 'Run';
+            : operation === 'generating output'
+              ? 'Generate'
+              : 'Run';
+    const subject =
+      operation === 'running action'
+        ? 'you are running this action on'
+        : operation === 'generating output'
+          ? 'you are generating output from'
+          : `you are ${operation}`;
     const { confirm } = await showConfirmModal(
       `Save before ${startCase(operation)}`,
-      `The file ${operation === 'running action' ? 'you are running this action on' : `you are ${operation}`} has unsaved changes. Would you like to save them before ${operation === 'running action' ? 'running the action' : operation}?`,
+      `The file ${subject} has unsaved changes. Would you like to save them before ${operation === 'running action' ? 'running the action' : operation}?`,
       `Save and ${operationVerb}`,
       true,
       `Cancel ${operationVerb === 'Run' ? '' : operationVerb}`,
@@ -1707,6 +1717,36 @@
     downloadFileContent(content, filename);
   }
 
+  /** The output must come from the saved source: unsaved edits are saved first (or the save is abandoned). */
+  async function onSaveOutput(
+    event: CustomEvent<{ filePath: string; formatName: string; input: string; output: string; outputPath: string }>,
+  ) {
+    const { filePath, formatName, input, output, outputPath } = event.detail;
+    if (
+      filePath === $activeDocumentPath &&
+      $activeDocumentIsDirty &&
+      !(await saveBeforeOperation('generating output'))
+    ) {
+      return;
+    }
+    if (filePath !== $activeDocumentPath || $activeDocument.originalContent !== input) {
+      showFailureToast('The source changed while saving; save the output again');
+      return;
+    }
+    const header = phoenixContext?.commandDictionary?.header;
+    const saved = await effects.saveSequenceOutputToWorkspace(
+      $workspaceId,
+      { path: filePath, text: input },
+      { formatName, path: outputPath, text: output },
+      workspaceTreeMap[outputPath]?.metadata ?? null,
+      header?.mission_name ? { mission: header.mission_name, version: header.version } : null,
+      $user,
+    );
+    if (saved) {
+      await refreshWorkspaceContents();
+    }
+  }
+
   function onGlobalKeydown(event: KeyboardEvent) {
     if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'f') {
       event.preventDefault();
@@ -1772,6 +1812,19 @@
    * changes prompt, permissions) and hand the language the editor once it holds the file. A later
    * navigation supersedes an earlier one still loading.
    */
+  /** Opens a file linked from provenance (artifact ↔ source) with this right-panel tab showing. */
+  async function openKeepingPanel(path: string, tab: WorkspaceRightPanelTab) {
+    if (path !== $activeDocumentPath) {
+      // Resolves null for files without a text editor (artifacts) too, so check what opened.
+      await openFileForDefinition(path, false);
+      if ($activeDocumentPath !== path) {
+        return;
+      }
+    }
+    await tick();
+    rightPanelActiveTab = tab;
+  }
+
   async function openFileForDefinition(path: string, recordJump: boolean = true): Promise<EditorView | null> {
     if (!workspaceTreeMap[path]) {
       showFailureToast(`The definition is in ${path}, which is not in this workspace`);
@@ -2038,8 +2091,13 @@
                     bind:this={sequenceEditorRef}
                     {phoenixContext}
                     availableActions={availableActionsForActiveFile}
+                    buildCount={activeBuildArtifacts.length}
                     fileMetadata={activeFileMetadata}
                     includeActions={hasRunActionPermission}
+                    onShowBuilds={() => {
+                      rightPanelActiveTab = WorkspaceRightPanelTab.METADATA;
+                      rightPanelOpen = true;
+                    }}
                     isLoading={$activeDocumentIsLoading}
                     isInputFile={activeFileIsInputSequence}
                     {doesWorkingCopyMatchLatestRevision}
@@ -2070,6 +2128,7 @@
                     on:save={onSaveWorkspaceFile}
                     on:downloadInput={onDownloadInput}
                     on:downloadOutput={onDownloadOutput}
+                    on:saveOutput={onSaveOutput}
                     on:sequenceInputUpdate={onWorkspaceInputFileUpdated}
                     on:sequenceOutputUpdate={onWorkspaceOutputFileUpdated}
                   />
@@ -2163,6 +2222,7 @@
             <WorkspaceRightPanel
               bind:activeTab={rightPanelActiveTab}
               availableActions={availableActionsForActiveFile}
+              buildArtifacts={activeBuildArtifacts}
               bind:commandTabLabel={rightPanelCommandTabLabel}
               {doesWorkingCopyMatchLatestRevision}
               editorSequenceView={activeEditorView}
@@ -2179,9 +2239,17 @@
               {phoenixContext}
               {commandInfoMapper}
               {revisionList}
+              savedVersion={$activeDocument.baseEtag}
+              unsavedText={$activeDocumentIsDirty ? $activeDocument.currentContent : null}
               on:createdFileRevision={onCreatedFileRevision}
               on:findUses={onFindUses}
-              on:openFile={e => openFileForDefinition(e.detail, false)}
+              on:openActionRun={e => switchToContentMode(WorkspaceContentMode.ActionRunDetail, { runId: e.detail })}
+              on:openActionRuns={() => switchToContentMode(WorkspaceContentMode.ActionRunsList)}
+              on:openArtifactHistory={e => openKeepingPanel(e.detail, WorkspaceRightPanelTab.REVISIONS)}
+              on:openFile={e =>
+                rightPanelActiveTab === WorkspaceRightPanelTab.METADATA
+                  ? openKeepingPanel(e.detail, WorkspaceRightPanelTab.METADATA)
+                  : openFileForDefinition(e.detail, false)}
               on:runAction={onRunActionOnRevision}
               on:updateUserMetadata={onUpdateUserMetadata}
               reloadWorkingCopy={onRevisionWorkingCopyChanged}

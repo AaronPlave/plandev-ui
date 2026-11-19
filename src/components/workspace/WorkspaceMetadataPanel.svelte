@@ -9,7 +9,7 @@
   import { minimalSetup } from 'codemirror';
   import { createEventDispatcher, onDestroy } from 'svelte';
   import type { WorkspaceFileMetadata } from '../../types/workspace-tree-view';
-  import { getBuildProvenance } from '../../utilities/buildProvenance';
+  import { getBuildProvenance, type BuildArtifact } from '../../utilities/buildProvenance';
   import { getGeneratedFrom } from '../../utilities/generatedProvenance';
   import { formatBytes } from '../../utilities/text';
   import { getShortISOForDate } from '../../utilities/time';
@@ -19,16 +19,25 @@
   import BuildProvenance from './BuildProvenance.svelte';
   import GeneratedFromDetails from './GeneratedFromDetails.svelte';
   import PanelHeader from './PanelHeader.svelte';
+  import SourceBuilds from './SourceBuilds.svelte';
 
   const dispatch = createEventDispatcher<{
     updateUserMetadata: Record<string, unknown>;
   }>();
 
+  /** Artifacts built from this file (their provenance names it as the source). */
+  export let buildArtifacts: BuildArtifact[] = [];
   export let filePath: string | null = null;
   export let fileMetadata: WorkspaceFileMetadata | null = null;
   /** Bytes, from the workspace listing (not stored in the metadata). */
   export let fileSize: number | null = null;
   export let hasEditPermission: boolean = false;
+  /** A sequence source: show Builds even when nothing has been built from it yet. */
+  export let isSequenceFile: boolean = false;
+  /** Changes when the file is saved (its ETag). */
+  export let savedVersion: string | null = null;
+  /** The editor's text when it has unsaved edits, else null. */
+  export let unsavedText: string | null = null;
 
   let compartmentReadonly: Compartment = new Compartment();
   let editorReadOnly: boolean = false;
@@ -40,6 +49,7 @@
 
   $: buildProvenance = getBuildProvenance(fileMetadata?.user);
   $: generatedFrom = getGeneratedFrom(fileMetadata?.user);
+  $: hasReadableProvenance = !!buildProvenance || !!generatedFrom;
   $: editorReadOnly = !hasEditPermission || !isEditing;
   $: if (editorView && compartmentReadonly) {
     editorView.dispatch({
@@ -221,13 +231,27 @@
                 <GeneratedFromDetails from={generatedFrom} />
               {/if}
               {#if filePath && buildProvenance}
-                <BuildProvenance {filePath} provenance={buildProvenance} on:openFile />
+                <BuildProvenance {filePath} provenance={buildProvenance} on:openActionRun on:openFile />
+              {/if}
+              {#if filePath && (buildArtifacts.length || (isSequenceFile && !buildProvenance))}
+                <SourceBuilds
+                  artifacts={buildArtifacts}
+                  {filePath}
+                  refreshKey={savedVersion}
+                  {unsavedText}
+                  on:openActionRun
+                  on:openActionRuns
+                  on:openArtifactHistory
+                  on:openFile
+                />
               {/if}
 
-              <div class="flex flex-col gap-1">
-                <div class="mb-0.5 flex h-4 items-center justify-between">
-                  <span class="font-medium text-muted-foreground">User metadata</span>
-                  <div class="flex items-center gap-1">
+              <details class="flex flex-col gap-1" open={!hasReadableProvenance}>
+                <summary class="mb-1 cursor-pointer font-medium text-muted-foreground">
+                  {hasReadableProvenance ? 'Raw user metadata (JSON)' : 'User metadata'}
+                </summary>
+                {#if hasJsonError || (hasEditPermission && !isEditing)}
+                  <div class="mb-1 flex items-center justify-end gap-1">
                     {#if hasJsonError}
                       <span class="text-xxs text-destructive">Invalid JSON</span>
                     {/if}
@@ -237,15 +261,15 @@
                       </Button>
                     {/if}
                   </div>
-                </div>
+                {/if}
                 <div class="user-metadata-editor overflow-hidden rounded border border-border" use:initEditor />
                 {#if isEditing}
-                  <div class="flex justify-end gap-1">
+                  <div class="mt-1 flex justify-end gap-1">
                     <Button size="sm" variant="outline" on:click={onCancel}>Cancel</Button>
                     <Button size="sm" variant="default" disabled={hasJsonError} on:click={onSave}>Save</Button>
                   </div>
                 {/if}
-              </div>
+              </details>
             </div>
           {:else}
             <!-- This message only displays when a folder (not a file) is selected, as folders currently don't have metadata -->

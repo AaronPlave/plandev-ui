@@ -16,6 +16,7 @@
   import { WorkspaceRightPanelTab } from '../../enums/workspace';
   import type { ActionParameterPair, WorkspaceFileRevision, WorkspaceRevisionName } from '../../types/workspace';
   import type { WorkspaceFileMetadata } from '../../types/workspace-tree-view';
+  import type { BuildArtifact } from '../../utilities/buildProvenance';
   import { getInspectedNode } from '../../utilities/sequence-editor/cursor';
   import { unquoteUnescape } from '../../utilities/sequence-editor/sequence-utils';
   import CommandDictionaryComponent from '../sequencing/CommandPanel/CommandDictionary.svelte';
@@ -31,6 +32,7 @@
 
   export let activeTab: WorkspaceRightPanelTab = WorkspaceRightPanelTab.METADATA;
   export let availableActions: ActionParameterPair[] = [];
+  export let buildArtifacts: BuildArtifact[] = [];
   export let commandInfoMapper: CommandInfoMapper | null = null;
   /** The command tab's title, e.g. "Selected Command" (also the icon rail's tooltip). */
   export let commandTabLabel: string = 'Selected Command';
@@ -48,6 +50,8 @@
   export let matchingRevisionName: WorkspaceRevisionName | null = null;
   export let phoenixContext: PhoenixContext;
   export let revisionList: WorkspaceFileRevision[] = [];
+  export let savedVersion: string | null = null;
+  export let unsavedText: string | null = null;
   export let reloadWorkingCopy: () => Promise<void>;
 
   const emptyCommandDictionary: CommandDictionary = {
@@ -246,10 +250,17 @@
     {/if}
   {:else if activeTab === WorkspaceRightPanelTab.METADATA}
     <WorkspaceMetadataPanel
+      {buildArtifacts}
       {filePath}
       {fileMetadata}
       {fileSize}
       {hasEditPermission}
+      {isSequenceFile}
+      {savedVersion}
+      {unsavedText}
+      on:openActionRun
+      on:openActionRuns
+      on:openArtifactHistory
       on:openFile
       on:updateUserMetadata
     />
