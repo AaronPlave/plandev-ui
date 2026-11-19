@@ -2,23 +2,34 @@
 
 <script lang="ts">
   import { env } from '$env/dynamic/public';
-  import type { CosmolabeViewer } from '@cosmolabe/viewer';
+  import type { CosmolabeViewer, MissionActivitySpec } from '@cosmolabe/viewer';
   import { onDestroy } from 'svelte';
   import { activityDirectivesMap, selectActivity, selectedActivityDirectiveId } from '../../stores/activities';
   import { plan, planEndTimeMs, planStartTimeMs, timeCursorMs, viewTimeRange } from '../../stores/plan';
-  import { latestSchedulingRequest, schedulingGoalSpecifications } from '../../stores/scheduling';
+  import {
+    latestSchedulingRequest,
+    schedulingGoalSpecifications,
+    schedulingPlanSpecification,
+  } from '../../stores/scheduling';
   import { selectedSpanId, simulationDatasetId, spanUtilityMaps, spans, spansMap } from '../../stores/simulation';
   import type { User } from '../../types/app';
   import type { ViewGridSection } from '../../types/view';
   import {
     activityId,
+    findPasses,
+    fitToPlan,
     planetocentric,
     resolveMission,
+    selectionAction,
     spanIdOf,
     spansToActivities,
+    targetOutcome,
+    windowProblems,
     type CosmolabeAdapter,
     type CosmolabeMission,
     type CosmolabeProposal,
+    type Interval,
+    type PassSearch,
   } from '../../utilities/cosmolabe';
   import effects from '../../utilities/effects';
   import GridMenu from '../menus/GridMenu.svelte';
@@ -29,6 +40,11 @@
 
   type CosmolabeModule = typeof import('@cosmolabe/viewer');
   type ScriptProbePoint = NonNullable<ReturnType<CosmolabeViewer['control']['getProbePoint']>>;
+  /** Where the proposed window comes from: the cursor, a found pass, or an Event Finder result. */
+  type WindowBase =
+    | { kind: 'cursor' }
+    | { kind: 'pass'; ms: number }
+    | { detail: string; endMs: number; kind: 'event' | 'staged'; startMs: number };
   const OWNER = 'plandev';
   const TARGET_LAYER = 'PlanDev targets (goal arguments)';
 
@@ -45,18 +61,39 @@
 
   /** The last cursor time the viewer itself set, so its echo through PlanDev's store is not sent back. */
   let cursorFromViewerMs: number | null = null;
+  /** The host activities last given to the viewer. */
+  let pushedActivities: MissionActivitySpec[] = [];
+  /** The viewer's selected activity, as its last `activitySelect` said. */
+  let viewerActivity: string | null = null;
   let probe: ScriptProbePoint | null = null;
-  let eventWindow: { detail: string; endMs: number; startMs: number } | null = null;
-  let halfWindowMin = 30;
+  /** A staged target loaded back into the form; proposing then replaces it under the same id. */
+  let editing: (typeof staged)[number] | null = null;
+  let base: WindowBase = { kind: 'cursor' };
+  let lastEvent = '';
+  /** An explicit "fit to plan" of the window; any new window choice drops it. */
+  let fitted: (Interval & { from: string }) | null = null;
+  let halfWindowMin = 15;
   let staging = false;
   let targetLayer: string | null = null;
   let targetFeatures: (string | number)[] = [];
   let vehicleState = '';
 
+  let searchFrom = '';
+  let searchTo = '';
+  let rangeForPlan: number | null = null;
+  let searching = false;
+  let searchError = '';
+  let search: (PassSearch & { at: string; range: Interval; unavailable: string }) | null = null;
+
   $: modelName = $plan?.model?.name;
   $: if (container && modelName !== loadedModel) {
     loadedModel = modelName;
     loading = loading.then(() => open(modelName));
+  }
+  $: if ($plan && $plan.id !== rangeForPlan) {
+    rangeForPlan = $plan.id;
+    searchFrom = isoInput($planStartTimeMs);
+    searchTo = isoInput($planEndTimeMs);
   }
 
   // ── PlanDev → Cosmolabe ────────────────────────────────────────────────────────────────
@@ -72,8 +109,13 @@
     ($selectedActivityDirectiveId !== null
       ? ($spanUtilityMaps.directiveIdToSpanIdMap[$selectedActivityDirectiveId] ?? null)
       : null);
+  /** PlanDev's selection as the viewer names it: plan + simulation dataset + span. */
+  $: wantedActivity =
+    $plan && selectedSpan !== null && $simulationDatasetId >= 0
+      ? activityId($plan.id, $simulationDatasetId, selectedSpan)
+      : null;
   $: if (ready) {
-    pushSelection(selectedSpan);
+    pushSelection(wantedActivity);
   }
   $: goalSpec = adapter
     ? ($schedulingGoalSpecifications.find(spec => spec.goal_metadata?.name === adapter?.targets.goal) ?? null)
@@ -84,43 +126,61 @@
   }
 
   // ── Cosmolabe → PlanDev: a proposal ──────────────────────────────────────────────────────
-  $: location =
-    probe && adapter ? { ...planetocentric(probe.point.bodyFixedPositionKm), body: probe.point.bodyName } : null;
+  $: planBounds = { endMs: $planEndTimeMs, startMs: $planStartTimeMs };
+  $: location = editing
+    ? { body: adapter?.targets.body ?? '', latDeg: editing.latDeg, lonDeg: editing.lonDeg }
+    : probe && adapter
+      ? { ...planetocentric(probe.point.bodyFixedPositionKm), body: probe.point.bodyName }
+      : null;
+  $: locationKey = location ? `${location.body}/${location.latDeg}/${location.lonDeg}` : '';
+  // Pass results belong to the location they were searched for.
+  $: if (search && search.at !== locationKey) {
+    search = null;
+  }
   $: cursorMs = $timeCursorMs ?? $planStartTimeMs;
-  $: proposedWindow = eventWindow ?? {
-    detail: `cursor ± ${halfWindowMin} min`,
-    endMs: cursorMs + halfWindowMin * 60_000,
-    startMs: cursorMs - halfWindowMin * 60_000,
-  };
-  $: windowProblem =
-    proposedWindow.startMs < $planStartTimeMs || proposedWindow.endMs > $planEndTimeMs
-      ? 'extends outside the plan; PlanDev will reject it'
-      : '';
+  $: raw = rawWindow(base, cursorMs, halfWindowMin);
+  // A fit applies only to the window it was made from: any change to that window (cursor, pass, ±) drops it.
+  $: rawKey = `${raw.startMs}/${raw.endMs}`;
+  $: proposedWindow = fitted?.from === rawKey ? { ...fitted, detail: `${raw.detail}, fitted to the plan` } : raw;
+  $: windowIssues = windowProblems(proposedWindow, planBounds);
+  $: canFit = windowIssues.length > 0 && fitToPlan(proposedWindow, planBounds) !== null;
   $: proposal =
     location && $plan && adapter
       ? ({
           body: location.body,
           frame: probe?.point.frame ?? `IAU_${location.body.toUpperCase()}`,
-          id: `cosmo-${Date.now().toString(36)}`,
+          id: editing?.id ?? `cosmo-${Date.now().toString(36)}`,
           latDeg: location.latDeg,
           lonDeg: location.lonDeg,
-          name: `${location.body} ${location.latDeg.toFixed(2)}°, ${location.lonDeg.toFixed(2)}°`,
+          name: editing?.name ?? `${location.body} ${location.latDeg.toFixed(2)}°, ${location.lonDeg.toFixed(2)}°`,
           source: {
             app: 'cosmolabe',
-            location: 'probe',
+            location: editing ? 'staged-target' : 'probe',
             planId: $plan.id,
             simulationDatasetId: $simulationDatasetId >= 0 ? $simulationDatasetId : null,
-            window: eventWindow ? 'event-result' : 'viewer-time',
+            window: base.kind === 'event' ? 'event-result' : base.kind === 'pass' ? 'pass-search' : 'viewer-time',
             windowDetail: proposedWindow.detail,
           },
           window: {
-            end: new Date(proposedWindow.endMs).toISOString(),
-            start: new Date(proposedWindow.startMs).toISOString(),
+            // Empty when the window is invalid; `problems` then blocks staging.
+            end: Number.isFinite(proposedWindow.endMs) ? new Date(proposedWindow.endMs).toISOString() : '',
+            start: Number.isFinite(proposedWindow.startMs) ? new Date(proposedWindow.startMs).toISOString() : '',
           },
         } satisfies CosmolabeProposal)
       : null;
-  $: problems = proposal && adapter ? adapter.targets.check(proposal) : [];
+  $: halfValid = typeof halfWindowMin === 'number' && halfWindowMin > 0;
+  $: problems = [
+    // The window is checked here (against the plan) unless it is already invalid; the adapter checks the rest.
+    ...(proposal && adapter
+      ? adapter.targets.check({ ...proposal, window: windowIssues.length ? null : proposal.window })
+      : []),
+    ...(halfValid || (base.kind !== 'cursor' && base.kind !== 'pass' && raw === base)
+      ? windowIssues
+      : ['Enter the window’s ± minutes (more than 0).']),
+    ...(adapter && !goalSpec ? [`This plan has no ${adapter.targets.goal} goal. Add it in Scheduling.`] : []),
+  ];
   $: request = $latestSchedulingRequest;
+  $: specRevision = $schedulingPlanSpecification?.revision;
 
   async function open(model: string | undefined) {
     await close();
@@ -172,7 +232,13 @@
     viewer = null;
     status = 'idle';
     probe = null;
-    eventWindow = null;
+    editing = null;
+    base = { kind: 'cursor' };
+    fitted = null;
+    lastEvent = '';
+    search = null;
+    viewerActivity = null;
+    pushedActivities = [];
     targetLayer = null;
     targetFeatures = [];
     await v?.dispose();
@@ -193,26 +259,54 @@
         reveal(ms);
       }),
       c.on('activitySelect', ({ id }) => {
+        const was = viewerActivity;
+        viewerActivity = id;
+        if (id === null) {
+          // The viewer let go of PlanDev's selected activity (the operator cleared it, or its record went).
+          if (was !== null && was === wantedActivity) {
+            selectActivity(null, null, false);
+          }
+          return;
+        }
         const spanId = $plan ? spanIdOf(id, $plan.id, $simulationDatasetId) : null;
         // Only PlanDev's own activities select in PlanDev; anything else in the scene stays a scene selection.
-        if (spanId !== null && spanId !== $selectedSpanId && $spansMap?.[spanId]) {
+        if (spanId !== null && spanId !== selectedSpan && $spansMap?.[spanId]) {
           selectActivity(null, spanId, false);
         }
       }),
       c.on('probe', () => {
         probe = c.getProbePoint?.() ?? null;
+        if (probe) {
+          editing = null; // a new pin starts a new proposal
+        }
       }),
-      c.on('events', () => (eventWindow = selectedEventWindow(v, cl))),
+      c.on('events', () => {
+        const event = selectedEventWindow(v, cl);
+        const key = event ? `${event.detail}/${event.startMs}/${event.endMs}` : '';
+        // A newly selected Event Finder result becomes the window; one that stays selected does not override a
+        // later choice (a pass, the cursor).
+        if (key !== lastEvent) {
+          lastEvent = key;
+          if (event) {
+            chooseWindow({ ...event, kind: 'event' });
+          } else if (base.kind === 'event') {
+            chooseWindow({ kind: 'cursor' });
+          }
+        }
+      }),
     );
   }
 
   /** The Event Finder result selected in the viewer, as a window: exploratory, from the viewer's own kernels. */
   function selectedEventWindow(v: CosmolabeViewer, cl: CosmolabeModule) {
     const ref = v.control.getEventVisualization?.().selected;
+    if (!ref || ref.query.startsWith('activity:')) {
+      return null; // a selected activity is not an event search result
+    }
     let event = null;
     try {
       // Result pages are bounded; walk them for the selected id.
-      for (let offset = 0; ref && !event; offset += 100) {
+      for (let offset = 0; !event; offset += 100) {
         const page = v.control.listEventResults?.(ref.query, { limit: 100, offset });
         if (!page?.items.length) {
           break;
@@ -227,12 +321,33 @@
     }
     const ms = (et: number) => cl.etToDate(et).getTime();
     const [s, e] = event.temporality === 'interval' ? [ms(event.start), ms(event.end)] : [ms(event.et), ms(event.et)];
-    const pad = e - s < 60_000 ? halfWindowMin * 60_000 : 0;
-    return {
-      detail: `Event Finder: ${event.label}${pad ? ` ± ${halfWindowMin} min` : ''}`,
-      endMs: e + pad,
-      startMs: s - pad,
-    };
+    return { detail: `Event Finder result “${event.label}”`, endMs: e, startMs: s };
+  }
+
+  function rawWindow(b: WindowBase, cursor: number, half: number) {
+    // An emptied input binds null: no window rather than a zero-length one.
+    const ok = typeof half === 'number' && half > 0;
+    const pad = (ok ? half : NaN) * 60_000;
+    const pm = `± ${ok ? half : '?'} min`;
+    if (b.kind === 'event' || b.kind === 'staged') {
+      // An instant event gets the ± padding; an interval is used as found.
+      return b.endMs - b.startMs < 60_000
+        ? { detail: `${b.detail} ${pm}`, endMs: b.endMs + pad, startMs: b.startMs - pad }
+        : b;
+    }
+    const at = b.kind === 'pass' ? b.ms : cursor;
+    const what = b.kind === 'pass' ? `sampled pass at ${fmt(at).slice(11)}` : 'time cursor';
+    return { detail: `${what} ${pm}`, endMs: at + pad, startMs: at - pad };
+  }
+
+  function fit() {
+    const f = fitToPlan(proposedWindow, planBounds);
+    fitted = f && { ...f, from: rawKey };
+  }
+
+  function chooseWindow(b: WindowBase) {
+    base = b;
+    fitted = null;
   }
 
   /** Whether the scene has the vehicle's position at its current time (the viewer's kernels; exploratory). */
@@ -241,8 +356,8 @@
     vehicleState = !a
       ? ''
       : a.available
-        ? 'position available'
-        : `no position (${a.message ?? a.reason ?? 'unavailable'})`;
+        ? ''
+        : `${adapter?.vehicle} position unavailable here: ${a.message ?? a.reason}`;
   }
 
   function pushTime(ms: number) {
@@ -258,45 +373,47 @@
     if (!viewer || !adapter || !$plan) {
       return;
     }
-    if (!list || datasetId < 0) {
-      viewer.activities.remove(OWNER);
-      return;
-    }
-    viewer.activities.replace(
-      OWNER,
-      spansToActivities(list, {
-        body: adapter.body,
-        datasetId,
-        planId: $plan.id,
-        planName: $plan.name,
-        vehicle: adapter.vehicle,
-      }),
-    );
+    pushedActivities =
+      list && datasetId >= 0
+        ? spansToActivities(list, {
+            body: adapter.body,
+            datasetId,
+            planId: $plan.id,
+            planName: $plan.name,
+            vehicle: adapter.vehicle,
+          })
+        : [];
+    viewer.activities.replace(OWNER, pushedActivities);
   }
 
-  let lastSelected: number | null = null;
-  function pushSelection(spanId: number | null) {
-    if (!viewer || !$plan || spanId === lastSelected) {
+  function pushSelection(want: string | null) {
+    if (!viewer) {
       return;
     }
-    lastSelected = spanId;
-    const id = spanId !== null ? activityId($plan.id, $simulationDatasetId, spanId) : null;
-    if (id === null || viewer.control.getSelectedActivity?.()?.id === id) {
-      return;
+    const action = selectionAction(want, viewer.control.getSelectedActivity?.()?.id);
+    if (action?.kind === 'clear') {
+      // ponytail: the host API has no "deselect activity"; Cosmolabe drops the selection of an activity whose
+      // record goes away, so the record is removed and restored. Scene object selection is untouched.
+      const id = viewer.control.getSelectedActivity?.()?.id;
+      viewer.activities.replace(
+        OWNER,
+        pushedActivities.filter(a => a.id !== id),
+      );
+      viewer.activities.replace(OWNER, pushedActivities);
+    } else if (action?.kind === 'select' && viewer.control.selectActivity?.(action.id)) {
+      // PlanDev's cursor goes to the activity, and the scene with it; the camera stays where the operator left it.
+      const span = selectedSpan !== null ? $spansMap?.[selectedSpan] : null;
+      if (span) {
+        moveTime(span.startMs);
+      }
     }
-    viewer.control.selectActivity?.(id);
-    // The vehicle is selected (highlighted) too; the camera stays where the operator left it.
-    if (adapter) {
-      viewer.control.select(adapter.vehicle);
-    }
-    // PlanDev's cursor goes to the activity, and the scene with it.
-    const span = $spansMap?.[spanId as number];
-    if (span) {
-      timeCursorMs.set(span.startMs);
-      // Set from inside a reactive statement, the store change does not re-run `pushTime`'s statement.
-      pushTime(span.startMs);
-      reveal(span.startMs);
-    }
+  }
+
+  function moveTime(ms: number) {
+    timeCursorMs.set(ms);
+    // Set from inside a reactive statement, the store change does not re-run `pushTime`'s statement.
+    pushTime(ms);
+    reveal(ms);
   }
 
   /** Targets in the goal's arguments, drawn in the scene as read-only context. */
@@ -341,8 +458,65 @@
     }
   }
 
+  /** Sampled closest passes of the vehicle's sub-point over the pinned location, from the scene's own geometry. */
+  async function findPassesHere() {
+    const c = viewer?.control;
+    if (!c || !lib || !adapter || !location || !proposal) {
+      return;
+    }
+    const range = { endMs: Date.parse(`${searchTo}Z`), startMs: Date.parse(`${searchFrom}Z`) };
+    if (!(range.endMs > range.startMs)) {
+      searchError = 'The search range is empty or not a valid time range.';
+      return;
+    }
+    const [cl, a, at, frame] = [lib, adapter, locationKey, proposal.frame];
+    let unavailable = '';
+    searching = true;
+    searchError = '';
+    try {
+      const result = await findPasses(
+        ms => {
+          const state = c.getObjectState?.(a.vehicle, {
+            center: a.body,
+            frame,
+            time: { et: cl.etFromCalendarString(new Date(ms).toISOString()), kind: 'et' },
+          });
+          if (!state?.position) {
+            const why = state?.positionAvailability;
+            unavailable ||= why?.message ?? why?.reason ?? 'no position';
+            return null;
+          }
+          return state.position;
+        },
+        location,
+        a.targets.meanRadiusKm,
+        range,
+      );
+      search = { ...result, at, range, unavailable };
+    } catch (e) {
+      searchError = `Search failed: ${(e as Error).message ?? e}`;
+    } finally {
+      searching = false;
+    }
+  }
+
+  function choosePass(ms: number) {
+    chooseWindow({ kind: 'pass', ms });
+    moveTime(ms);
+  }
+
+  function lookAtPin() {
+    if (location) {
+      viewer?.control.gotoCoordinates(location.body, location.latDeg, location.lonDeg, {
+        animate: true,
+        latitude: 'planetocentric',
+        longitude: 'east',
+      });
+    }
+  }
+
   async function stage() {
-    if (!adapter || !goalSpec || !proposal || !$plan || !goalSpec.goal_metadata) {
+    if (!adapter || !goalSpec || !proposal || !$plan || !goalSpec.goal_metadata || problems.length) {
       return;
     }
     staging = true;
@@ -350,19 +524,46 @@
       const schema = goalSpec.goal_metadata.versions[0]?.parameter_schema;
       await effects.updateSchedulingGoalPlanSpecification(
         $plan,
-        { ...goalSpec, arguments: adapter.targets.stage(goalSpec.arguments, proposal) },
+        {
+          ...goalSpec,
+          arguments: adapter.targets.stage(
+            editing ? adapter.targets.remove(goalSpec.arguments, editing.id) : goalSpec.arguments,
+            proposal,
+          ),
+        },
         schema as never,
         [],
         user,
       );
       probe = null;
+      editing = null;
+      search = null;
+      chooseWindow({ kind: 'cursor' });
       viewer?.control.clearProbePoint?.();
     } finally {
       staging = false;
     }
   }
 
+  function edit(target: (typeof staged)[number]) {
+    editing = target;
+    search = null;
+    chooseWindow(
+      target.window
+        ? {
+            detail: 'its staged window',
+            endMs: Date.parse(target.window.end),
+            kind: 'staged',
+            startMs: Date.parse(target.window.start),
+          }
+        : { kind: 'cursor' },
+    );
+  }
+
   async function unstage(id: string) {
+    if (editing?.id === id) {
+      editing = null;
+    }
     if (adapter && goalSpec && $plan && goalSpec.goal_metadata) {
       await effects.updateSchedulingGoalPlanSpecification(
         $plan,
@@ -374,22 +575,41 @@
     }
   }
 
-  /** What PlanDev decided about a staged target, from the plan and the latest scheduling run only. */
-  function outcome(id: string, directives: typeof $activityDirectivesMap, req: typeof request) {
-    const name = adapter?.targets.directiveName(id);
-    const created = Object.values(directives ?? {}).find(d => d.name === name) ?? null;
-    if (created) {
-      return { created, rejected: false, text: `planned: ${created.type}` };
-    }
-    const reason = (req?.reason as { message?: string } | null)?.message ?? '';
-    if (req?.status === 'failed' && reason.includes(`target ${id} `)) {
-      return { created: null, rejected: true, text: `rejected: ${reason.replace(`target ${id} `, '')}` };
-    }
-    return { created: null, rejected: false, text: 'staged: run scheduling to evaluate' };
+  /** A staged target's standing in PlanDev; see `targetOutcome` for what that can and cannot say. */
+  // Everything it reads is a parameter, so the template re-runs it when any of them changes.
+  function outcome(
+    target: (typeof staged)[number],
+    directives: typeof $activityDirectivesMap,
+    run: typeof request,
+    revision: typeof specRevision,
+    bounds: Interval,
+    invocation: number | undefined,
+  ) {
+    const name = adapter?.targets.directiveName(target.id);
+    const observation =
+      Object.values(directives ?? {}).find(
+        d => d.name === name && d.source_scheduling_goal_invocation_id === invocation,
+      ) ?? null;
+    const invalid = target.window
+      ? windowProblems({ endMs: Date.parse(target.window.end), startMs: Date.parse(target.window.start) }, bounds)
+      : [];
+    return {
+      invalid,
+      observation,
+      ...targetOutcome(target.id, { hasObservation: observation !== null, request: run, specRevision: revision }),
+    };
   }
 
   function fmt(ms: number) {
-    return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+    return Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 19).replace('T', ' ') : '—';
+  }
+
+  function isoInput(ms: number) {
+    return Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 19) : '';
+  }
+
+  function latLon(l: { latDeg: number; lonDeg: number }) {
+    return `${Math.abs(l.latDeg).toFixed(2)}°${l.latDeg >= 0 ? 'N' : 'S'} ${Math.abs(l.lonDeg).toFixed(2)}°${l.lonDeg >= 0 ? 'E' : 'W'}`;
   }
 
   onDestroy(() => {
@@ -413,75 +633,171 @@
       {/if}
       {#if ready && adapter}
         <div class="cosmolabe-proposal">
-          <div class="muted">
-            {adapter.vehicle} in the 3D view at the cursor:
-            <span class:warn={!vehicleState.startsWith('position')}>{vehicleState}</span> (scene kernels; exploratory, not
-            PlanDev's evaluation)
+          {#if vehicleState}<div class="warn">{vehicleState}</div>{/if}
+          <div class="step">
+            <b>Location</b>
+            {#if location}
+              <span>{editing ? `Editing ${editing.name}: ` : ''}{location.body} {latLon(location)}</span>
+              <span class="muted">planetocentric</span>
+              <button class="link" on:click={lookAtPin}>Show</button>
+              {#if editing}<button class="link" on:click={() => (editing = null)}>Cancel edit</button>{/if}
+            {:else}
+              <span class="muted">Pin a point on {adapter.targets.body} with the point probe in the 3D view.</span>
+            {/if}
           </div>
+
           {#if location}
-            <div>
-              <b>Location</b>
-              {location.body}
-              lat {location.latDeg.toFixed(4)}°, lon {location.lonDeg.toFixed(4)}°
-              <span class="muted">(planetocentric, east-positive, {proposal?.frame}; pinned in the 3D view)</span>
+            <div class="step cosmolabe-search">
+              <b>Find a pass</b>
+              <input
+                class="st-input"
+                type="datetime-local"
+                step="1"
+                bind:value={searchFrom}
+                aria-label="Search from (UTC)"
+              />
+              –
+              <input
+                class="st-input"
+                type="datetime-local"
+                step="1"
+                bind:value={searchTo}
+                aria-label="Search to (UTC)"
+              />
+              <span class="muted">UTC</span>
+              <button class="st-button secondary" disabled={searching} on:click={findPassesHere}>
+                {searching ? 'Searching…' : `Find ${adapter.vehicle} passes`}
+              </button>
             </div>
-            <div>
+            {#if searchError}<div class="warn">{searchError}</div>{/if}
+            {#if search}
+              <div class="cosmolabe-passes">
+                {#each search.passes as pass (pass.ms)}
+                  <button
+                    class="st-button secondary"
+                    class:chosen={base.kind === 'pass' && base.ms === pass.ms}
+                    on:click={() => choosePass(pass.ms)}
+                  >
+                    {fmt(pass.ms)} · ≈{pass.km.toFixed(0)} km
+                  </button>
+                {:else}
+                  <span class="warn">
+                    {search.missing === search.samples
+                      ? `No ${adapter.vehicle} position in the 3D scene for this range (${search.unavailable}).`
+                      : `No ${adapter.vehicle} pass found in this range.`}
+                  </span>
+                {/each}
+              </div>
+              <div class="muted">
+                Exploratory: closest {adapter.vehicle} ground-track distance, sampled every {search.stepMs / 1000} s from
+                the 3D scene's kernels. Not instrument coverage; PlanDev re-checks when scheduling.
+                {#if search.missing && search.missing < search.samples}
+                  <span class="warn">
+                    No position for {Math.round((100 * search.missing) / search.samples)}% of the range ({search.unavailable}).
+                  </span>
+                {/if}
+              </div>
+            {/if}
+
+            <div class="step">
               <b>Window</b>
-              {fmt(proposedWindow.startMs)} – {fmt(proposedWindow.endMs)} UTC
-              <span class="muted">({proposedWindow.detail})</span>
-              {#if !eventWindow}
-                ±<input class="st-input w-12" type="number" min="1" max="720" bind:value={halfWindowMin} /> min
+              <span>{fmt(proposedWindow.startMs)} – {fmt(proposedWindow.endMs).slice(11)} UTC</span>
+              <span class="muted">{proposedWindow.detail}</span>
+              {#if base.kind !== 'event' || base.endMs - base.startMs < 60_000}
+                ±<input
+                  class="st-input w-12"
+                  type="number"
+                  min="1"
+                  max="720"
+                  bind:value={halfWindowMin}
+                  aria-label="Half window (minutes)"
+                />
+                min
               {/if}
-              {#if windowProblem}<span class="warn">{windowProblem}</span>{/if}
+              {#if base.kind !== 'cursor'}
+                <button class="link" on:click={() => chooseWindow({ kind: 'cursor' })}>Use cursor</button>
+              {/if}
             </div>
+            {#if base.kind === 'event'}
+              <div class="muted">An Event Finder result is not specific to this location.</div>
+            {/if}
             {#each problems as problem}<div class="warn">{problem}</div>{/each}
-            <button
-              class="st-button"
-              disabled={!goalSpec || problems.length > 0 || staging}
-              title={goalSpec ? '' : `This plan has no ${adapter.targets.goal} goal`}
-              on:click={stage}
-            >
-              Stage as {adapter.targets.goal} target
-            </button>
-            <span class="muted">A proposal only: PlanDev evaluates it when scheduling runs.</span>
-          {:else}
-            <span class="muted">
-              Pin a point on {adapter.targets.body} in the 3D view (point probe) to propose an observation target{eventWindow
-                ? ` for ${eventWindow.detail}`
-                : ''}.
-            </span>
+            <div class="step">
+              {#if canFit}
+                <button class="st-button secondary" on:click={fit}> Fit window to plan </button>
+              {/if}
+              <button class="st-button" disabled={problems.length > 0 || staging} on:click={stage}>
+                {editing ? 'Update in PlanDev' : 'Propose to PlanDev'}
+              </button>
+              <span class="muted">Not yet validated: PlanDev evaluates it when scheduling runs.</span>
+            </div>
           {/if}
 
           {#if staged.length}
             <div class="cosmolabe-staged">
-              <b>{adapter.targets.goal} targets</b>
-              <button class="st-button secondary" on:click={() => effects.schedule(false, $plan, user)}>
-                Run scheduling
-              </button>
-              {#if request}
-                <span class="muted">latest run #{request.analysis_id}: {request.status}</span>
-              {/if}
+              <div class="step">
+                <b>In PlanDev</b>
+                <button class="st-button secondary" on:click={() => effects.schedule(false, $plan, user)}>
+                  Run scheduling
+                </button>
+                {#if request}
+                  <span class="muted">latest run #{request.analysis_id}: {request.status}</span>
+                {/if}
+              </div>
               {#each staged as target (target.id)}
-                {@const result = outcome(target.id, $activityDirectivesMap, request)}
-                <div class="row" class:rejected={result.rejected}>
-                  <span>{target.name}</span>
-                  {#if target.window}
-                    <span class="muted">{target.window.start.slice(0, 16)} – {target.window.end.slice(11, 16)}</span>
-                  {/if}
-                  {#if result.created}
-                    <button class="link" on:click={() => selectActivity(result.created.id, null, false)}>
-                      {result.text} at {fmt(result.created.start_time_ms)} UTC
+                {@const result = outcome(
+                  target,
+                  $activityDirectivesMap,
+                  request,
+                  specRevision,
+                  planBounds,
+                  goalSpec?.goal_invocation_id,
+                )}
+                <div class="target" data-state={result.state}>
+                  <div class="step">
+                    <span>{target.name}</span>
+                    {#if target.window}
+                      <span class="muted">{target.window.start.slice(0, 16)} – {target.window.end.slice(11, 16)}</span>
+                    {/if}
+                    <button class="link" on:click={() => edit(target)}>Edit</button>
+                    <button
+                      class="link"
+                      title="Remove from PlanDev's scheduling goal"
+                      on:click={() => unstage(target.id)}
+                    >
+                      Remove
                     </button>
-                  {:else}
-                    <span>{result.text}</span>
-                  {/if}
-                  <button class="link" title="Remove from the goal's arguments" on:click={() => unstage(target.id)}>
-                    ×
-                  </button>
+                  </div>
+                  {#each result.invalid as problem}
+                    <div class="warn">{problem} PlanDev will reject it; remove it to continue.</div>
+                  {/each}
+                  <div class="state">
+                    {result.text}
+                    {#if result.observation}
+                      <button class="link" on:click={() => selectActivity(result.observation?.id ?? null, null, false)}>
+                        {result.state === 'planned' ? 'observation' : 'existing observation'} at {fmt(
+                          result.observation.start_time_ms ?? NaN,
+                        ).slice(11)} UTC
+                      </button>
+                    {/if}
+                  </div>
                 </div>
               {/each}
             </div>
           {/if}
+
+          <details class="muted">
+            <summary>Details</summary>
+            {#if location}
+              <div>
+                Location: planetocentric lat {location.latDeg.toFixed(4)}°, east lon {location.lonDeg.toFixed(4)}° in {proposal?.frame},
+                from the probe's body-fixed point.
+              </div>
+            {/if}
+            <div>Proposals are staged as targets of the plan's {adapter.targets.goal} scheduling goal.</div>
+            <div>{adapter.targets.conventions}.</div>
+            <div>Scene: {mission?.catalogUrl}</div>
+          </details>
         </div>
       {/if}
     </div>
@@ -519,19 +835,48 @@
     flex-direction: column;
     font-size: 12px;
     gap: 4px;
-    max-height: 40%;
+    max-height: 45%;
     overflow: auto;
     padding: 6px 8px;
   }
-  .cosmolabe-staged .row {
+  .step,
+  .cosmolabe-passes {
+    align-items: center;
     display: flex;
-    gap: 8px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .cosmolabe-search input[type='datetime-local'] {
+    width: 13.5em;
+  }
+  .cosmolabe-passes .chosen {
+    outline: 2px solid var(--st-primary-60, #2f6fde);
+  }
+  .cosmolabe-staged {
+    border-top: 1px solid var(--st-gray-20, #ddd);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 4px;
+  }
+  .target .state {
+    padding-left: 12px;
+  }
+  .target[data-state='planned'] .state {
+    color: var(--st-success-green, #1a7f37);
+  }
+  .target[data-state='rejected'] .state,
+  .target[data-state='run-failed'] .state {
+    color: var(--st-error-red, #b00020);
+  }
+  .target[data-state='changed'] .state,
+  .target[data-state='unknown'] .state {
+    color: var(--st-warning-orange, #9a6700);
   }
   .muted {
     color: var(--st-gray-60, #666);
   }
-  .warn,
-  .rejected {
+  .warn {
     color: var(--st-error-red, #b00020);
   }
   .link {
