@@ -5,6 +5,8 @@
 
   /** A telemetry channel or parameter read at the cursor, shown from the parcel's dictionaries. */
   export let kind: 'parameter' | 'telemetry';
+  /** Heading above the name; default: what reading it at the cursor means. */
+  export let label: string | null = null;
   export let name: string;
   export let phoenixContext: PhoenixContext;
 
@@ -34,15 +36,15 @@
 
 <div class="text-xs">
   <div class="border-b bg-muted px-4 py-2 font-medium">
-    <span class="text-muted-foreground">{kind === 'telemetry' ? 'Telemetry read' : 'Parameter read'}</span>
+    <span class="text-muted-foreground">{label ?? (kind === 'telemetry' ? 'Telemetry read' : 'Parameter read')}</span>
     <div class="break-all">{name}</div>
   </div>
   {#if description}
     <p class="px-4 py-2">{description}</p>
   {/if}
   <dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 px-4 py-2">
-    {#each rows.filter(([, value]) => value !== null && value !== undefined && value !== '') as [label, value]}
-      <dt class="text-muted-foreground">{label}</dt>
+    {#each rows.filter(([, value]) => value !== null && value !== undefined && value !== '') as [rowLabel, value]}
+      <dt class="text-muted-foreground">{rowLabel}</dt>
       <dd class="break-all">{value}</dd>
     {/each}
   </dl>

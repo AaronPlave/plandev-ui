@@ -2,7 +2,7 @@
 
 <script lang="ts">
   import { Button, DropdownMenu } from '@nasa-jpl/stellar-svelte';
-  import { Clapperboard, Download, EllipsisVertical, LoaderCircle } from 'lucide-svelte';
+  import { Clapperboard, Download, EllipsisVertical, FileDiff, LoaderCircle } from 'lucide-svelte';
   import { createEventDispatcher, tick } from 'svelte';
 
   import RotateCcwClock from '../../assets/rotate-ccw-clock.svg?component';
@@ -15,7 +15,7 @@
   import { isWithRevision } from '../../utilities/actions';
   import effects from '../../utilities/effects';
   import { downloadBlob } from '../../utilities/generic';
-  import { showWorkspaceRevisionPreviewModal } from '../../utilities/modal';
+  import { showWorkspaceFileComparisonModal, showWorkspaceRevisionPreviewModal } from '../../utilities/modal';
   import { permissionHandler } from '../../utilities/permissionHandler';
   import { CompoundError } from '../../utilities/requests';
   import { getShortISOForDate } from '../../utilities/time';
@@ -35,6 +35,7 @@
   import * as Sidebar from '../ui/Sidebar/index.js';
   import Tooltip from '../ui/Tooltip.svelte';
   import PanelHeader from './PanelHeader.svelte';
+  import WorkspaceFileHistory from './WorkspaceFileHistory.svelte';
 
   /** Actions that can run on the open file; only those whose primary parameter takes a revision are offered. */
   export let availableActions: ActionParameterPair[] = [];
@@ -216,6 +217,20 @@
     }
   }
 
+  /** Two versions of this file side by side; either side can then be any revision or the saved working copy. */
+  function onCompare(revision: WorkspaceFileRevision) {
+    if (filePath) {
+      showWorkspaceFileComparisonModal({
+        leftFilePath: filePath,
+        leftRevisionName: `${revision.name}`,
+        rightFilePath: filePath,
+        type: $activeDocument.type,
+        user: $user,
+        workspaceId: $workspaceId,
+      });
+    }
+  }
+
   async function onRestore(revision: WorkspaceFileRevision) {
     if (!filePath || !revisionList || isRestoring) {
       return;
@@ -390,6 +405,15 @@
                                 <DropdownMenu.Item
                                   class="flex items-center gap-2"
                                   size="sm"
+                                  aria-label={`Compare revision ${revisionDisplayName} with…`}
+                                  on:click={() => onCompare(revision)}
+                                >
+                                  <FileDiff size={14} class="shrink-0" />
+                                  Compare revision {revisionDisplayName} with…
+                                </DropdownMenu.Item>
+                                <DropdownMenu.Item
+                                  class="flex items-center gap-2"
+                                  size="sm"
                                   aria-label={`Download (...${extension})`}
                                   on:click={() => onDownloadRevision(revision, baseFilename)}
                                 >
@@ -506,6 +530,9 @@
                   <div class="text-muted-foreground">No revisions yet.</div>
                 {/if}
               </section>
+              {#if filePath}
+                <WorkspaceFileHistory {filePath} reloadKey={[$activeDocument.baseEtag, revisionList]} />
+              {/if}
             </div>
           {/if}
         </Sidebar.Menu>

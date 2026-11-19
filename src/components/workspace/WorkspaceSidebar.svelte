@@ -48,6 +48,8 @@
   export let currentBreadcrumbPath: string = '';
   export let isAllRunsSelected: boolean = false;
   export let isWorkspaceLoading: boolean = false;
+  /** Find in workspace text, kept while switching tabs. */
+  export let searchQuery: string = '';
   export let selectedActionId: number | null = null;
   export let selectedFilePath: string | null = null;
   export let user: User | null;
@@ -191,6 +193,7 @@
       </div>
     {:else if activeTab === 'search'}
       <WorkspaceSearchPanel
+        bind:query={searchQuery}
         folder={currentBreadcrumbPath}
         {user}
         workspaceId={workspace?.id ?? null}

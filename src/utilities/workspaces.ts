@@ -11,6 +11,7 @@ import type { DownloadMenuOption } from '../types/dropdown';
 import type {
   ActionParameterPair,
   Workspace,
+  WorkspaceFileHistoryEntry,
   WorkspaceFileRevisionDetail,
   WorkspaceFileRevisionList,
   WorkspaceInsertInput,
@@ -1051,6 +1052,20 @@ export const WorkspaceApi = {
   async deleteWorkspace(workspaceId: number, user: User | null): Promise<void> {
     return reqWorkspace(`${workspaceId}`, 'DELETE', null, user, undefined, false);
   },
+  /** The file's content as of one commit of its change history. */
+  async getFileAtCommit(workspaceId: number, filePath: string, commit: string, user: User | null): Promise<string> {
+    const { data } = await reqWorkspaceWithEtag<string>(
+      `${joinPath(['history', workspaceId, filePath])}?commit=${encodeURIComponent(commit)}`,
+      'GET',
+      null,
+      user,
+      undefined,
+      false,
+      {},
+      'versioning',
+    );
+    return data;
+  },
   async getFileContent(
     workspaceId: number,
     filePath: string,
@@ -1070,6 +1085,25 @@ export const WorkspaceApi = {
   },
   async getFileContentBlob(workspaceId: number, filePath: string, user: User | null): Promise<Blob | null> {
     return reqWorkspace<Blob>(joinPath([workspaceId, filePath]), 'GET', null, user, undefined, false, true);
+  },
+  /** The file's change history (newest first), as recorded by the workspace's Git history. */
+  async getFileHistory(
+    workspaceId: number,
+    filePath: string,
+    user: User | null,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceFileHistoryEntry[]> {
+    const { data } = await reqWorkspaceWithEtag<{ history: WorkspaceFileHistoryEntry[] }>(
+      `${joinPath(['history', workspaceId, filePath])}`,
+      'GET',
+      null,
+      user,
+      signal,
+      true,
+      {},
+      'versioning',
+    );
+    return data.history;
   },
   async getFileMetadata(
     workspaceId: number,

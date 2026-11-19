@@ -1,7 +1,7 @@
 <svelte:options immutable={true} />
 
 <script lang="ts">
-  import type { FswCommandArgument } from '@nasa-jpl/plandev-ampcs';
+  import type { EnumMap, FswCommandArgument } from '@nasa-jpl/plandev-ampcs';
   import {
     isFswCommandArgumentBoolean,
     isFswCommandArgumentEnum,
@@ -16,6 +16,7 @@
   import CommandStringArgDef from './CommandStringArgDef.svelte';
 
   export let commandArgumentDefinition: FswCommandArgument;
+  export let enumMap: EnumMap = {};
 </script>
 
 <div>
@@ -26,8 +27,8 @@
   {:else if isNumberArg(commandArgumentDefinition)}
     <CommandNumberArgDef argDef={commandArgumentDefinition} />
   {:else if isFswCommandArgumentEnum(commandArgumentDefinition)}
-    <CommandEnumArgDef argDef={commandArgumentDefinition} />
+    <CommandEnumArgDef argDef={commandArgumentDefinition} {enumMap} />
   {:else if isFswCommandArgumentRepeat(commandArgumentDefinition)}
-    <CommandRepeatArgDef argDef={commandArgumentDefinition} />
+    <CommandRepeatArgDef argDef={commandArgumentDefinition} {enumMap} />
   {/if}
 </div>

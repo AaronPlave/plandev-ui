@@ -1,15 +1,17 @@
 <svelte:options immutable={true} />
 
 <script lang="ts">
-  import type { FswCommandArgumentEnum } from '@nasa-jpl/plandev-ampcs';
+  import type { EnumMap, FswCommandArgumentEnum } from '@nasa-jpl/plandev-ampcs';
+  import { enumSymbols } from '../../../utilities/sequence-editor/mission-reference';
   import Collapse from '../../Collapse.svelte';
   import CommandArgUnit from './CommandArgUnit.svelte';
 
   export let argDef: FswCommandArgumentEnum;
+  export let enumMap: EnumMap = {};
 
   let enumValues: string = '';
 
-  $: enumValues = argDef.range?.join('\n') ?? '';
+  $: enumValues = enumSymbols(argDef, enumMap).join('\n');
 </script>
 
 <Collapse title={argDef.name}>

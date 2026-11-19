@@ -1201,6 +1201,17 @@ const gql = {
     }
   `,
 
+  GET_EXPANSION_SEQUENCE_SPAN_IDS: `#graphql
+    query GetExpansionSequenceSpanIds($seqId: String!, $simulationDatasetId: Int!) {
+      links: ${Queries.SEQUENCE_TO_SIMULATED_ACTIVITIES}(
+        where: { seq_id: { _eq: $seqId }, simulation_dataset_id: { _eq: $simulationDatasetId } }
+        order_by: { simulated_activity_id: asc }
+      ) {
+        simulated_activity_id
+      }
+    }
+  `,
+
   GET_EXTERNAL_EVENTS: `#graphql
     query GetExternalEvents(
       $sourceKey: String!,

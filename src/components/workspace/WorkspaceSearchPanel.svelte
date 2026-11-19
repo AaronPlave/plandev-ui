@@ -11,6 +11,8 @@
   import PanelHeader from './PanelHeader.svelte';
 
   export let folder: string = '';
+  /** The search text; a parent sets it to run a search (e.g. Find uses). */
+  export let query: string = '';
   export let user: User | null = null;
   export let workspaceId: number | null = null;
   export let workspaceTree: WorkspaceTreeNode | null | undefined = undefined;
@@ -21,7 +23,6 @@
   let error: string | null = null;
   let includeManaged: boolean = false;
   let inFolderOnly: boolean = false;
-  let query: string = '';
   let result: WorkspaceSearchResult | null = null;
   let root: HTMLDivElement;
   let searchedLength: number = 0;

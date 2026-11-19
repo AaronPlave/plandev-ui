@@ -52,7 +52,7 @@
       <Sidebar.MenuButton
         className="flex h-[48px] w-full items-center justify-center rounded-none shadow-none hover:bg-transparent"
         isActive={activeTab === WorkspaceRightPanelTab.DICTIONARY && panelOpen}
-        tooltipContent="Command Dictionary"
+        tooltipContent="Mission Reference"
         on:click={() => togglePanel(WorkspaceRightPanelTab.DICTIONARY)}
       >
         <BookA size={16} />

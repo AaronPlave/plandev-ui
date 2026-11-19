@@ -4,8 +4,11 @@
   import { Button } from '@nasa-jpl/stellar-svelte';
   import { Pencil } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
+  import { base } from '$app/paths';
   import { activityArgumentDefaultsMap } from '../../stores/activities';
+  import { plan } from '../../stores/plan';
   import { plugins } from '../../stores/plugins';
+  import { workspaces } from '../../stores/workspaces';
   import type { ActivityType } from '../../types/activity';
   import type { User } from '../../types/app';
   import type { ExpansionSequence } from '../../types/expansion';
@@ -14,7 +17,9 @@
   import type { Span, SpanUtilityMaps, SpansMap } from '../../types/simulation';
   import { getSpanRootParent } from '../../utilities/activities';
   import effects from '../../utilities/effects';
+  import { findGeneratedFiles, type GeneratedFile } from '../../utilities/generatedProvenance';
   import { getFormParameters } from '../../utilities/parameters';
+  import { getWorkspacesUrl } from '../../utilities/routes';
   import { formatDate } from '../../utilities/time';
   import { tooltip } from '../../utilities/tooltip';
   import Collapse from '../Collapse.svelte';
@@ -43,6 +48,8 @@
   let parameterErrorMap: Record<string, string[]> = {};
   let rootSpan: Span | null;
   let rootSpanHasChildren: boolean;
+  /** Workspace files generated from this activity, by their recorded provenance. */
+  let generatedFiles: GeneratedFile[] = [];
   let seqId: string | null;
   let spanDirectiveId: number | null = null;
   let startTime: string;
@@ -81,6 +88,10 @@
     parametersWithErrorsCount = Object.keys(parameterErrorMap).length;
   }
 
+  // ponytail: lists every workspace per selected span; cache per plan if workspaces get numerous.
+  $: if ($plan && $workspaces.length) {
+    loadGeneratedFiles($plan.id, span.span_id, simulationDatasetId);
+  }
   $: if (simulationDatasetId !== null) {
     effects.getExpansionSequenceId(span.span_id, simulationDatasetId, user).then(newSeqId => (seqId = newSeqId));
   }
@@ -108,6 +119,12 @@
     }
   }
 
+  async function loadGeneratedFiles(planId: number, spanId: number, datasetId: number) {
+    const files = await findGeneratedFiles($workspaces, planId, user);
+    generatedFiles = files.filter(
+      file => file.from.simulationDatasetId === datasetId && file.from.spanIds.includes(spanId),
+    );
+  }
   async function updateExpansionSequenceToActivity() {
     if (seqId === null) {
       await effects.deleteExpansionSequenceToActivity(simulationDatasetId, span.span_id, user);
@@ -291,6 +308,17 @@
           {/if}
         </select>
       </Input>
+      {#each generatedFiles as file (`${file.workspace.id}/${file.path}`)}
+        <Input layout="inline">
+          <span class="text-xs text-muted-foreground">Written to</span>
+          <a
+            class="truncate text-xs underline"
+            href={getWorkspacesUrl(base, file.workspace.id, file.path)}
+            title="Sequence {file.from.seqId}, sent to the workspace {new Date(file.from.writtenAt).toLocaleString()}"
+            >{file.workspace.name}: {file.path}</a
+          >
+        </Input>
+      {/each}
     </Collapse>
   </fieldset>
 </div>

@@ -4,6 +4,8 @@
   import { Checkbox, Label } from '@nasa-jpl/stellar-svelte';
   import type { WorkspaceRevisionName } from '../../types/workspace';
   import type { WorkspaceFileMetadata } from '../../types/workspace-tree-view';
+  import { getGeneratedFromPlanUrl, getGeneratedFrom } from '../../utilities/generatedProvenance';
+  import { getBuildProvenance } from '../../utilities/buildProvenance';
   import { permissionHandler } from '../../utilities/permissionHandler';
   import { getShortISOForDate } from '../../utilities/time';
   import { getRevisionDisplayName, getUserDisplayNameFromIdentity } from '../../utilities/workspaces';
@@ -17,6 +19,8 @@
   export let matchingRevisionName: WorkspaceRevisionName | null = null;
   export let onReadOnlyChange: ((readOnly: boolean) => void) | null = null;
 
+  $: generatedFrom = getGeneratedFrom(fileMetadata.user);
+  $: builtFrom = getBuildProvenance(fileMetadata.user)?.source ?? null;
   $: managedBy = typeof fileMetadata.user?.managedBy === 'string' ? fileMetadata.user.managedBy : null;
 </script>
 
@@ -45,6 +49,20 @@
       <span class="font-medium">Working Copy</span>
     {/if}
   </div>
+  {#if generatedFrom}
+    <a
+      class="font-medium underline"
+      href={getGeneratedFromPlanUrl(
+        generatedFrom,
+        generatedFrom.spanIds.length === 1 ? generatedFrom.spanIds[0] : null,
+      )}
+      title="Open the plan and simulation this sequence was generated from"
+      >Generated from plan {generatedFrom.planName}</a
+    >
+  {/if}
+  {#if builtFrom}
+    <span class="font-medium" title="Build output; see Metadata for its provenance">Built from {builtFrom}</span>
+  {/if}
   {#if managedBy}
     <Tooltip
       content="Maintained by {managedBy}, which may rewrite it. Hidden from the file list unless managed files are shown."

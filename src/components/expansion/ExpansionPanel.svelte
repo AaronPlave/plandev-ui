@@ -1,6 +1,7 @@
 <svelte:options immutable={true} />
 
 <script lang="ts">
+  import { base } from '$app/paths';
   import { Button, DropdownMenu } from '@nasa-jpl/stellar-svelte';
   import FilterIcon from '@nasa-jpl/stellar/icons/filter.svg?component';
   import PlayIcon from '@nasa-jpl/stellar/icons/play.svg?component';
@@ -12,16 +13,20 @@
   import { expandedTemplates } from '../../stores/sequence-template';
   import { sequenceFilters } from '../../stores/sequencing';
   import { simulationDatasetLatest, simulationDatasetsPlan } from '../../stores/simulation';
+  import { workspaces } from '../../stores/workspaces';
   import type { User } from '../../types/app';
   import type { ExpansionSequence, SequenceFilter } from '../../types/expansion';
   import type { ActivityLayerFilter } from '../../types/timeline';
   import type { ViewGridSection } from '../../types/view';
   import effects from '../../utilities/effects';
   import { getExpandedTemplateForSequence } from '../../utilities/expansion';
+  import { findGeneratedFiles, type GeneratedFile, type GeneratedFrom } from '../../utilities/generatedProvenance';
   import { downloadBlob } from '../../utilities/generic';
   import { showExpansionSequenceModal, showNewSequenceModal } from '../../utilities/modal';
   import { permissionHandler } from '../../utilities/permissionHandler';
   import { featurePermissions } from '../../utilities/permissions';
+  import { getWorkspacesUrl } from '../../utilities/routes';
+  import { showFailureToast } from '../../utilities/toast';
   import { tooltip } from '../../utilities/tooltip';
   import GridMenu from '../menus/GridMenu.svelte';
   import ModalFooter from '../modals/ModalFooter.svelte';
@@ -38,6 +43,9 @@
   const createPermissionSequenceFilterError: string = 'You do not have permission to create a sequence filter';
 
   let filterText: string;
+  /** Files sent to workspaces from this plan, from their recorded provenance. */
+  let generatedFiles: GeneratedFile[] = [];
+  let generatedFilesPlanId: number | null = null;
   let sequencesAndFilters: (ExpansionSequence | SequenceFilter)[] = [];
   let isExpansionDisabled: boolean = true;
   let expansionDisabledMessage: string = '';
@@ -56,6 +64,9 @@
   let hasCreatePermissionSequence: boolean = false;
   let hasCreatePermissionSequenceFilter: boolean = false;
 
+  $: if ($plan && $workspaces.length && generatedFilesPlanId !== $plan.id) {
+    loadGeneratedFiles($plan.id);
+  }
   $: if (user !== null && $plan !== null && $plan.model) {
     hasDeletePermissionSequence = featurePermissions.expansionSequences.canDelete(user, $plan);
     hasDeletePermissionSequenceFilter = featurePermissions.sequenceFilter.canDelete(user, $plan.model);
@@ -155,11 +166,37 @@
     }
   }
 
+  async function loadGeneratedFiles(planId: number) {
+    generatedFilesPlanId = planId;
+    generatedFiles = await findGeneratedFiles($workspaces, planId, user);
+  }
+
+  function filesFor(files: GeneratedFile[], sequence: ExpansionSequence): GeneratedFile[] {
+    return files.filter(
+      file => file.from.seqId === sequence.seq_id && file.from.simulationDatasetId === sequence.simulation_dataset_id,
+    );
+  }
+
   async function onSendExpandedSequenceToWorkspace(sequence: ExpansionSequence) {
     const expandedTemplate = getExpandedTemplateForSequence($expandedTemplates, sequence);
-    const expandedResult = expandedTemplate?.expanded_template ?? `No output found for sequence "${sequence.seq_id}"`;
+    if (!expandedTemplate || $plan === null) {
+      showFailureToast(`Expand "${sequence.seq_id}" before sending it to a workspace`);
+      return;
+    }
+    const generatedFrom: GeneratedFrom = {
+      expandedAt: expandedTemplate.created_at,
+      expandedTemplateId: expandedTemplate.id,
+      kind: 'sequence-template-expansion',
+      planId: $plan.id,
+      planName: $plan.name,
+      seqId: sequence.seq_id,
+      simulationDatasetId: sequence.simulation_dataset_id,
+      spanIds: await effects.getExpansionSequenceSpanIds(sequence.seq_id, sequence.simulation_dataset_id, user),
+      writtenAt: new Date().toISOString(),
+    };
     const newFileMetadata = {
       user: {
+        generatedFrom,
         model: {
           id: $plan?.model_id ?? -1,
           name: $plan?.model?.name ?? '',
@@ -174,7 +211,15 @@
         simulation_dataset_id: sequence.simulation_dataset_id,
       },
     };
-    await effects.sendSequenceToWorkspace(sequence, expandedResult, newFileMetadata, user);
+    const path = await effects.sendSequenceToWorkspace(
+      sequence,
+      expandedTemplate.expanded_template,
+      newFileMetadata,
+      user,
+    );
+    if (path) {
+      loadGeneratedFiles($plan.id);
+    }
   }
 
   function onShowExpandedSequence(sequence: ExpansionSequence) {
@@ -393,6 +438,14 @@
               </div>
             </span>
           </ListItem>
+          {#each filesFor(generatedFiles, sequenceOrFilter) as file (`${file.workspace.id}/${file.path}`)}
+            <a
+              class="block truncate px-8 pb-1 text-xs text-muted-foreground hover:underline"
+              href={getWorkspacesUrl(base, file.workspace.id, file.path)}
+              title="Sent to workspace {file.workspace.name} on {new Date(file.from.writtenAt).toLocaleString()}"
+              >→ {file.workspace.name}: {file.path}</a
+            >
+          {/each}
         {:else}
           <ListItem>
             <span slot="prefix" class="overflow-hidden text-ellipsis whitespace-nowrap align-middle">

@@ -6,7 +6,7 @@
   import { createEventDispatcher, onMount } from 'svelte';
   import { WorkspaceContentType } from '../../enums/workspace';
   import type { User } from '../../types/app';
-  import type { Side, SideState, WorkspaceFileRevision } from '../../types/workspace';
+  import type { Side, SideState, WorkspaceFileHistoryEntry, WorkspaceFileRevision } from '../../types/workspace';
   import { downloadBlob } from '../../utilities/generic';
   import {
     getDownloadOptionsForFile,
@@ -21,11 +21,22 @@
   import ModalContent from './ModalContent.svelte';
   import ModalHeader from './ModalHeader.svelte';
 
+  /** Commits of the file's change history to offer on both sides (same-file comparisons). */
+  export let history: WorkspaceFileHistoryEntry[] = [];
+  /** A history commit to show first on each side. */
+  export let leftCommit: string | null = null;
   export let leftFilePath: string;
+  /** The revision to show first on each side; the working copy when absent. */
+  export let leftRevisionName: string | null = null;
+  export let rightCommit: string | null = null;
   export let rightFilePath: string;
+  export let rightRevisionName: string | null = null;
   export let type: WorkspaceContentType | null = null;
   export let user: User | null = null;
   export let workspaceId: number;
+
+  /** A side here can also be a commit from the file's change history. */
+  type CompareSide = Side | { entry: WorkspaceFileHistoryEntry; kind: 'commit' };
 
   const dispatch = createEventDispatcher<{ close: void }>();
   // Runtime/derived fields: not part of a revision, so not a difference.
@@ -47,7 +58,7 @@
   let leftFilename: string;
   let leftLabel: string;
   let leftRevisions: WorkspaceFileRevision[] = [];
-  let leftSide: Side = { kind: 'workingCopy' };
+  let leftSide: CompareSide = { kind: 'workingCopy' };
   let leftState: SideState = { ...emptySideState };
   let loadError: boolean;
   let metadataDiffers: boolean;
@@ -55,7 +66,7 @@
   let rightFilename: string;
   let rightLabel: string;
   let rightRevisions: WorkspaceFileRevision[] = [];
-  let rightSide: Side = { kind: 'workingCopy' };
+  let rightSide: CompareSide = { kind: 'workingCopy' };
   let rightState: SideState = { ...emptySideState };
 
   $: ({ filename: leftFilename } = separateFilenameFromPath(leftFilePath));
@@ -63,7 +74,11 @@
   $: isLoading = leftState.loading || rightState.loading;
   $: loadError = leftState.error || rightState.error;
   $: metadataDiffers =
-    !isLoading && !loadError && canonical(leftState.metadata) !== canonical(rightState.metadata ?? {});
+    !isLoading &&
+    !loadError &&
+    leftSide.kind !== 'commit' &&
+    rightSide.kind !== 'commit' &&
+    canonical(leftState.metadata) !== canonical(rightState.metadata ?? {});
   $: leftLabel = sideLabel(leftFilename, leftSide);
   $: rightLabel = sideLabel(rightFilename, rightSide);
   $: leftDownloadOptions = getDownloadOptionsForFile(
@@ -77,19 +92,29 @@
     rightSide.kind === 'revision' ? rightSide.revision.name : null,
   );
 
-  function sideLabel(filename: string, side: Side): string {
+  function sideLabel(filename: string, side: CompareSide): string {
+    if (side.kind === 'commit') {
+      return `${filename} (saved ${formatDate(side.entry.at)})`;
+    }
     return side.kind === 'workingCopy'
       ? `${filename} (Working copy)`
       : getVersionedFileName(filename, side.revision.name);
   }
 
-  function sideKey(side: Side): string {
+  function sideKey(side: CompareSide): string {
+    if (side.kind === 'commit') {
+      return `commit:${side.entry.commit}`;
+    }
     return side.kind === 'workingCopy' ? 'workingCopy' : `${side.revision.name}`;
   }
 
-  function sideFromKey(key: string, revisions: WorkspaceFileRevision[]): Side {
+  function sideFromKey(key: string, revisions: WorkspaceFileRevision[]): CompareSide {
     if (key === 'workingCopy') {
       return { kind: 'workingCopy' };
+    }
+    const entry = history.find(e => `commit:${e.commit}` === key);
+    if (entry) {
+      return { entry, kind: 'commit' };
     }
     const found = revisions.find(r => `${r.name}` === key);
     return found ? { kind: 'revision', revision: found } : { kind: 'workingCopy' };
@@ -104,8 +129,20 @@
     }
   }
 
-  async function loadSide(filePath: string, side: Side): Promise<SideState> {
+  async function loadSide(filePath: string, side: CompareSide): Promise<SideState> {
     try {
+      if (side.kind === 'commit') {
+        return {
+          content: await WorkspaceApi.getFileAtCommit(workspaceId, filePath, side.entry.commit, user),
+          error: false,
+          lastEditedAt: side.entry.at,
+          lastEditedBy: side.entry.author,
+          loading: false,
+          message: side.entry.message,
+          metadata: null,
+          pathAtRevision: filePath,
+        };
+      }
       if (side.kind === 'workingCopy') {
         const [{ content }, metadata] = await Promise.all([
           WorkspaceApi.getFileContent(workspaceId, filePath, user),
@@ -151,13 +188,13 @@
     }
   }
 
-  async function selectLeft(side: Side) {
+  async function selectLeft(side: CompareSide) {
     leftSide = side;
     leftState = { ...emptySideState };
     leftState = await loadSide(leftFilePath, side);
   }
 
-  async function selectRight(side: Side) {
+  async function selectRight(side: CompareSide) {
     rightSide = side;
     rightState = { ...emptySideState };
     rightState = await loadSide(rightFilePath, side);
@@ -202,13 +239,21 @@
       loadRevisionsFor(leftFilePath),
       loadRevisionsFor(rightFilePath),
     ]);
-    selectLeft(leftSide);
-    selectRight(rightSide);
+    const initial = (commit: string | null, revisionName: string | null, revisions: WorkspaceFileRevision[]) =>
+      commit
+        ? sideFromKey(`commit:${commit}`, revisions)
+        : revisionName
+          ? sideFromKey(revisionName, revisions)
+          : ({ kind: 'workingCopy' } as const);
+    selectLeft(initial(leftCommit, leftRevisionName, leftRevisions));
+    selectRight(initial(rightCommit, rightRevisionName, rightRevisions));
   });
 </script>
 
 <Modal height="min(680px, 85vh)" width="min(1200px, 92vw)" on:close={close}>
-  <ModalHeader on:close={close}>Compare Files</ModalHeader>
+  <ModalHeader on:close={close}
+    >{leftFilePath === rightFilePath ? `Compare versions of ${leftFilename}` : 'Compare Files'}</ModalHeader
+  >
   <ModalContent style="display: flex; flex-direction: column; gap: 8px; overflow: hidden;">
     <div class="st-typography-body flex-none text-muted-foreground">
       {#if !isLoading && !loadError}
@@ -255,12 +300,23 @@
                 value={sideKey(leftSide)}
                 on:change={e => selectLeft(sideFromKey(e.currentTarget.value, leftRevisions))}
               >
-                <option value="workingCopy">{leftLabel}</option>
+                <option value="workingCopy">{leftFilename} (Working copy)</option>
                 {#each leftRevisions as rev (rev.name)}
                   <option value={`${rev.name}`}
                     >Revision {getRevisionDisplayName(rev.name)} · {formatDate(rev.createdAt)}</option
                   >
                 {/each}
+                {#if history.length}
+                  <optgroup label="Change history">
+                    {#each history.filter(e => e.contentChanged) as entry (entry.commit)}
+                      <option value={`commit:${entry.commit}`}
+                        >Saved {formatDate(entry.at)} · {entry.author}{entry.revisions.length
+                          ? ` · Revision ${entry.revisions.map(getRevisionDisplayName).join(', ')}`
+                          : ''}</option
+                      >
+                    {/each}
+                  </optgroup>
+                {/if}
               </select>
               <DownloadMenu
                 align="start"
@@ -280,12 +336,23 @@
                 value={sideKey(rightSide)}
                 on:change={e => selectRight(sideFromKey(e.currentTarget.value, rightRevisions))}
               >
-                <option value="workingCopy">{rightLabel}</option>
+                <option value="workingCopy">{rightFilename} (Working copy)</option>
                 {#each rightRevisions as rev (rev.name)}
                   <option value={`${rev.name}`}
                     >Revision {getRevisionDisplayName(rev.name)} · {formatDate(rev.createdAt)}</option
                   >
                 {/each}
+                {#if history.length}
+                  <optgroup label="Change history">
+                    {#each history.filter(e => e.contentChanged) as entry (entry.commit)}
+                      <option value={`commit:${entry.commit}`}
+                        >Saved {formatDate(entry.at)} · {entry.author}{entry.revisions.length
+                          ? ` · Revision ${entry.revisions.map(getRevisionDisplayName).join(', ')}`
+                          : ''}</option
+                      >
+                    {/each}
+                  </optgroup>
+                {/if}
               </select>
               <DownloadMenu
                 align="start"

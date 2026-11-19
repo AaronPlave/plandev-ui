@@ -4460,6 +4460,21 @@ const effects = {
     }
   },
 
+  /** The simulated activities (spans) linked to an expansion sequence, the ones its expansion covers. */
+  async getExpansionSequenceSpanIds(seqId: string, simulationDatasetId: number, user: User | null): Promise<number[]> {
+    try {
+      const { links } = await reqHasura<{ simulated_activity_id: number }[]>(
+        gql.GET_EXPANSION_SEQUENCE_SPAN_IDS,
+        { seqId, simulationDatasetId },
+        user,
+      );
+      return (links ?? []).map(link => link.simulated_activity_id);
+    } catch (e) {
+      catchError('log', 'Failed to retrieve the activities of an expansion sequence', e as Error);
+      return [];
+    }
+  },
+
   async getExternalEventTypes(plan_id: number, user: User | null): Promise<ExternalEventType[]> {
     try {
       const sourceData = await reqHasura<
@@ -7225,6 +7240,7 @@ const effects = {
         await WorkspaceApi.setFileMetadata(workspaceId, newFilePath, metadata, user);
 
         showSuccessToast('Workspace File Created Successfully');
+        return newFilePath;
       } else {
         throw new Error('Workspace File Creation Failed');
       }

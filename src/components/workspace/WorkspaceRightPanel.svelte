@@ -21,6 +21,7 @@
   import CommandDictionaryComponent from '../sequencing/CommandPanel/CommandDictionary.svelte';
   import DictionaryItemDetails from '../sequencing/CommandPanel/DictionaryItemDetails.svelte';
   import SelectedCommand from '../sequencing/CommandPanel/SelectedCommand.svelte';
+  import SequenceOutline from '../sequencing/SequenceOutline.svelte';
   import Panel from '../ui/Panel.svelte';
   import SectionTitle from '../ui/SectionTitle.svelte';
   import * as Sidebar from '../ui/Sidebar/index.js';
@@ -189,6 +190,7 @@
               on:selectCommandDefinition={onSelectCommandDefinition}
             />
           {/if}
+          <SequenceOutline {commandInfoMapper} {editorSequenceView} {phoenixContext} tree={currentTree ?? null} />
         </Sidebar.Content>
       </div>
     {:else}
@@ -212,13 +214,20 @@
       <div class="grid h-full grid-rows-[min-content_auto]">
         <Sidebar.Header className="p-0">
           <PanelHeader>
-            <SectionTitle>Command Dictionary</SectionTitle>
+            <SectionTitle>Mission Reference</SectionTitle>
           </PanelHeader>
         </Sidebar.Header>
         <Sidebar.Content className="h-full overflow-auto">
           <CommandDictionaryComponent
             {commandDictionary}
+            {commandInfoMapper}
+            {editorSequenceView}
+            enableComparison
+            enableFindUses
+            {phoenixContext}
+            readOnly={!hasEditPermission || !!fileMetadata?.readOnly}
             {selectedCommandDefinition}
+            on:findUses
             on:selectCommandDefinition={onSelectCommandDefinition}
           />
         </Sidebar.Content>
@@ -226,15 +235,24 @@
     {:else}
       <Panel overflowYBody="hidden" padBody>
         <svelte:fragment slot="header">
-          <SectionTitle><span class="p-2">Command Dictionary</span></SectionTitle>
+          <SectionTitle><span class="p-2">Mission Reference</span></SectionTitle>
         </svelte:fragment>
         <svelte:fragment slot="body">
-          <div class="p-2 text-muted-foreground">Select a parcel to enable the Command Dictionary panel.</div>
+          <div class="p-2 text-muted-foreground">
+            Select a parcel with a command dictionary to enable the Mission Reference.
+          </div>
         </svelte:fragment>
       </Panel>
     {/if}
   {:else if activeTab === WorkspaceRightPanelTab.METADATA}
-    <WorkspaceMetadataPanel {filePath} {fileMetadata} {fileSize} {hasEditPermission} on:updateUserMetadata />
+    <WorkspaceMetadataPanel
+      {filePath}
+      {fileMetadata}
+      {fileSize}
+      {hasEditPermission}
+      on:openFile
+      on:updateUserMetadata
+    />
   {:else if activeTab === WorkspaceRightPanelTab.REVISIONS}
     <WorkspaceRevisionsPanel
       {availableActions}

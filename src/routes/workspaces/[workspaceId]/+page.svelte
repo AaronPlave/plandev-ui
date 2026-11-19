@@ -220,6 +220,7 @@
   let rightPanelOpen: boolean = true;
   let selectedConsoleTab: WorkspaceConsoleTab = 'actions';
   let selectedFilePath: string | null = null;
+  let workspaceSearchQuery: string = '';
   let selectedSequenceOutput: string | undefined = undefined;
   let sequenceEditorRef: SequenceEditor;
   let showLoadingSpinner: boolean = false;
@@ -1826,6 +1827,13 @@
     view?.focus();
   }
 
+  /** Find uses of a dictionary name: a text search of the workspace, shown in the Find in workspace panel. */
+  function onFindUses(event: CustomEvent<string>) {
+    workspaceSearchQuery = event.detail;
+    leftPanelActiveTab = 'search';
+    sidebarPanelOpen = true;
+  }
+
   /** A "Find in workspace" result: open its file (asking about unsaved edits as any navigation does), then its line. */
   async function onOpenSearchMatch(event: CustomEvent<WorkspaceSearchMatch>) {
     const { column, line, path } = event.detail;
@@ -1948,6 +1956,7 @@
         >
           <WorkspaceSidebar
             bind:currentBreadcrumbPath={sidebarBreadcrumbPath}
+            bind:searchQuery={workspaceSearchQuery}
             bind:selectedFilePath
             activeTab={leftPanelActiveTab}
             actions={allActionsForWorkspace}
@@ -2171,6 +2180,8 @@
               {commandInfoMapper}
               {revisionList}
               on:createdFileRevision={onCreatedFileRevision}
+              on:findUses={onFindUses}
+              on:openFile={e => openFileForDefinition(e.detail, false)}
               on:runAction={onRunActionOnRevision}
               on:updateUserMetadata={onUpdateUserMetadata}
               reloadWorkingCopy={onRevisionWorkingCopyChanged}

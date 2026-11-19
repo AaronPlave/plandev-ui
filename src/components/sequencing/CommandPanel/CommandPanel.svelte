@@ -132,6 +132,10 @@
     <TabPanel {tabContextKey} panelId={CommandPanelTabs.DEFINITION}>
       <CommandDictionaryComponent
         {commandDictionary}
+        {commandInfoMapper}
+        editorSequenceView={editorSequenceView ?? null}
+        {phoenixContext}
+        {readOnly}
         {selectedCommandDefinition}
         on:selectCommandDefinition={onSelectCommandDefinition}
       />

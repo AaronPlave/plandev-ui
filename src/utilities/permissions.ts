@@ -776,6 +776,9 @@ const queryPermissions: Record<GQLKeys, (user: User | null, ...args: any[]) => b
   GET_EXPANSION_SEQUENCE_ID: (user: User | null): boolean => {
     return isUserAdmin(user) || getPermission([Queries.SEQUENCE_TO_SIMULATED_ACTIVITY], user);
   },
+  GET_EXPANSION_SEQUENCE_SPAN_IDS: (user: User | null): boolean => {
+    return isUserAdmin(user) || getPermission([Queries.SEQUENCE_TO_SIMULATED_ACTIVITIES], user);
+  },
   GET_EXTERNAL_EVENTS: () => true,
   GET_EXTERNAL_EVENT_TYPE_BY_SOURCE: user => queryPermissions.SUB_DERIVATION_GROUPS(user),
   GET_EXTERNAL_PROFILE_SEGMENTS_SINCE: () => true,
@@ -1351,10 +1354,16 @@ const workspacePermissions: Record<WorkspaceKeys, (user: User | null, ...args: a
   deleteWorkspace: (user: User | null, workspace: Workspace): boolean => {
     return isUserAdmin(user) || getRoleWorkspacePermission(['delete_workspace'], user, workspace);
   },
+  getFileAtCommit: (user: User | null, workspace: Workspace): boolean => {
+    return isUserAdmin(user) || getRoleWorkspacePermission(['read_file_directory'], user, workspace);
+  },
   getFileContent: (user: User | null, workspace: Workspace): boolean => {
     return isUserAdmin(user) || getRoleWorkspacePermission(['read_file_directory'], user, workspace);
   },
   getFileContentBlob: (user: User | null, workspace: Workspace): boolean => {
+    return isUserAdmin(user) || getRoleWorkspacePermission(['read_file_directory'], user, workspace);
+  },
+  getFileHistory: (user: User | null, workspace: Workspace): boolean => {
     return isUserAdmin(user) || getRoleWorkspacePermission(['read_file_directory'], user, workspace);
   },
   getFileMetadata: (user: User | null, workspace: Workspace): boolean => {

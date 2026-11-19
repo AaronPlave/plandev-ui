@@ -62,7 +62,7 @@ import type { PlanSnapshot } from '../types/plan-snapshot';
 import type { Tag } from '../types/tags';
 import type { ActivityTransformDirection } from '../types/time';
 import type { ViewDefinition } from '../types/view';
-import type { Workspace, WorkspaceFileRevision } from '../types/workspace';
+import type { Workspace, WorkspaceFileHistoryEntry, WorkspaceFileRevision } from '../types/workspace';
 import type { WorkspaceTreeNode, WorkspaceTreeNodeWithFullPath } from '../types/workspace-tree-view';
 import type { WorkspaceSaveConflictReason } from './requests';
 
@@ -1900,12 +1900,17 @@ export async function showWorkspaceRevisionRestorePreviewModal(props: {
 }
 
 /**
- * Compares two different files, each with its own working-copy/revision picker. No restore: unlike
+ * Compares two files (or two versions of one file), each side with its own working-copy/revision picker. No restore: unlike
  * {@link showWorkspaceRevisionPreviewModal}, there's no single working copy both sides could feed into.
  */
 export async function showWorkspaceFileComparisonModal(props: {
+  history?: WorkspaceFileHistoryEntry[];
+  leftCommit?: string | null;
   leftFilePath: string;
+  leftRevisionName?: string | null;
+  rightCommit?: string | null;
   rightFilePath: string;
+  rightRevisionName?: string | null;
   type: WorkspaceContentType | null;
   user: User | null;
   workspaceId: number;

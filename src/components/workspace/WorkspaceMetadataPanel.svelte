@@ -9,11 +9,15 @@
   import { minimalSetup } from 'codemirror';
   import { createEventDispatcher, onDestroy } from 'svelte';
   import type { WorkspaceFileMetadata } from '../../types/workspace-tree-view';
+  import { getBuildProvenance } from '../../utilities/buildProvenance';
+  import { getGeneratedFrom } from '../../utilities/generatedProvenance';
   import { formatBytes } from '../../utilities/text';
   import { getShortISOForDate } from '../../utilities/time';
   import { getUserDisplayNameFromIdentity } from '../../utilities/workspaces';
   import SectionTitle from '../ui/SectionTitle.svelte';
   import * as Sidebar from '../ui/Sidebar/index.js';
+  import BuildProvenance from './BuildProvenance.svelte';
+  import GeneratedFromDetails from './GeneratedFromDetails.svelte';
   import PanelHeader from './PanelHeader.svelte';
 
   const dispatch = createEventDispatcher<{
@@ -34,6 +38,8 @@
   let lastSavedContent: string = '';
   let previousFilePath: string | null = null;
 
+  $: buildProvenance = getBuildProvenance(fileMetadata?.user);
+  $: generatedFrom = getGeneratedFrom(fileMetadata?.user);
   $: editorReadOnly = !hasEditPermission || !isEditing;
   $: if (editorView && compartmentReadonly) {
     editorView.dispatch({
@@ -209,6 +215,13 @@
                   <span class="font-medium text-muted-foreground">Last edited</span>
                   <span>{getShortISOForDate(new Date(fileMetadata.lastEditedAt))}</span>
                 </div>
+              {/if}
+
+              {#if generatedFrom}
+                <GeneratedFromDetails from={generatedFrom} />
+              {/if}
+              {#if filePath && buildProvenance}
+                <BuildProvenance {filePath} provenance={buildProvenance} on:openFile />
               {/if}
 
               <div class="flex flex-col gap-1">

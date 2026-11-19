@@ -1,12 +1,13 @@
 <svelte:options immutable={true} />
 
 <script lang="ts">
-  import type { FswCommandArgumentRepeat } from '@nasa-jpl/plandev-ampcs';
+  import type { EnumMap, FswCommandArgumentRepeat } from '@nasa-jpl/plandev-ampcs';
   import Collapse from '../../Collapse.svelte';
   import CommandArg from './CommandArg.svelte';
   import CommandArgUnit from './CommandArgUnit.svelte';
 
   export let argDef: FswCommandArgumentRepeat;
+  export let enumMap: EnumMap = {};
 </script>
 
 <Collapse title={argDef.name}>
@@ -14,7 +15,7 @@
   <div>
     {#each argDef.repeat?.arguments ?? [] as childArgumentDefinition}
       {#if childArgumentDefinition}
-        <CommandArg commandArgumentDefinition={childArgumentDefinition} />
+        <CommandArg commandArgumentDefinition={childArgumentDefinition} {enumMap} />
       {/if}
     {/each}
   </div>

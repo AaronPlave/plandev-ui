@@ -3,12 +3,12 @@
 <script lang="ts">
   import { json } from '@codemirror/lang-json';
   import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';
-  import { MergeView } from '@codemirror/merge';
+  import { goToNextChunk, goToPreviousChunk, MergeView } from '@codemirror/merge';
   import { EditorState, type Extension } from '@codemirror/state';
   import { EditorView, lineNumbers } from '@codemirror/view';
   import { Button, cn } from '@nasa-jpl/stellar-svelte';
   import { basicSetup } from 'codemirror';
-  import { ArrowLeftRight, FileDiff } from 'lucide-svelte';
+  import { ArrowLeftRight, ChevronDown, ChevronUp, FileDiff } from 'lucide-svelte';
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { WorkspaceContentType } from '../../../enums/workspace';
   import type { DownloadMenuOption } from '../../../types/dropdown';
@@ -210,6 +210,15 @@
     dispatch('stats', { changedLines: countChangedLines(mergeView) });
   }
 
+  /** Moves to the next/previous changed block (in the right-hand pane) and scrolls it into view. */
+  function goToChange(direction: 1 | -1) {
+    const view = mergeView?.b;
+    if (view) {
+      (direction === 1 ? goToNextChunk : goToPreviousChunk)(view);
+      view.focus();
+    }
+  }
+
   onMount(() => {
     buildViews();
   });
@@ -236,7 +245,7 @@
       >
         <slot name="theirs-header-slot" slot="header-slot" />
       </WorkspaceDiffSideHeader>
-      <div class="absolute left-1/2 top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-1">
+      <div class="absolute left-1/2 top-1/2 z-10 grid -translate-x-1/2 -translate-y-1/2 grid-cols-2 gap-1">
         <Tooltip content="Swap sides">
           <Button
             class="h-6 w-6 bg-background text-muted-foreground"
@@ -246,6 +255,28 @@
             on:click={swapSides}
           >
             <ArrowLeftRight size={14} />
+          </Button>
+        </Tooltip>
+        <Tooltip content="Previous change">
+          <Button
+            class="h-6 w-6 bg-background text-muted-foreground"
+            variant="outline"
+            size="icon"
+            aria-label="Previous change"
+            on:click={() => goToChange(-1)}
+          >
+            <ChevronUp size={14} />
+          </Button>
+        </Tooltip>
+        <Tooltip content="Next change">
+          <Button
+            class="h-6 w-6 bg-background text-muted-foreground"
+            variant="outline"
+            size="icon"
+            aria-label="Next change"
+            on:click={() => goToChange(1)}
+          >
+            <ChevronDown size={14} />
           </Button>
         </Tooltip>
         <DownloadMenu

@@ -90,4 +90,16 @@ export interface SideState {
 /**
  * A side of a file comparison.
  */
+/** One commit of a file's change history (every save, metadata change and restore), from the workspace's Git log. */
+export type WorkspaceFileHistoryEntry = {
+  at: string;
+  author: string;
+  commit: string;
+  /** False when only the file's metadata changed. */
+  contentChanged: boolean;
+  message: string;
+  /** Names of the file's revisions recorded on this commit. */
+  revisions: WorkspaceRevisionName[];
+};
+
 export type Side = { kind: 'workingCopy' } | { kind: 'revision'; revision: WorkspaceFileRevision };

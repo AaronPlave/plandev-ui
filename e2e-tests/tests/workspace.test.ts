@@ -107,10 +107,10 @@ test.describe.serial('Workspace', () => {
 
   test('Right icon rail shows sequence tabs when workspace loads with no file selected', async () => {
     // With no file in the URL the page defaults to a SequenceEditor, so the right
-    // icon rail should expose Selected Command and Command Dictionary tabs alongside Metadata.
+    // icon rail should expose Selected Command and Mission Reference tabs alongside Metadata.
     await expect(setup.page.getByRole('button', { exact: true, name: 'Metadata' })).toBeVisible();
     await expect(setup.page.getByRole('button', { exact: true, name: 'Selected Command' })).toBeVisible();
-    await expect(setup.page.getByRole('button', { exact: true, name: 'Command Dictionary' })).toBeVisible();
+    await expect(setup.page.getByRole('button', { exact: true, name: 'Mission Reference' })).toBeVisible();
   });
 
   test('Workspace header menu should be accessible', async () => {
