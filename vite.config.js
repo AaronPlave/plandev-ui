@@ -14,6 +14,8 @@ const config = ({ mode }) => {
     css: {
       devSourcemap: true,
     },
+    // The Cosmolabe embed loads its workers and WASM relative to its own module URL (see its docs/embedding.md).
+    optimizeDeps: { exclude: ['@cosmolabe/viewer'] },
     plugins: [
       ...(viteEnvVars.VITE_HTTPS === 'true' ? [basicSsl()] : []),
       lezer(),

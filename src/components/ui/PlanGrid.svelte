@@ -10,6 +10,7 @@
   import ActivitySpansTablePanel from '../activity/ActivitySpansTablePanel.svelte';
   import TimelineItemsPanel from '../activity/TimelineItemsPanel.svelte';
   import ConstraintsPanel from '../constraints/ConstraintsPanel.svelte';
+  import CosmolabePanel from '../cosmolabe/CosmolabePanel.svelte';
   import ExpansionPanel from '../expansion/ExpansionPanel.svelte';
   import ExternalEventFormPanel from '../external-events/ExternalEventFormPanel.svelte';
   import ExternalEventsTablePanel from '../external-events/ExternalEventsTablePanel.svelte';
@@ -54,6 +55,7 @@
     ActivityFormPanel,
     ActivitySpansTablePanel,
     ConstraintsPanel,
+    CosmolabePanel,
     ExpansionPanel,
     ExternalEventFormPanel,
     ExternalEventsTablePanel,

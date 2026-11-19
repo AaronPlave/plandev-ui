@@ -36,6 +36,7 @@ export type ViewGridComponent =
   | 'ActivitySpansTablePanel'
   | 'TimelineItemsPanel'
   | 'ConstraintsPanel'
+  | 'CosmolabePanel'
   | 'ExpansionPanel'
   | 'ExternalSourcesPanel'
   | 'ExternalEventFormPanel'

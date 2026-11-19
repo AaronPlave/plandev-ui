@@ -236,6 +236,7 @@
         "ActivitySpansTablePanel",
         "TimelineItemsPanel",
         "ConstraintsPanel",
+        "CosmolabePanel",
         "ExpansionPanel",
         "IFramePanel",
         "PlanMetadataPanel",

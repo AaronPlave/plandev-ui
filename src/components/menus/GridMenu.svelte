@@ -16,6 +16,7 @@
     LucideEdit,
     Maximize2,
     Minimize2,
+    Orbit,
     PlaySquare,
     Table2,
   } from 'lucide-svelte';
@@ -109,6 +110,13 @@
     >
       <AppWindow size={16} />
       External Application
+    </DropdownMenu.Item>
+    <DropdownMenu.Item
+      class="flex cursor-pointer select-none items-center gap-2 rounded-sm py-2.5 text-[13px] font-medium"
+      on:click={() => onClickMenuItem('CosmolabePanel')}
+    >
+      <Orbit size={16} />
+      3D Mission View
     </DropdownMenu.Item>
     <DropdownMenu.Item
       class="flex cursor-pointer select-none items-center gap-2 rounded-sm py-2.5 text-[13px] font-medium"
