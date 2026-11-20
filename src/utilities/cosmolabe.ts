@@ -10,6 +10,7 @@
 import type {
   AttitudeConvention,
   HostDataAdapter,
+  HostObservationSpec,
   MissionActivitySpec,
   MissionStateSource,
   PositionConvention,
@@ -80,12 +81,24 @@ export type CosmolabeAdapter = {
   vehicle: string;
   /** The vehicle a simulated activity belongs to; `vehicle` when absent or null. */
   vehicleOf?(span: Span): string | null;
-  /** What the mission evaluated for a selected activity (e.g. image footprints), drawn read-only in the scene. */
+  /**
+   * What the mission evaluated for a selected activity (e.g. survey image footprints and the target they were asked
+   * to cover), as read-only Cosmolabe observations, with what to show when the operator picks one in the scene.
+   */
   observations?: {
     body: string;
-    coordinates: unknown;
-    of(span: Span): { geometry: unknown; properties: Record<string, unknown> }[];
+    legend?: { color: string; text: string }[];
+    of(span: Span, ctx: { datasetId: number; planId: number }): CosmolabeObservation[];
   };
+};
+
+/** One mission-evaluated observation for the scene, with the details shown when its parts are picked. */
+export type CosmolabeObservation = {
+  /** Per footprint (same order as the spec's polygons): a title, its exposure time (ISO UTC), and rows to show. */
+  footprints: { rows: [string, string][]; time: string; title: string }[];
+  /** The requested region (survey target), when the spec has one. */
+  region?: { note?: string; rows: [string, string][]; title: string } | null;
+  spec: HostObservationSpec;
 };
 
 /** The mission whose index entry lists `modelName`, or null (the panel then says the plan has no 3D scene). */
@@ -354,35 +367,61 @@ export function targetOutcome(
 
 // ── Simulated vehicle state ──────────────────────────────────────────────────────────────
 
-/** One discrete profile segment: the value holds from `startMs` until the next segment (or the simulation end). */
+/**
+ * One discrete profile segment: the value holds from `startMs` until the next segment (or the simulation end). A
+ * `null` value is a gap in the profile (PlanDev's `is_gap`, or no value): the vehicle has no state there.
+ */
 export type StateSegment = { startMs: number; value: unknown };
 
 const iso = (ms: number) => new Date(ms).toISOString();
 
 /**
  * Position and attitude samples for one vehicle from its simulated state profile. Each segment gives a sample at
- * its start; a segment held longer than `holdS` (a vehicle parked between flights) also gives one 1 ms before the
- * next, so the hold is drawn as a hold and the change happens at the next segment, not across the whole stretch.
+ * its start; a segment held longer than `holdS` (a vehicle parked between flights) is also sampled every `holdStepS`
+ * and 1 ms before the next segment, so the hold is drawn as a hold and the change happens at the next segment.
+ *
+ * Gaps stay gaps: a gap segment, or a value that does not read as finite numbers, gives no samples, and
+ * `maxSpacingS` (the longest spacing between samples this function intends to be interpolated) is what the source
+ * declares, so the scene shows no state across a gap rather than inventing motion through it.
+ * ponytail: a gap shorter than `holdStepS` is still bridged (one interpolation limit per channel); a coverage list
+ * with holes in the MissionState API would close that.
  */
-export function stateSamples(segments: StateSegment[], endMs: number, ms: CosmolabeMissionState, holdS = 2) {
+export function stateSamples(
+  segments: StateSegment[],
+  endMs: number,
+  ms: CosmolabeMissionState,
+  { holdS = 2, holdStepS = 10 }: { holdS?: number; holdStepS?: number } = {},
+) {
   const position: { position: number[]; t: string; velocity: number[] }[] = [];
   const attitude: { quaternion: number[]; t: string }[] = [];
+  let gaps = 0;
   segments.forEach((seg, i) => {
+    const s = seg.value == null ? null : ms.sample(seg.value);
+    const ok = s && [...s.position, ...s.velocity, ...s.quaternion].every(Number.isFinite) && s.position.length === 3 && s.quaternion.length === 4;
+    if (!s || !ok) {
+      gaps++;
+      return;
+    }
     const next = segments[i + 1]?.startMs ?? endMs;
-    const s = ms.sample(seg.value);
-    const times = next - seg.startMs > holdS * 1000 ? [seg.startMs, next - 1] : [seg.startMs];
+    const times = [seg.startMs];
+    if (next - seg.startMs > holdS * 1000) {
+      for (let t = seg.startMs + holdStepS * 1000; t < next - 1; t += holdStepS * 1000) {
+        times.push(t);
+      }
+      times.push(next - 1);
+    }
     for (const t of times) {
       position.push({ position: s.position, t: iso(t), velocity: s.velocity });
       attitude.push({ quaternion: s.quaternion, t: iso(t) });
     }
   });
-  return { attitude, position };
+  return { attitude, gaps, maxSpacingS: Math.max(holdS, holdStepS), position };
 }
 
 /**
  * A MissionStateSource holding one vehicle's samples from one simulation dataset, classified as planned. Every
- * request is answered with all of them, complete for the simulation's span: the profile covers that span without
- * gaps, so any two neighbouring samples may be interpolated (hence the spacing limit of the whole span).
+ * request is answered with all of them for the simulation's span; neighbouring samples are interpolated only within
+ * `maxSpacingS`, so a gap in the profile is a gap in the scene.
  */
 export function simulatedStateSource(
   id: string,
@@ -391,7 +430,8 @@ export function simulatedStateSource(
   span: { datasetId: number; endMs: number; planId: number; startMs: number },
   adapter: HostDataAdapter,
 ): MissionStateSource {
-  const spacing = (span.endMs - span.startMs) / 1000 + 1;
+  // Interpolate only between samples `stateSamples` meant to be neighbours: never across a gap.
+  const spacing = samples.maxSpacingS + 0.001;
   const window = { end: iso(span.endMs), start: iso(span.startMs) };
   const provenance = (kind: 'trajectory' | 'attitude') => ({
     classification: 'planned' as const,

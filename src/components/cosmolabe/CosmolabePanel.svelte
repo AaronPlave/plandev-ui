@@ -2,7 +2,7 @@
 
 <script lang="ts">
   import { env } from '$env/dynamic/public';
-  import type { CosmolabeViewer, MissionActivitySpec } from '@cosmolabe/viewer';
+  import type { CosmolabeViewer, HostObservationPick, MissionActivitySpec } from '@cosmolabe/viewer';
   import { onDestroy } from 'svelte';
   import { activityDirectivesMap, selectActivity, selectedActivityDirectiveId } from '../../stores/activities';
   import { plan, planEndTimeMs, planRevision, planStartTimeMs, timeCursorMs, viewTimeRange } from '../../stores/plan';
@@ -38,6 +38,7 @@
     windowProblems,
     type CosmolabeAdapter,
     type CosmolabeMission,
+    type CosmolabeObservation,
     type CosmolabeProposal,
     type Interval,
     type PassSearch,
@@ -58,7 +59,6 @@
     | { detail: string; endMs: number; kind: 'event' | 'staged'; startMs: number };
   const OWNER = 'plandev';
   const TARGET_LAYER = 'PlanDev targets (goal arguments)';
-  const OBSERVATION_LAYER = 'Selected activity: mission evaluation';
 
   let container: HTMLDivElement;
   let lib: CosmolabeModule | null = null;
@@ -88,8 +88,10 @@
   let staging = false;
   let targetLayer: string | null = null;
   let targetFeatures: (string | number)[] = [];
-  let observationLayer: string | null = null;
-  let observationFeatures: (string | number)[] = [];
+  /** The selected activity's mission-evaluated observations, as given to the scene (with their pick details). */
+  let shownObservations: CosmolabeObservation[] = [];
+  /** What the operator last picked among them in the scene. */
+  let observationPick: HostObservationPick | null = null;
   let vehicleState = '';
 
   let searchFrom = '';
@@ -132,14 +134,16 @@
     pushSelection(wantedActivity);
   }
   $: if (ready && adapter?.observations) {
-    pushObservations(selectedSpan !== null ? ($spansMap?.[selectedSpan] ?? null) : null);
+    pushObservations(selectedSpan !== null ? ($spansMap?.[selectedSpan] ?? null) : null, $simulationDatasetId);
   }
+  $: picked = pickDetails(observationPick, shownObservations);
   $: goalSpec = adapter?.targets
     ? ($schedulingGoalSpecifications.find(spec => spec.goal_metadata?.name === adapter?.targets?.goal) ?? null)
     : null;
   // Vehicles whose state is the simulation's: follow the selected simulation dataset.
+  // The selected dataset's record arrives after its id: until it does, nothing from the previous one is shown.
   $: if (ready && adapter?.missionState) {
-    pushMissionState($simulationDataset);
+    pushMissionState($simulationDataset?.id === $simulationDatasetId ? $simulationDataset : null, $simulationDatasetId);
   }
   /** The selected simulation was run on an earlier revision of the plan: what the scene shows is out of date. */
   $: stateStale =
@@ -269,8 +273,8 @@
     stateRequest++;
     targetLayer = null;
     targetFeatures = [];
-    observationLayer = null;
-    observationFeatures = [];
+    shownObservations = [];
+    observationPick = null;
     await v?.dispose();
   }
 
@@ -303,6 +307,9 @@
         if (spanId !== null && spanId !== selectedSpan && $spansMap?.[spanId]) {
           selectActivity(null, spanId, false);
         }
+      }),
+      v.observations.onSelect(pick => {
+        observationPick = pick;
       }),
       c.on('probe', () => {
         probe = c.getProbePoint?.() ?? null;
@@ -472,29 +479,46 @@
       .map(r => r.featureId);
   }
 
-  /** The selected activity's mission evaluation (e.g. image footprints, target region), replacing the previous one. */
-  function pushObservations(span: Span | null) {
-    const c = viewer?.control;
+  /**
+   * The selected activity's mission evaluation (survey footprints and the target they were asked to cover) as
+   * read-only scene observations, replacing the previous ones. Attributed to this plan and simulation dataset.
+   */
+  function pushObservations(span: Span | null, datasetId: number) {
     const obs = adapter?.observations;
-    if (!c || !obs) {
+    if (!viewer || !obs || !$plan) {
       return;
     }
     try {
-      const features = span ? obs.of(span) : [];
-      observationLayer ??= c.createAnnotationLayer?.(obs.body, OBSERVATION_LAYER, obs.coordinates as never) || null;
-      if (!observationLayer) {
-        return;
-      }
-      const layer = observationLayer;
-      observationFeatures.forEach(featureId => c.editAnnotation?.(layer, { featureId, type: 'delete' }));
-      observationFeatures = features
-        .map(f => c.editAnnotation?.(layer, { geometry: f.geometry as never, properties: f.properties as never, type: 'add' }) || null)
-        .filter(r => r !== null)
-        .map(r => r.featureId);
+      shownObservations = span && datasetId >= 0 ? obs.of(span, { datasetId, planId: $plan.id }) : [];
+      viewer.observations.replace(
+        OWNER,
+        shownObservations.map(o => o.spec),
+      );
     } catch (e) {
       // Context only: the scene keeps working without it, and says nothing it cannot show.
+      shownObservations = [];
+      viewer.observations.remove(OWNER);
       console.warn('[3D Mission View] mission evaluation could not be drawn:', e);
     }
+    observationPick = null;
+  }
+
+  /** The picked footprint or target, with the mission's numbers for it. */
+  function pickDetails(pick: HostObservationPick | null, list: CosmolabeObservation[]) {
+    const o = pick && list.find(x => x.spec.name === pick.name);
+    if (!pick || !o) {
+      return null;
+    }
+    if (pick.region) {
+      return o.region ? { ...o.region, timeMs: null } : null;
+    }
+    const f = pick.footprint !== null ? o.footprints[pick.footprint] : undefined;
+    return f ? { note: '', rows: f.rows, timeMs: Date.parse(f.time), title: f.title } : null;
+  }
+
+  function clearPick() {
+    observationPick = null;
+    viewer?.observations.select(null);
   }
 
   /** Loaded mission-state datasets; a newer request supersedes an older one still loading. */
@@ -502,55 +526,63 @@
   let stateFor = '';
   let stateMessage = '';
 
-  async function pushMissionState(ds: SimulationDataset | null) {
+  async function pushMissionState(ds: SimulationDataset | null, wantedId: number) {
     const ms = adapter?.missionState;
     const v = viewer;
     if (!ms || !v || !lib || !$plan) {
       return;
     }
-    const key = ds && ds.status === 'success' ? `${ds.id}` : '';
+    const key = ds && ds.status === 'success' ? `${ds.id}` : `none:${ds?.id ?? wantedId}:${ds?.status ?? ''}`;
     if (key === stateFor) {
       return;
     }
     stateFor = key;
     const request = ++stateRequest;
+    // Whatever is shown belongs to the previous selection: it goes before anything is fetched, so a vehicle is
+    // never drawn from one simulation while another is selected (nor kept when this one's fetch fails).
+    ms.vehicles.forEach(id => v.missionState.removeSource(id));
     if (!ds || ds.status !== 'success' || !ds.simulation_start_time || !ds.simulation_end_time) {
       // No finished simulation: no vehicle is anywhere (an unsimulated flight is not animated).
-      ms.vehicles.forEach(id => v.missionState.removeSource(id));
-      stateMessage = ds ? `Simulation ${ds.id} is ${ds.status}: no drone states.` : 'No simulation: no drone states.';
+      stateMessage = ds
+        ? `Simulation ${ds.id} is ${ds.status}: no drone states.`
+        : wantedId >= 0
+          ? `Loading simulation ${wantedId}…`
+          : 'No simulation: no drone states.';
       return;
     }
     stateMessage = `Loading drone states from simulation ${ds.id}…`;
     const startMs = Date.parse(ds.simulation_start_time);
     const span = { datasetId: ds.dataset_id, endMs: Date.parse(ds.simulation_end_time), planId: $plan.id, startMs };
     const host = new lib.HostDataAdapter(`plandev-simulation-${ds.id}`);
-    try {
-      const profiles = await Promise.all(
-        ms.vehicles.map(id => effects.getProfileSince(ds.dataset_id, ms.resource(id), '-00:00:01', user)),
-      );
-      if (request !== stateRequest || viewer !== v) {
+    const results = await Promise.allSettled(
+      ms.vehicles.map(id => effects.getProfileSince(ds.dataset_id, ms.resource(id), '-00:00:01', user)),
+    );
+    if (request !== stateRequest || viewer !== v) {
+      return; // superseded: a newer selection (or panel) owns the scene now
+    }
+    const problems: string[] = [];
+    ms.vehicles.forEach((id, i) => {
+      const r = results[i];
+      if (r.status === 'rejected') {
+        problems.push(`${id}: ${(r.reason as Error)?.message ?? r.reason}`);
         return;
       }
-      ms.vehicles.forEach((id, i) => {
-        const segments = (profiles[i]?.profile_segments ?? []).map(seg => ({
-          startMs: startMs + getIntervalInMs(seg.start_offset),
-          value: seg.dynamics,
-        }));
-        if (!segments.length) {
-          v.missionState.removeSource(id);
-          return;
-        }
-        const source = simulatedStateSource(id, stateSamples(segments, span.endMs, ms), ms, span, host);
-        if (v.missionState.sourceIds().includes(id)) {
-          v.missionState.replaceSource(source);
-        } else {
-          v.missionState.addSource(source);
-        }
-      });
-      stateMessage = '';
-    } catch (e) {
-      stateMessage = `Drone states from simulation ${ds.id} could not be loaded: ${(e as Error).message}`;
-    }
+      const segments = (r.value?.profile_segments ?? []).map(seg => ({
+        startMs: startMs + getIntervalInMs(seg.start_offset),
+        value: seg.is_gap ? null : seg.dynamics,
+      }));
+      if (!segments.length) {
+        return; // this simulation has no state for the vehicle: it stays absent
+      }
+      try {
+        v.missionState.addSource(simulatedStateSource(id, stateSamples(segments, span.endMs, ms), ms, span, host));
+      } catch (e) {
+        problems.push(`${id}: ${(e as Error).message}`);
+      }
+    });
+    stateMessage = problems.length
+      ? `Not shown — drone states from simulation ${ds.id} could not be loaded (${problems.join('; ')}).`
+      : '';
   }
 
   function safeRead(a: CosmolabeAdapter, args: unknown) {
@@ -745,6 +777,37 @@
       {/if}
       {#if ready && (stateStale || stateMessage)}
         <div class="cosmolabe-state">{stateStale || stateMessage}</div>
+      {/if}
+      {#if ready && shownObservations.length}
+        <div class="cosmolabe-observations" data-testid="cosmolabe-observations">
+          {#if picked}
+            <div class="step">
+              <b>{picked.title}</b>
+              {#if picked.timeMs !== null}
+                <button class="link" on:click={() => picked?.timeMs != null && moveTime(picked.timeMs)}>
+                  Move time cursor to this exposure
+                </button>
+              {/if}
+              <button class="link" on:click={clearPick}>Close</button>
+            </div>
+            <table class="rows">
+              {#each picked.rows as [label, value]}
+                <tr><td class="muted">{label}</td><td>{value}</td></tr>
+              {/each}
+            </table>
+            {#if picked.note}<div class="warn-note">{picked.note}</div>{/if}
+          {:else}
+            <div class="step">
+              {#each adapter?.observations?.legend ?? [] as item}
+                <span class="legend"><i style:background={item.color} />{item.text}</span>
+              {/each}
+              <span class="muted">Mission evaluation (read-only). Click a footprint or the target in 3D for details.</span>
+            </div>
+            {#each shownObservations as o}
+              {#if o.region}<div class="muted">{o.region.title}</div>{/if}
+            {/each}
+          {/if}
+        </div>
       {/if}
       {#if ready && adapter?.targets}
         <div class="cosmolabe-proposal">
@@ -949,6 +1012,31 @@
     border-top: 1px solid var(--st-gray-20, #ddd);
     font-size: 12px;
     padding: 4px 8px;
+  }
+  .cosmolabe-observations {
+    border-top: 1px solid var(--st-gray-20, #ddd);
+    font-size: 12px;
+    max-height: 40%;
+    overflow: auto;
+    padding: 4px 8px;
+  }
+  .cosmolabe-observations .rows td {
+    padding: 0 8px 0 0;
+    vertical-align: top;
+  }
+  .cosmolabe-observations .warn-note {
+    color: var(--st-warning-orange, #9a6700);
+  }
+  .legend {
+    align-items: center;
+    display: inline-flex;
+    gap: 4px;
+  }
+  .legend i {
+    border-radius: 2px;
+    display: inline-block;
+    height: 3px;
+    width: 14px;
   }
   .cosmolabe-proposal {
     border-top: 1px solid var(--st-gray-20, #ddd);

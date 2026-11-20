@@ -201,21 +201,42 @@ describe('simulated vehicle state', () => {
   test('holds a parked state until the next segment and samples a flight at its segments', () => {
     const segs = [
       { startMs: t0, value: landed },
-      { startMs: t0 + 3600_000, value: flying(0) },
-      { startMs: t0 + 3601_000, value: flying(1) },
-      { startMs: t0 + 3602_000, value: landed },
+      { startMs: t0 + 30_000, value: flying(0) },
+      { startMs: t0 + 31_000, value: flying(1) },
+      { startMs: t0 + 32_000, value: landed },
     ];
-    const s = stateSamples(segs, t0 + 7200_000, ms as never);
+    const s = stateSamples(segs, t0 + 52_000, ms as never);
     expect(s.position.map(p => p.t)).toEqual([
       '2028-12-15T10:00:00.000Z',
-      '2028-12-15T10:59:59.999Z', // the park held to 1 ms before lift-off
-      '2028-12-15T11:00:00.000Z',
-      '2028-12-15T11:00:01.000Z',
-      '2028-12-15T11:00:02.000Z',
-      '2028-12-15T11:59:59.999Z',
+      '2028-12-15T10:00:10.000Z', // a hold is sampled every 10 s…
+      '2028-12-15T10:00:20.000Z',
+      '2028-12-15T10:00:29.999Z', // …and held to 1 ms before lift-off
+      '2028-12-15T10:00:30.000Z',
+      '2028-12-15T10:00:31.000Z',
+      '2028-12-15T10:00:32.000Z',
+      '2028-12-15T10:00:42.000Z',
+      '2028-12-15T10:00:51.999Z',
     ]);
-    expect(s.attitude[1].quaternion).toEqual([1, 0, 0, 0]);
-    expect(s.attitude[2].quaternion).toEqual([0, 1, 0, 0]);
+    expect(s.attitude[3].quaternion).toEqual([1, 0, 0, 0]);
+    expect(s.attitude[4].quaternion).toEqual([0, 1, 0, 0]);
+    expect(s.maxSpacingS).toBe(10);
+    expect(s.gaps).toBe(0);
+  });
+
+  test('a gap in the profile stays a gap: no samples in it, and no interpolation across it', () => {
+    const segs = [
+      { startMs: t0, value: flying(0) },
+      { startMs: t0 + 1_000, value: null }, // PlanDev is_gap
+      { startMs: t0 + 60_000, value: { q: [1, 0, 0, 0], r: [NaN, 0, 0], v: [0, 0, 0] } }, // unreadable
+      { startMs: t0 + 61_000, value: flying(5) },
+    ];
+    const s = stateSamples(segs, t0 + 62_000, ms as never);
+    expect(s.gaps).toBe(2);
+    expect(s.position.map(p => p.t)).toEqual(['2028-12-15T10:00:00.000Z', '2028-12-15T10:01:01.000Z']);
+    // The 61 s between them is far beyond the interpolation limit the source declares.
+    const src = simulatedStateSource('D', s, ms as never, { datasetId: 7, endMs: t0 + 62_000, planId: 3, startMs: t0 }, {} as never);
+    expect(src.position?.maxSampleSpacing).toBeLessThan(61);
+    expect(src.attitude?.maxSampleSpacing).toBeLessThan(61);
   });
 
   test('answers every request with all samples, planned, complete for the simulation', async () => {
@@ -223,13 +244,13 @@ describe('simulated vehicle state', () => {
     const host = { supply: (value: unknown, provenance: unknown) => ({ provenance, value }) };
     const src = simulatedStateSource('D', samples, ms as never, { datasetId: 7, endMs: t0 + 60_000, planId: 3, startMs: t0 }, host as never);
     expect(src.coverage?.position).toEqual({ end: '2028-12-15T10:01:00.000Z', start: '2028-12-15T10:00:00.000Z' });
-    expect(src.position?.maxSampleSpacing).toBeGreaterThanOrEqual(60);
+    expect(src.position?.maxSampleSpacing).toBeCloseTo(10, 2);
     const b = (await src.request!('position', { end: 0, start: 0 } as never, new AbortController().signal)) as unknown as {
       provenance: { classification: string; version: string };
       value: { samples: unknown[] };
     };
     expect(b.provenance.classification).toBe('planned');
     expect(b.provenance.version).toBe('7');
-    expect(b.value.samples).toHaveLength(2);
+    expect(b.value.samples).toHaveLength(7); // a 60 s park, sampled every 10 s and at its end
   });
 });
