@@ -5,13 +5,22 @@
   import type { CosmolabeViewer, MissionActivitySpec } from '@cosmolabe/viewer';
   import { onDestroy } from 'svelte';
   import { activityDirectivesMap, selectActivity, selectedActivityDirectiveId } from '../../stores/activities';
-  import { plan, planEndTimeMs, planStartTimeMs, timeCursorMs, viewTimeRange } from '../../stores/plan';
+  import { plan, planEndTimeMs, planRevision, planStartTimeMs, timeCursorMs, viewTimeRange } from '../../stores/plan';
   import {
     latestSchedulingRequest,
     schedulingGoalSpecifications,
     schedulingPlanSpecification,
   } from '../../stores/scheduling';
-  import { selectedSpanId, simulationDatasetId, spanUtilityMaps, spans, spansMap } from '../../stores/simulation';
+  import {
+    selectedSpanId,
+    simulationDataset,
+    simulationDatasetId,
+    spanUtilityMaps,
+    spans,
+    spansMap,
+  } from '../../stores/simulation';
+  import type { SimulationDataset, Span } from '../../types/simulation';
+  import { getIntervalInMs } from '../../utilities/time';
   import type { User } from '../../types/app';
   import type { ViewGridSection } from '../../types/view';
   import {
@@ -21,7 +30,9 @@
     planetocentric,
     resolveMission,
     selectionAction,
+    simulatedStateSource,
     spanIdOf,
+    stateSamples,
     spansToActivities,
     targetOutcome,
     windowProblems,
@@ -47,6 +58,7 @@
     | { detail: string; endMs: number; kind: 'event' | 'staged'; startMs: number };
   const OWNER = 'plandev';
   const TARGET_LAYER = 'PlanDev targets (goal arguments)';
+  const OBSERVATION_LAYER = 'Selected activity: mission evaluation';
 
   let container: HTMLDivElement;
   let lib: CosmolabeModule | null = null;
@@ -76,6 +88,8 @@
   let staging = false;
   let targetLayer: string | null = null;
   let targetFeatures: (string | number)[] = [];
+  let observationLayer: string | null = null;
+  let observationFeatures: (string | number)[] = [];
   let vehicleState = '';
 
   let searchFrom = '';
@@ -117,9 +131,21 @@
   $: if (ready) {
     pushSelection(wantedActivity);
   }
-  $: goalSpec = adapter
-    ? ($schedulingGoalSpecifications.find(spec => spec.goal_metadata?.name === adapter?.targets.goal) ?? null)
+  $: if (ready && adapter?.observations) {
+    pushObservations(selectedSpan !== null ? ($spansMap?.[selectedSpan] ?? null) : null);
+  }
+  $: goalSpec = adapter?.targets
+    ? ($schedulingGoalSpecifications.find(spec => spec.goal_metadata?.name === adapter?.targets?.goal) ?? null)
     : null;
+  // Vehicles whose state is the simulation's: follow the selected simulation dataset.
+  $: if (ready && adapter?.missionState) {
+    pushMissionState($simulationDataset);
+  }
+  /** The selected simulation was run on an earlier revision of the plan: what the scene shows is out of date. */
+  $: stateStale =
+    adapter?.missionState && $simulationDataset && $simulationDataset.plan_revision !== $planRevision
+      ? `Showing simulation ${$simulationDataset.id} of plan revision ${$simulationDataset.plan_revision}; the plan has changed since (revision ${$planRevision}). Simulate to see the current flights.`
+      : '';
   $: staged = adapter && goalSpec ? safeRead(adapter, goalSpec.arguments) : [];
   $: if (ready) {
     pushTargets(staged);
@@ -128,7 +154,7 @@
   // ── Cosmolabe → PlanDev: a proposal ──────────────────────────────────────────────────────
   $: planBounds = { endMs: $planEndTimeMs, startMs: $planStartTimeMs };
   $: location = editing
-    ? { body: adapter?.targets.body ?? '', latDeg: editing.latDeg, lonDeg: editing.lonDeg }
+    ? { body: adapter?.targets?.body ?? '', latDeg: editing.latDeg, lonDeg: editing.lonDeg }
     : probe && adapter
       ? { ...planetocentric(probe.point.bodyFixedPositionKm), body: probe.point.bodyName }
       : null;
@@ -172,12 +198,12 @@
   $: problems = [
     // The window is checked here (against the plan) unless it is already invalid; the adapter checks the rest.
     ...(proposal && adapter
-      ? adapter.targets.check({ ...proposal, window: windowIssues.length ? null : proposal.window })
+      ? (adapter.targets?.check({ ...proposal, window: windowIssues.length ? null : proposal.window }) ?? [])
       : []),
     ...(halfValid || (base.kind !== 'cursor' && base.kind !== 'pass' && raw === base)
       ? windowIssues
       : ['Enter the window’s ± minutes (more than 0).']),
-    ...(adapter && !goalSpec ? [`This plan has no ${adapter.targets.goal} goal. Add it in Scheduling.`] : []),
+    ...(adapter?.targets && !goalSpec ? [`This plan has no ${adapter.targets.goal} goal. Add it in Scheduling.`] : []),
   ];
   $: request = $latestSchedulingRequest;
   $: specRevision = $schedulingPlanSpecification?.revision;
@@ -239,8 +265,12 @@
     search = null;
     viewerActivity = null;
     pushedActivities = [];
+    stateFor = '';
+    stateRequest++;
     targetLayer = null;
     targetFeatures = [];
+    observationLayer = null;
+    observationFeatures = [];
     await v?.dispose();
   }
 
@@ -381,6 +411,7 @@
             planId: $plan.id,
             planName: $plan.name,
             vehicle: adapter.vehicle,
+            vehicleOf: adapter.vehicleOf,
           })
         : [];
     viewer.activities.replace(OWNER, pushedActivities);
@@ -419,7 +450,7 @@
   /** Targets in the goal's arguments, drawn in the scene as read-only context. */
   function pushTargets(list: typeof staged) {
     const c = viewer?.control;
-    if (!c || !adapter) {
+    if (!c || !adapter?.targets) {
       return;
     }
     targetLayer ??=
@@ -441,9 +472,90 @@
       .map(r => r.featureId);
   }
 
+  /** The selected activity's mission evaluation (e.g. image footprints, target region), replacing the previous one. */
+  function pushObservations(span: Span | null) {
+    const c = viewer?.control;
+    const obs = adapter?.observations;
+    if (!c || !obs) {
+      return;
+    }
+    try {
+      const features = span ? obs.of(span) : [];
+      observationLayer ??= c.createAnnotationLayer?.(obs.body, OBSERVATION_LAYER, obs.coordinates as never) || null;
+      if (!observationLayer) {
+        return;
+      }
+      const layer = observationLayer;
+      observationFeatures.forEach(featureId => c.editAnnotation?.(layer, { featureId, type: 'delete' }));
+      observationFeatures = features
+        .map(f => c.editAnnotation?.(layer, { geometry: f.geometry as never, properties: f.properties as never, type: 'add' }) || null)
+        .filter(r => r !== null)
+        .map(r => r.featureId);
+    } catch (e) {
+      // Context only: the scene keeps working without it, and says nothing it cannot show.
+      console.warn('[3D Mission View] mission evaluation could not be drawn:', e);
+    }
+  }
+
+  /** Loaded mission-state datasets; a newer request supersedes an older one still loading. */
+  let stateRequest = 0;
+  let stateFor = '';
+  let stateMessage = '';
+
+  async function pushMissionState(ds: SimulationDataset | null) {
+    const ms = adapter?.missionState;
+    const v = viewer;
+    if (!ms || !v || !lib || !$plan) {
+      return;
+    }
+    const key = ds && ds.status === 'success' ? `${ds.id}` : '';
+    if (key === stateFor) {
+      return;
+    }
+    stateFor = key;
+    const request = ++stateRequest;
+    if (!ds || ds.status !== 'success' || !ds.simulation_start_time || !ds.simulation_end_time) {
+      // No finished simulation: no vehicle is anywhere (an unsimulated flight is not animated).
+      ms.vehicles.forEach(id => v.missionState.removeSource(id));
+      stateMessage = ds ? `Simulation ${ds.id} is ${ds.status}: no drone states.` : 'No simulation: no drone states.';
+      return;
+    }
+    stateMessage = `Loading drone states from simulation ${ds.id}…`;
+    const startMs = Date.parse(ds.simulation_start_time);
+    const span = { datasetId: ds.dataset_id, endMs: Date.parse(ds.simulation_end_time), planId: $plan.id, startMs };
+    const host = new lib.HostDataAdapter(`plandev-simulation-${ds.id}`);
+    try {
+      const profiles = await Promise.all(
+        ms.vehicles.map(id => effects.getProfileSince(ds.dataset_id, ms.resource(id), '-00:00:01', user)),
+      );
+      if (request !== stateRequest || viewer !== v) {
+        return;
+      }
+      ms.vehicles.forEach((id, i) => {
+        const segments = (profiles[i]?.profile_segments ?? []).map(seg => ({
+          startMs: startMs + getIntervalInMs(seg.start_offset),
+          value: seg.dynamics,
+        }));
+        if (!segments.length) {
+          v.missionState.removeSource(id);
+          return;
+        }
+        const source = simulatedStateSource(id, stateSamples(segments, span.endMs, ms), ms, span, host);
+        if (v.missionState.sourceIds().includes(id)) {
+          v.missionState.replaceSource(source);
+        } else {
+          v.missionState.addSource(source);
+        }
+      });
+      stateMessage = '';
+    } catch (e) {
+      stateMessage = `Drone states from simulation ${ds.id} could not be loaded: ${(e as Error).message}`;
+    }
+  }
+
   function safeRead(a: CosmolabeAdapter, args: unknown) {
     try {
-      return a.targets.read(args);
+      return a.targets?.read(args) ?? [];
     } catch {
       return [];
     }
@@ -489,7 +601,7 @@
           return state.position;
         },
         location,
-        a.targets.meanRadiusKm,
+        a.targets!.meanRadiusKm,
         range,
       );
       search = { ...result, at, range, unavailable };
@@ -526,8 +638,8 @@
         $plan,
         {
           ...goalSpec,
-          arguments: adapter.targets.stage(
-            editing ? adapter.targets.remove(goalSpec.arguments, editing.id) : goalSpec.arguments,
+          arguments: adapter.targets!.stage(
+            editing ? adapter.targets!.remove(goalSpec.arguments, editing.id) : goalSpec.arguments,
             proposal,
           ),
         },
@@ -567,7 +679,7 @@
     if (adapter && goalSpec && $plan && goalSpec.goal_metadata) {
       await effects.updateSchedulingGoalPlanSpecification(
         $plan,
-        { ...goalSpec, arguments: adapter.targets.remove(goalSpec.arguments, id) },
+        { ...goalSpec, arguments: adapter.targets!.remove(goalSpec.arguments, id) },
         goalSpec.goal_metadata.versions[0]?.parameter_schema as never,
         [],
         user,
@@ -585,7 +697,7 @@
     bounds: Interval,
     invocation: number | undefined,
   ) {
-    const name = adapter?.targets.directiveName(target.id);
+    const name = adapter?.targets?.directiveName(target.id);
     const observation =
       Object.values(directives ?? {}).find(
         d => d.name === name && d.source_scheduling_goal_invocation_id === invocation,
@@ -631,7 +743,10 @@
       {#if status !== 'ready'}
         <div class="cosmolabe-overlay" class:error={status === 'error'}>{message}</div>
       {/if}
-      {#if ready && adapter}
+      {#if ready && (stateStale || stateMessage)}
+        <div class="cosmolabe-state">{stateStale || stateMessage}</div>
+      {/if}
+      {#if ready && adapter?.targets}
         <div class="cosmolabe-proposal">
           {#if vehicleState}<div class="warn">{vehicleState}</div>{/if}
           <div class="step">
@@ -828,6 +943,12 @@
   }
   .cosmolabe-overlay.error {
     color: var(--st-error-red, #b00020);
+  }
+  .cosmolabe-state {
+    background: var(--st-yellow-10, #fff8e1);
+    border-top: 1px solid var(--st-gray-20, #ddd);
+    font-size: 12px;
+    padding: 4px 8px;
   }
   .cosmolabe-proposal {
     border-top: 1px solid var(--st-gray-20, #ddd);

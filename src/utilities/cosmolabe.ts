@@ -7,7 +7,13 @@
  * Authority: a proposal is only an input. It is staged into a mission scheduling goal, and the goal
  * (the mission model's own geometry and kernels) decides whether it can be planned.
  */
-import type { MissionActivitySpec } from '@cosmolabe/viewer';
+import type {
+  AttitudeConvention,
+  HostDataAdapter,
+  MissionActivitySpec,
+  MissionStateSource,
+  PositionConvention,
+} from '@cosmolabe/viewer';
 import type { Span } from '../types/simulation';
 
 export type CosmolabeMissionIndex = {
@@ -37,10 +43,24 @@ export type CosmolabeProposal = {
   window: { end: string; start: string } | null;
 };
 
+/**
+ * Vehicles whose state comes from the simulation rather than from kernels: which resource holds each vehicle's
+ * state, its conventions, and how one profile value reads as a sample.
+ */
+export type CosmolabeMissionState = {
+  attitude: Omit<AttitudeConvention, 'maxSampleSpacing'>;
+  position: Omit<PositionConvention, 'maxSampleSpacing'>;
+  resource(vehicle: string): string;
+  sample(value: unknown): { position: number[]; quaternion: number[]; velocity: number[] };
+  vehicles: string[];
+};
+
 /** The mission adapter module (missions/<key>/adapter.js); see plandev-examples/integrations/cosmolabe. */
 export type CosmolabeAdapter = {
   body: string;
-  targets: {
+  missionState?: CosmolabeMissionState;
+  /** Absent: the mission takes no proposals from the 3D view. */
+  targets?: {
     body: string;
     conventions: string;
     /** The targets' coordinate convention, for drawing them in the scene. */
@@ -58,6 +78,14 @@ export type CosmolabeAdapter = {
     targetOf(directiveName: string | null | undefined): string | null;
   };
   vehicle: string;
+  /** The vehicle a simulated activity belongs to; `vehicle` when absent or null. */
+  vehicleOf?(span: Span): string | null;
+  /** What the mission evaluated for a selected activity (e.g. image footprints), drawn read-only in the scene. */
+  observations?: {
+    body: string;
+    coordinates: unknown;
+    of(span: Span): { geometry: unknown; properties: Record<string, unknown> }[];
+  };
 };
 
 /** The mission whose index entry lists `modelName`, or null (the panel then says the plan has no 3D scene). */
@@ -95,7 +123,14 @@ export function spanIdOf(id: string | null | undefined, planId: number, datasetI
 /** PlanDev simulated spans as Cosmolabe host activities, shown against the mission's vehicle and body. */
 export function spansToActivities(
   spans: Span[],
-  ctx: { body: string; datasetId: number; planId: number; planName: string; vehicle: string },
+  ctx: {
+    body: string;
+    datasetId: number;
+    planId: number;
+    planName: string;
+    vehicle: string;
+    vehicleOf?: (span: Span) => string | null;
+  },
 ): MissionActivitySpec[] {
   return spans
     .filter(span => Number.isFinite(span.startMs) && Number.isFinite(span.endMs) && span.endMs >= span.startMs)
@@ -118,7 +153,7 @@ export function spansToActivities(
         start: new Date(span.startMs).toISOString(),
         temporality: instant ? 'instant' : 'interval',
         timeSystem: 'UTC',
-        vehicle: ctx.vehicle,
+        vehicle: ctx.vehicleOf?.(span) ?? ctx.vehicle,
         version: 1,
       } as MissionActivitySpec;
     });
@@ -315,4 +350,66 @@ export function targetOutcome(
     return { state: 'rejected', text: `Rejected in ${run}: ${reason.replace(named, '')}${kept}` };
   }
   return { state: 'run-failed', text: `${run} failed, not because of this target: ${reason}${kept}` };
+}
+
+// ── Simulated vehicle state ──────────────────────────────────────────────────────────────
+
+/** One discrete profile segment: the value holds from `startMs` until the next segment (or the simulation end). */
+export type StateSegment = { startMs: number; value: unknown };
+
+const iso = (ms: number) => new Date(ms).toISOString();
+
+/**
+ * Position and attitude samples for one vehicle from its simulated state profile. Each segment gives a sample at
+ * its start; a segment held longer than `holdS` (a vehicle parked between flights) also gives one 1 ms before the
+ * next, so the hold is drawn as a hold and the change happens at the next segment, not across the whole stretch.
+ */
+export function stateSamples(segments: StateSegment[], endMs: number, ms: CosmolabeMissionState, holdS = 2) {
+  const position: { position: number[]; t: string; velocity: number[] }[] = [];
+  const attitude: { quaternion: number[]; t: string }[] = [];
+  segments.forEach((seg, i) => {
+    const next = segments[i + 1]?.startMs ?? endMs;
+    const s = ms.sample(seg.value);
+    const times = next - seg.startMs > holdS * 1000 ? [seg.startMs, next - 1] : [seg.startMs];
+    for (const t of times) {
+      position.push({ position: s.position, t: iso(t), velocity: s.velocity });
+      attitude.push({ quaternion: s.quaternion, t: iso(t) });
+    }
+  });
+  return { attitude, position };
+}
+
+/**
+ * A MissionStateSource holding one vehicle's samples from one simulation dataset, classified as planned. Every
+ * request is answered with all of them, complete for the simulation's span: the profile covers that span without
+ * gaps, so any two neighbouring samples may be interpolated (hence the spacing limit of the whole span).
+ */
+export function simulatedStateSource(
+  id: string,
+  samples: ReturnType<typeof stateSamples>,
+  ms: CosmolabeMissionState,
+  span: { datasetId: number; endMs: number; planId: number; startMs: number },
+  adapter: HostDataAdapter,
+): MissionStateSource {
+  const spacing = (span.endMs - span.startMs) / 1000 + 1;
+  const window = { end: iso(span.endMs), start: iso(span.startMs) };
+  const provenance = (kind: 'trajectory' | 'attitude') => ({
+    classification: 'planned' as const,
+    id: `plandev:plan/${span.planId}/simulation_dataset/${span.datasetId}/${id}/${kind}`,
+    kind,
+    source: `PlanDev simulation dataset ${span.datasetId} (plan ${span.planId}), resource ${ms.resource(id)}`,
+    version: String(span.datasetId),
+  });
+  return {
+    attitude: { ...ms.attitude, maxSampleSpacing: spacing },
+    coverage: { attitude: window, position: window },
+    id,
+    maxSamples: Math.max(10_000, samples.position.length + 10),
+    position: { ...ms.position, maxSampleSpacing: spacing },
+    async request(channel) {
+      return channel === 'position'
+        ? adapter.supply({ samples: samples.position, window }, provenance('trajectory'))
+        : adapter.supply({ samples: samples.attitude, window }, provenance('attitude'));
+    },
+  };
 }

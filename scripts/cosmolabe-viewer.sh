@@ -8,7 +8,7 @@
 #   COSMOLABE_SRC=~/code/cosmolabe scripts/cosmolabe-viewer.sh   # build from an existing checkout instead
 set -eu
 COSMOLABE_REPO=${COSMOLABE_REPO:-https://github.com/AaronPlave/cosmolabe.git}
-COSMOLABE_COMMIT=e0ff7fcbc838f6d8ef1583c0fa3f3145e9a3bd8c
+COSMOLABE_COMMIT=8da48a357da880070f5fc1280753d30febeb636c
 here=$(cd "$(dirname "$0")/.." && pwd)
 src=${COSMOLABE_SRC:-$here/.cosmolabe/$COSMOLABE_COMMIT}
 

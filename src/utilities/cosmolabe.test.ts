@@ -8,8 +8,10 @@ import {
   planetocentric,
   resolveMission,
   selectionAction,
+  simulatedStateSource,
   spanIdOf,
   spansToActivities,
+  stateSamples,
   targetOutcome,
   windowProblems,
 } from './cosmolabe';
@@ -178,5 +180,56 @@ describe('cosmolabe', () => {
       'rejected',
     );
     expect(at(false, null, null as unknown as number)).toBe('unknown');
+  });
+});
+
+describe('simulated vehicle state', () => {
+  const ms = {
+    attitude: { bodyFrame: 'B', direction: 'reference-to-body', quaternionOrder: 'scalar-first', referenceFrame: 'F', timeScale: 'UTC' },
+    position: { center: 'Moon', frame: 'F', positionUnits: 'km', timeScale: 'UTC', velocityUnits: 'km/s' },
+    resource: (v: string) => `${v}.state`,
+    sample: (v: unknown) => {
+      const x = v as { q: number[]; r: number[]; v: number[] };
+      return { position: x.r, quaternion: x.q, velocity: x.v };
+    },
+    vehicles: ['D'],
+  } as const;
+  const t0 = Date.parse('2028-12-15T10:00:00Z');
+  const landed = { q: [1, 0, 0, 0], r: [0, 0, -1737], v: [0, 0, 0] };
+  const flying = (k: number) => ({ q: [0, 1, 0, 0], r: [k, 0, -1737], v: [1, 0, 0] });
+
+  test('holds a parked state until the next segment and samples a flight at its segments', () => {
+    const segs = [
+      { startMs: t0, value: landed },
+      { startMs: t0 + 3600_000, value: flying(0) },
+      { startMs: t0 + 3601_000, value: flying(1) },
+      { startMs: t0 + 3602_000, value: landed },
+    ];
+    const s = stateSamples(segs, t0 + 7200_000, ms as never);
+    expect(s.position.map(p => p.t)).toEqual([
+      '2028-12-15T10:00:00.000Z',
+      '2028-12-15T10:59:59.999Z', // the park held to 1 ms before lift-off
+      '2028-12-15T11:00:00.000Z',
+      '2028-12-15T11:00:01.000Z',
+      '2028-12-15T11:00:02.000Z',
+      '2028-12-15T11:59:59.999Z',
+    ]);
+    expect(s.attitude[1].quaternion).toEqual([1, 0, 0, 0]);
+    expect(s.attitude[2].quaternion).toEqual([0, 1, 0, 0]);
+  });
+
+  test('answers every request with all samples, planned, complete for the simulation', async () => {
+    const samples = stateSamples([{ startMs: t0, value: landed }], t0 + 60_000, ms as never);
+    const host = { supply: (value: unknown, provenance: unknown) => ({ provenance, value }) };
+    const src = simulatedStateSource('D', samples, ms as never, { datasetId: 7, endMs: t0 + 60_000, planId: 3, startMs: t0 }, host as never);
+    expect(src.coverage?.position).toEqual({ end: '2028-12-15T10:01:00.000Z', start: '2028-12-15T10:00:00.000Z' });
+    expect(src.position?.maxSampleSpacing).toBeGreaterThanOrEqual(60);
+    const b = (await src.request!('position', { end: 0, start: 0 } as never, new AbortController().signal)) as unknown as {
+      provenance: { classification: string; version: string };
+      value: { samples: unknown[] };
+    };
+    expect(b.provenance.classification).toBe('planned');
+    expect(b.provenance.version).toBe('7');
+    expect(b.value.samples).toHaveLength(2);
   });
 });
