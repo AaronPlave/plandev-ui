@@ -24,7 +24,7 @@
   import { maxTimeRange, plan, planModelActivityTypes, planReadOnly, viewTimeRange } from '../../stores/plan';
   import { plugins } from '../../stores/plugins';
   import { spansMap, spanUtilityMaps } from '../../stores/simulation';
-  import { view, viewTogglePanel, viewUpdateActivityDirectivesTable } from '../../stores/views';
+  import { view, viewRevealPanel, viewUpdateActivityDirectivesTable } from '../../stores/views';
   import type { ActivityDirective } from '../../types/activity';
   import type { User } from '../../types/app';
   import type { AutoSizeColumns, ViewGridSection, ViewTable } from '../../types/view';
@@ -351,7 +351,7 @@
   }
 
   function onRowDoubleClicked() {
-    viewTogglePanel({ state: true, type: 'right', update: { rightComponentTop: 'ActivityFormPanel' } });
+    viewRevealPanel({ rightComponentTop: 'ActivityFormPanel' }, 'right');
   }
 
   function onColumnsChanged({

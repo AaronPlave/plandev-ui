@@ -1,19 +1,24 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, it, test } from 'vitest';
 import type { Span } from '../types/simulation';
 import {
   activityId,
+  destinationOf,
+  destinationProblems,
   findPasses,
+  formatLatLon,
   fitToPlan,
   groundKm,
   planetocentric,
   resolveMission,
   selectionAction,
+  sensorIntervals,
   simulatedStateSource,
   spanIdOf,
   spansToActivities,
   stateSamples,
   targetOutcome,
   windowProblems,
+  withDestination,
 } from './cosmolabe';
 
 const span = (span_id: number, startMs: number, endMs: number, type = 'Periapsis') =>
@@ -185,7 +190,13 @@ describe('cosmolabe', () => {
 
 describe('simulated vehicle state', () => {
   const ms = {
-    attitude: { bodyFrame: 'B', direction: 'reference-to-body', quaternionOrder: 'scalar-first', referenceFrame: 'F', timeScale: 'UTC' },
+    attitude: {
+      bodyFrame: 'B',
+      direction: 'reference-to-body',
+      quaternionOrder: 'scalar-first',
+      referenceFrame: 'F',
+      timeScale: 'UTC',
+    },
     position: { center: 'Moon', frame: 'F', positionUnits: 'km', timeScale: 'UTC', velocityUnits: 'km/s' },
     resource: (v: string) => `${v}.state`,
     sample: (v: unknown) => {
@@ -234,7 +245,13 @@ describe('simulated vehicle state', () => {
     expect(s.gaps).toBe(2);
     expect(s.position.map(p => p.t)).toEqual(['2028-12-15T10:00:00.000Z', '2028-12-15T10:01:01.000Z']);
     // The 61 s between them is far beyond the interpolation limit the source declares.
-    const src = simulatedStateSource('D', s, ms as never, { datasetId: 7, endMs: t0 + 62_000, planId: 3, startMs: t0 }, {} as never);
+    const src = simulatedStateSource(
+      'D',
+      s,
+      ms as never,
+      { datasetId: 7, endMs: t0 + 62_000, planId: 3, startMs: t0 },
+      {} as never,
+    );
     expect(src.position?.maxSampleSpacing).toBeLessThan(61);
     expect(src.attitude?.maxSampleSpacing).toBeLessThan(61);
   });
@@ -242,15 +259,83 @@ describe('simulated vehicle state', () => {
   test('answers every request with all samples, planned, complete for the simulation', async () => {
     const samples = stateSamples([{ startMs: t0, value: landed }], t0 + 60_000, ms as never);
     const host = { supply: (value: unknown, provenance: unknown) => ({ provenance, value }) };
-    const src = simulatedStateSource('D', samples, ms as never, { datasetId: 7, endMs: t0 + 60_000, planId: 3, startMs: t0 }, host as never);
+    const src = simulatedStateSource(
+      'D',
+      samples,
+      ms as never,
+      { datasetId: 7, endMs: t0 + 60_000, planId: 3, startMs: t0 },
+      host as never,
+    );
     expect(src.coverage?.position).toEqual({ end: '2028-12-15T10:01:00.000Z', start: '2028-12-15T10:00:00.000Z' });
     expect(src.position?.maxSampleSpacing).toBeCloseTo(10, 2);
-    const b = (await src.request!('position', { end: 0, start: 0 } as never, new AbortController().signal)) as unknown as {
+    const b = (await src.request!(
+      'position',
+      { end: 0, start: 0 } as never,
+      new AbortController().signal,
+    )) as unknown as {
       provenance: { classification: string; version: string };
       value: { samples: unknown[] };
     };
     expect(b.provenance.classification).toBe('planned');
     expect(b.provenance.version).toBe('7');
     expect(b.value.samples).toHaveLength(7); // a 60 s park, sampled every 10 s and at its end
+  });
+});
+
+describe('sensor activity from a simulation resource', () => {
+  const on = (v: unknown) => (v ? 'acquiring' : 'off') as 'acquiring' | 'off';
+  it('turns a discrete profile into state intervals, a gap into no interval', () => {
+    const t0 = Date.parse('2028-12-15T11:00:00Z');
+    const out = sensorIntervals(
+      [
+        { startMs: t0, value: false },
+        { startMs: t0 + 37_000, value: true },
+        { startMs: t0 + 75_000, value: null },
+        { startMs: t0 + 80_000, value: false },
+      ],
+      t0 + 100_000,
+      on,
+    );
+    expect(out).toEqual([
+      { end: '2028-12-15T11:00:37.000Z', start: '2028-12-15T11:00:00.000Z', state: 'off' },
+      { end: '2028-12-15T11:01:15.000Z', start: '2028-12-15T11:00:37.000Z', state: 'acquiring' },
+      { end: '2028-12-15T11:01:40.000Z', start: '2028-12-15T11:01:20.000Z', state: 'off' },
+    ]);
+  });
+});
+
+describe('surface point as a goal destination', () => {
+  const d = {
+    arguments: { latitude: 'latitude', longitude: 'longitude' },
+    body: 'Moon',
+    conventions: 'MOON_ME_DE421 planetocentric',
+    coordinates: {},
+    frame: 'MOON_ME_DE421',
+    goal: 'PlanHop',
+    label: 'Hop destination',
+  };
+  it('keeps planetocentric coordinates (not geodetic) from the body-fixed point', () => {
+    // A point at planetocentric -89.62°, -30° on a 1736 km radius: z / hypot(x, y) gives the latitude directly.
+    const lat = (-89.62 * Math.PI) / 180,
+      lon = (-30 * Math.PI) / 180,
+      r = 1736.2;
+    const p = planetocentric([r * Math.cos(lat) * Math.cos(lon), r * Math.cos(lat) * Math.sin(lon), r * Math.sin(lat)]);
+    expect(p.latDeg).toBeCloseTo(-89.62, 9);
+    expect(p.lonDeg).toBeCloseTo(-30, 9);
+    expect(formatLatLon(p)).toBe('-89.62000, -30.00000');
+  });
+  it('fills only the destination arguments and reads them back', () => {
+    const args = { drone: 'Polaris-A', latitude: -89.7, longitude: 0, surveyFrames: 20 };
+    const next = withDestination(d, args, { latDeg: -89.623456789, lonDeg: -30.1234567 });
+    expect(next).toEqual({ drone: 'Polaris-A', latitude: -89.623457, longitude: -30.123457, surveyFrames: 20 });
+    expect(destinationOf(d, next)).toEqual({ latDeg: -89.623457, lonDeg: -30.123457 });
+    expect(destinationOf(d, {})).toBeNull();
+  });
+  it('refuses a point on another body or in another body-fixed frame', () => {
+    expect(destinationProblems(d, { body: 'Moon', frame: 'MOON_ME_DE421', latDeg: -89.6, lonDeg: -30 })).toEqual([]);
+    expect(destinationProblems(d, { body: 'Moon', frame: 'IAU_MOON', latDeg: -89.6, lonDeg: -30 })[0]).toMatch(
+      /IAU_MOON/,
+    );
+    expect(destinationProblems(d, { body: 'Earth', frame: 'IAU_EARTH', latDeg: 0, lonDeg: 0 }).length).toBe(2);
   });
 });

@@ -22,7 +22,7 @@
   } from '../../stores/planSnapshots';
   import { plans } from '../../stores/plans';
   import { simulationDataset, simulationDatasetId } from '../../stores/simulation';
-  import { viewTogglePanel } from '../../stores/views';
+  import { viewRevealPanel } from '../../stores/views';
   import type { ActivityDirectivesMap } from '../../types/activity';
   import type { User, UserId } from '../../types/app';
   import type { Plan, PlanCollaborator, PlanSlimmer } from '../../types/plan';
@@ -418,7 +418,7 @@
                       setQueryParam(SearchParameters.SIMULATION_DATASET_ID, `${planSnapshot.simulation?.id}`, 'PUSH');
                       $simulationDatasetId = planSnapshot.simulation?.id;
 
-                      viewTogglePanel({ state: true, type: 'left', update: { leftComponentTop: 'SimulationPanel' } });
+                      viewRevealPanel({ leftComponentTop: 'SimulationPanel' }, 'left');
                     } else {
                       removeQueryParam(SearchParameters.SIMULATION_DATASET_ID);
                       $simulationDatasetId = -1;

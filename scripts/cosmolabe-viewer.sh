@@ -12,7 +12,7 @@
 #                                          # afterwards to record the new integrity
 set -eu
 COSMOLABE_REPO=${COSMOLABE_REPO:-https://github.com/AaronPlave/cosmolabe.git}
-COSMOLABE_COMMIT=b4e96f093c03a7623159c87bf9784c05f9c45cf9
+COSMOLABE_COMMIT=00924e8d9d3ff6ce584dba0283d343f61c2bc271
 here=$(cd "$(dirname "$0")/.." && pwd)
 # Always a dedicated clone at the pinned commit: a developer's own checkout is only a clone source.
 src=$here/.cosmolabe/$COSMOLABE_COMMIT

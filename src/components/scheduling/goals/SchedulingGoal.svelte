@@ -4,6 +4,7 @@
   import { base } from '$app/paths';
   import { ContextMenu } from '@nasa-jpl/stellar-svelte';
   import { ChevronDown, ChevronUp } from 'lucide-svelte';
+  import { isEqual } from 'lodash-es';
   import { createEventDispatcher } from 'svelte';
   import { SearchParameters } from '../../../enums/searchParameters';
   import type { Argument, ArgumentsMap, FormParameter } from '../../../types/parameter';
@@ -45,6 +46,7 @@
   let schedulingGoalInput: HTMLInputElement;
   let simulateGoal: boolean = false;
   let formParameters: FormParameter[] = [];
+  let formParameterValues: Record<string, unknown> = {}; // value each form parameter was last built with
   let version:
     | Pick<SchedulingGoalDefinition, 'type' | 'revision' | 'analyses' | 'parameter_schema' | 'uploaded_jar_id'>
     | undefined = undefined;
@@ -70,6 +72,7 @@
         structOrderMap.set(structKey, index);
       });
 
+      const builtValues: Record<string, unknown> = {};
       formParameters = Object.entries(items).map(([name, subschema], i) => {
         // Use undefined instead of empty string so getArgument can fall back to defaultArg
         const arg =
@@ -78,6 +81,13 @@
             : undefined;
         const defaultArg = defaultArguments[name];
         const { value, valueSource } = getArgument(arg, schema, undefined, defaultArg);
+        builtValues[name] = { value, valueSource };
+        // Keep the existing form parameter when its value didn't change, so a spec refresh (e.g. after saving
+        // another field) doesn't reset an input the user is still typing in.
+        const existing = formParameters.find(p => p.name === name);
+        if (existing && existing.schema === subschema && isEqual(formParameterValues[name], builtValues[name])) {
+          return existing;
+        }
         return {
           errors: null,
           name,
@@ -88,6 +98,7 @@
           valueSource,
         };
       });
+      formParameterValues = builtValues;
     } else {
       formParameters = [];
     }

@@ -1,10 +1,13 @@
+import { get } from 'svelte/store';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Errors from '../stores/console';
+import { schedulingGoalSpecifications, schedulingPlanSpecification } from '../stores/scheduling';
 import { mockUser } from '../tests/mocks/user/mockUser';
 import type { DerivationGroupInsertInput } from '../types/external-source';
 import type { Model } from '../types/model';
 import type { ArgumentsMap, ParametersMap } from '../types/parameter';
 import type { Plan } from '../types/plan';
+import type { SchedulingGoalPlanSpecification, SchedulingPlanSpecification } from '../types/scheduling';
 import type { SequenceTemplate } from '../types/sequence-template';
 import type { ActivityLayerFilter } from '../types/timeline';
 import effects, { replacePaths } from './effects';
@@ -32,6 +35,39 @@ describe('Handle modal and requests in effects', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     catchErrorSpy.mockReset();
+  });
+
+  describe('updateSchedulingGoalPlanSpecification', () => {
+    it('applies saved arguments to the local spec so the next edit merges into them', async () => {
+      // Regression: the goal form merges each edit into the stored arguments; the subscription refreshes them
+      // late, so a second edit (e.g. longitude after latitude) used to revert the first one.
+      const goal = {
+        arguments: { latitude: -89.7, longitude: 0 },
+        enabled: true,
+        goal_id: 1,
+        goal_invocation_id: 7,
+        goal_metadata: null,
+        goal_revision: 1,
+        priority: 0,
+        simulate_after: false,
+        specification_id: 3,
+      } as SchedulingGoalPlanSpecification;
+      schedulingPlanSpecification.updateValue(() => ({ goals: [goal] }) as SchedulingPlanSpecification);
+      vi.spyOn(Requests, 'reqHasura').mockResolvedValue({
+        updateSchedulingGoalPlanSpecification: { enabled: true, goal_revision: 1 },
+      });
+
+      const { goal_metadata: _, ...setInput } = goal;
+      await effects.updateSchedulingGoalPlanSpecification(
+        { id: 1, owner: 'test' } as Plan,
+        { ...setInput, arguments: { latitude: -89.6, longitude: 0 } },
+        { items: { latitude: { type: 'real' }, longitude: { type: 'real' } }, type: 'struct' },
+        [],
+        mockUser,
+      );
+
+      expect(get(schedulingGoalSpecifications)[0].arguments).toEqual({ latitude: -89.6, longitude: 0 });
+    });
   });
 
   describe('applyPresetToActivity', () => {

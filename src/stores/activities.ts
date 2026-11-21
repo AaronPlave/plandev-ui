@@ -10,7 +10,7 @@ import { plan, planEndTimeDoy, planId, planStartTimeYmd } from './plan';
 import { planSnapshotActivityDirectives, planSnapshotId } from './planSnapshots';
 import { selectedSpanId, spansMap, spanUtilityMaps } from './simulation';
 import { gqlSubscribable } from './subscribable';
-import { viewUpdateGrid } from './views';
+import { viewRevealPanel } from './views';
 
 /* Subscriptions. */
 
@@ -120,19 +120,19 @@ export function selectActivity(
     selectedSpanId.set(null);
     selectedActivityDirectiveId.set(activityDirectiveId);
     if (switchToTable) {
-      viewUpdateGrid({ middleComponentBottom: 'ActivityDirectivesTablePanel' });
+      viewRevealPanel({ middleComponentBottom: 'ActivityDirectivesTablePanel' });
     }
     if (switchToPanel) {
-      viewUpdateGrid({ rightComponentTop: 'ActivityFormPanel' });
+      viewRevealPanel({ rightComponentTop: 'ActivityFormPanel' });
     }
   } else if (activityDirectiveId === null && spanId !== null) {
     selectedSpanId.set(spanId);
     selectedActivityDirectiveId.set(null);
     if (switchToTable) {
-      viewUpdateGrid({ middleComponentBottom: 'ActivitySpansTablePanel' });
+      viewRevealPanel({ middleComponentBottom: 'ActivitySpansTablePanel' });
     }
     if (switchToPanel) {
-      viewUpdateGrid({ rightComponentTop: 'ActivityFormPanel' });
+      viewRevealPanel({ rightComponentTop: 'ActivityFormPanel' });
     }
   } else {
     selectedSpanId.set(null);

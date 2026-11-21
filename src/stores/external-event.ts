@@ -14,7 +14,7 @@ import { convertUTCToMs, getIntervalInMs, getUnixEpochTime } from '../utilities/
 import { selectedPlanDerivationGroupNames, sourcesUsingExternalEventTypes } from './external-source';
 import { plan } from './plan';
 import { gqlSubscribable } from './subscribable';
-import { viewUpdateGrid } from './views';
+import { viewRevealPanel } from './views';
 
 const planStart = derived(plan, $plan =>
   new Date(getUnixEpochTime($plan?.start_time_doy ?? '1970-001T00:00:00')).toISOString(),
@@ -110,10 +110,10 @@ export function selectExternalEvent(
   if (externalEventId !== null) {
     selectedExternalEventId.set(externalEventId);
     if (switchToTable) {
-      viewUpdateGrid({ middleComponentBottom: 'ExternalEventsTablePanel' });
+      viewRevealPanel({ middleComponentBottom: 'ExternalEventsTablePanel' });
     }
     if (switchToPanel) {
-      viewUpdateGrid({ rightComponentTop: 'ExternalEventFormPanel' });
+      viewRevealPanel({ rightComponentTop: 'ExternalEventFormPanel' });
     }
   } else {
     selectedExternalEventId.set(null);

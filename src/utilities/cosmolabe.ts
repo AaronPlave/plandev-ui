@@ -56,10 +56,39 @@ export type CosmolabeMissionState = {
   vehicles: string[];
 };
 
+/**
+ * Instruments whose activity is a simulation resource: per vehicle, the scene's Sensor body and the resource, and
+ * how one resource value reads as a state. The viewer draws a sensor's FOV while it is acquiring (or inspected).
+ */
+export type CosmolabeSensors = {
+  resource(vehicle: string): string;
+  sensor(vehicle: string): string;
+  state(value: unknown): 'acquiring' | 'off' | 'standby';
+};
+
+/**
+ * A goal whose destination is a surface point: which goal and which of its arguments take the point, in what
+ * coordinates. A point picked in the 3D view fills them (after the operator asks); scheduling decides.
+ */
+export type CosmolabeDestination = {
+  /** Goal argument names for planetocentric latitude and east longitude, degrees. */
+  arguments: { latitude: string; longitude: string };
+  body: string;
+  conventions: string;
+  /** The goal's coordinate convention, for drawing the destination in the scene. */
+  coordinates: Record<string, unknown>;
+  /** The body-fixed frame the goal's coordinates are in; a point in another frame is refused. */
+  frame: string;
+  goal: string;
+  label: string;
+};
+
 /** The mission adapter module (missions/<key>/adapter.js); see plandev-examples/integrations/cosmolabe. */
 export type CosmolabeAdapter = {
   body: string;
+  destination?: CosmolabeDestination;
   missionState?: CosmolabeMissionState;
+  sensors?: CosmolabeSensors;
   /** Absent: the mission takes no proposals from the 3D view. */
   targets?: {
     body: string;
@@ -88,12 +117,23 @@ export type CosmolabeAdapter = {
   observations?: {
     body: string;
     legend?: { color: string; text: string }[];
-    of(span: Span, ctx: { datasetId: number; planId: number }): CosmolabeObservation[];
+    /**
+     * `ctx.parentOf` / `ctx.childrenOf`: the simulation's span hierarchy, so a child span (e.g. one exposure of a
+     * survey) can return its parent's observation focused on its own footprint.
+     */
+    of(
+      span: Span,
+      ctx: { datasetId: number; planId: number; childrenOf(span: Span): Span[]; parentOf(span: Span): Span | null },
+    ): CosmolabeObservation[];
   };
 };
 
 /** One mission-evaluated observation for the scene, with the details shown when its parts are picked. */
 export type CosmolabeObservation = {
+  /** The footprint the selected span is (when the selection is one exposure). */
+  focus?: number | null;
+  /** Per footprint, the simulated span of that exposure (a child activity), when there is one. */
+  footprintSpans?: (number | null)[];
   /** Per footprint (same order as the spec's polygons): a title, its exposure time (ISO UTC), and rows to show. */
   footprints: { rows: [string, string][]; time: string; title: string }[];
   /** The requested region (survey target), when the spec has one. */
@@ -397,7 +437,11 @@ export function stateSamples(
   let gaps = 0;
   segments.forEach((seg, i) => {
     const s = seg.value == null ? null : ms.sample(seg.value);
-    const ok = s && [...s.position, ...s.velocity, ...s.quaternion].every(Number.isFinite) && s.position.length === 3 && s.quaternion.length === 4;
+    const ok =
+      s &&
+      [...s.position, ...s.velocity, ...s.quaternion].every(Number.isFinite) &&
+      s.position.length === 3 &&
+      s.quaternion.length === 4;
     if (!s || !ok) {
       gaps++;
       return;
@@ -452,4 +496,70 @@ export function simulatedStateSource(
         : adapter.supply({ samples: samples.attitude, window }, provenance('attitude'));
     },
   };
+}
+
+/**
+ * A discrete resource profile (segments: start and value, null for a gap) as sensor state intervals up to `endMs`.
+ * A gap is no interval: the viewer then reports the sensor's state as unknown, never as acquiring.
+ */
+export function sensorIntervals(
+  segments: { startMs: number; value: unknown }[],
+  endMs: number,
+  state: CosmolabeSensors['state'],
+): { end: string; start: string; state: 'acquiring' | 'off' | 'standby' }[] {
+  return segments.flatMap((seg, i) => {
+    const next = segments[i + 1]?.startMs ?? endMs;
+    return seg.value === null || seg.value === undefined || !(next > seg.startMs)
+      ? []
+      : [{ end: iso(next), start: iso(seg.startMs), state: state(seg.value) }];
+  });
+}
+
+/** Planetocentric latitude / east longitude as the operator copies them: "lat, lon" to 5 decimals (≈0.3 m on the Moon). */
+export function formatLatLon(p: { latDeg: number; lonDeg: number }): string {
+  return `${p.latDeg.toFixed(5)}, ${p.lonDeg.toFixed(5)}`;
+}
+
+/**
+ * Why a picked point cannot be a destination: another body, or a body-fixed frame other than the goal's (the
+ * viewer's probe reports its frame; coordinates in a different one would silently mean another place).
+ */
+export function destinationProblems(
+  d: CosmolabeDestination,
+  p: { body: string; frame: string; latDeg: number; lonDeg: number },
+): string[] {
+  const out: string[] = [];
+  if (p.body !== d.body) {
+    out.push(`The ${d.label.toLowerCase()} must be on ${d.body}, not ${p.body}.`);
+  }
+  if (p.frame !== d.frame) {
+    out.push(`The point is in ${p.frame}; ${d.goal} takes ${d.frame} coordinates.`);
+  }
+  if (!(Math.abs(p.latDeg) <= 90) || !(Math.abs(p.lonDeg) <= 180)) {
+    out.push('Latitude/longitude out of range.');
+  }
+  return out;
+}
+
+/** The goal's arguments with the destination replaced; every other argument kept. */
+export function withDestination(
+  d: CosmolabeDestination,
+  args: unknown,
+  p: { latDeg: number; lonDeg: number },
+): Record<string, unknown> {
+  return {
+    ...((args as Record<string, unknown>) ?? {}),
+    [d.arguments.latitude]: +p.latDeg.toFixed(6),
+    [d.arguments.longitude]: +p.lonDeg.toFixed(6),
+  };
+}
+
+/** The destination currently in the goal's arguments, or null. */
+export function destinationOf(d: CosmolabeDestination, args: unknown): { latDeg: number; lonDeg: number } | null {
+  const a = (args as Record<string, unknown>) ?? {};
+  const latDeg = Number(a[d.arguments.latitude]),
+    lonDeg = Number(a[d.arguments.longitude]);
+  return a[d.arguments.latitude] != null && Number.isFinite(latDeg) && Number.isFinite(lonDeg)
+    ? { latDeg, lonDeg }
+    : null;
 }

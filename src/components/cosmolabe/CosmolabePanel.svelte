@@ -6,6 +6,7 @@
   import { onDestroy } from 'svelte';
   import { activityDirectivesMap, selectActivity, selectedActivityDirectiveId } from '../../stores/activities';
   import { plan, planEndTimeMs, planRevision, planStartTimeMs, timeCursorMs, viewTimeRange } from '../../stores/plan';
+  import { expandedGridSection } from '../../stores/views';
   import {
     latestSchedulingRequest,
     schedulingGoalSpecifications,
@@ -25,17 +26,22 @@
   import type { ViewGridSection } from '../../types/view';
   import {
     activityId,
+    destinationOf,
+    destinationProblems,
     findPasses,
     fitToPlan,
+    formatLatLon,
     planetocentric,
     resolveMission,
     selectionAction,
+    sensorIntervals,
     simulatedStateSource,
     spanIdOf,
     stateSamples,
     spansToActivities,
     targetOutcome,
     windowProblems,
+    withDestination,
     type CosmolabeAdapter,
     type CosmolabeMission,
     type CosmolabeObservation,
@@ -93,6 +99,12 @@
   /** What the operator last picked among them in the scene. */
   let observationPick: HostObservationPick | null = null;
   let vehicleState = '';
+  /** The operator's Timeline toggle; null follows the panel (shown while expanded). */
+  let timelineChoice: boolean | null = null;
+  /** "Show FOV": instrument FOVs drawn even while their sensor is not acquiring. */
+  let showIdleFov = false;
+  let destinationBusy = false;
+  let destinationNote = '';
 
   let searchFrom = '';
   let searchTo = '';
@@ -114,6 +126,19 @@
 
   // ── PlanDev → Cosmolabe ────────────────────────────────────────────────────────────────
   $: ready = status === 'ready' && viewer !== null;
+  // Cosmolabe's own timeline: hidden in the compact panel (PlanDev's timeline is beside it), shown when expanded,
+  // or as the operator toggles it. Its window follows PlanDev's view window; the cursor is shared both ways.
+  $: expanded = $expandedGridSection === gridSection;
+  $: showTimeline = timelineChoice ?? expanded;
+  $: if (ready) {
+    viewer?.setUi({ timeline: showTimeline });
+  }
+  $: if (ready && showTimeline) {
+    pushTimeWindow($viewTimeRange);
+  }
+  $: if (ready) {
+    viewer?.sensors.showIdle(showIdleFov);
+  }
   $: if (ready) {
     pushTime($timeCursorMs ?? $planStartTimeMs);
   }
@@ -151,9 +176,43 @@
       ? `Showing simulation ${$simulationDataset.id} of plan revision ${$simulationDataset.plan_revision}; the plan has changed since (revision ${$planRevision}). Simulate to see the current flights.`
       : '';
   $: staged = adapter && goalSpec ? safeRead(adapter, goalSpec.arguments) : [];
+  // A goal that takes one surface destination: its current value, drawn in the scene like staged targets.
+  $: destinationGoal = adapter?.destination
+    ? ($schedulingGoalSpecifications.find(spec => spec.goal_metadata?.name === adapter?.destination?.goal) ?? null)
+    : null;
+  $: destination =
+    adapter?.destination && destinationGoal ? destinationOf(adapter.destination, destinationGoal.arguments) : null;
   $: if (ready) {
-    pushTargets(staged);
+    pushTargets(
+      adapter?.destination
+        ? destination
+          ? [
+              {
+                id: 'destination',
+                name: `${adapter.destination.label} (${adapter.destination.goal} goal)`,
+                ...destination,
+                window: null,
+              },
+            ]
+          : []
+        : staged,
+    );
   }
+  /** The probed point as a destination candidate: planetocentric, from the probe's body-fixed point. */
+  $: pickedPoint = probe
+    ? {
+        ...planetocentric(probe.point.bodyFixedPositionKm),
+        body: probe.point.bodyName,
+        frame: probe.point.frame ?? 'unknown frame',
+      }
+    : null;
+  $: pickedProblems =
+    adapter?.destination && pickedPoint
+      ? [
+          ...destinationProblems(adapter.destination, pickedPoint),
+          ...(destinationGoal ? [] : [`This plan has no ${adapter.destination.goal} goal. Add it in Scheduling.`]),
+        ]
+      : [];
 
   // ── Cosmolabe → PlanDev: a proposal ──────────────────────────────────────────────────────
   $: planBounds = { endMs: $planEndTimeMs, startMs: $planStartTimeMs };
@@ -310,6 +369,12 @@
       }),
       v.observations.onSelect(pick => {
         observationPick = pick;
+        // A footprint that is one exposure's span selects that span in PlanDev (its parent stays its context).
+        const o = shownObservations.find(x => x.spec.name === pick.name);
+        const spanId = pick.footprint !== null ? o?.footprintSpans?.[pick.footprint] : null;
+        if (spanId != null && spanId !== selectedSpan && $spansMap?.[spanId]) {
+          selectActivity(null, spanId, false);
+        }
       }),
       c.on('probe', () => {
         probe = c.getProbePoint?.() ?? null;
@@ -457,11 +522,11 @@
   /** Targets in the goal's arguments, drawn in the scene as read-only context. */
   function pushTargets(list: typeof staged) {
     const c = viewer?.control;
-    if (!c || !adapter?.targets) {
+    const where = adapter?.targets ?? adapter?.destination;
+    if (!c || !where) {
       return;
     }
-    targetLayer ??=
-      c.createAnnotationLayer?.(adapter.targets.body, TARGET_LAYER, adapter.targets.coordinates as never) || null;
+    targetLayer ??= c.createAnnotationLayer?.(where.body, TARGET_LAYER, where.coordinates as never) || null;
     if (!targetLayer) {
       return;
     }
@@ -489,11 +554,39 @@
       return;
     }
     try {
-      shownObservations = span && datasetId >= 0 ? obs.of(span, { datasetId, planId: $plan.id }) : [];
-      viewer.observations.replace(
-        OWNER,
-        shownObservations.map(o => o.spec),
-      );
+      const parentOf = (x: Span) => (x.parent_id != null ? ($spansMap?.[x.parent_id] ?? null) : null);
+      const childrenOf = (x: Span) =>
+        ($spanUtilityMaps.spanIdToChildIdsMap[x.span_id] ?? [])
+          .map(id => $spansMap?.[id])
+          .filter((c): c is Span => !!c);
+      const next = span && datasetId >= 0 ? obs.of(span, { childrenOf, datasetId, parentOf, planId: $plan.id }) : [];
+      // Selecting another exposure of the same survey keeps the scene's observation (no rebuild), only the focus moves.
+      const key = (list: CosmolabeObservation[]) =>
+        list.map(o => `${o.spec.name}|${o.spec.provenance?.id ?? ''}`).join(',');
+      const same = key(next) === key(shownObservations);
+      shownObservations = next;
+      if (!same) {
+        viewer.observations.replace(
+          OWNER,
+          shownObservations.map(o => o.spec),
+        );
+      }
+      const focused = shownObservations.find(o => o.focus != null);
+      if (focused) {
+        const pick = {
+          et: null,
+          footprint: focused.focus ?? null,
+          name: focused.spec.name,
+          owner: OWNER,
+          region: false,
+        };
+        viewer.observations.select(pick);
+        observationPick = pick;
+        return;
+      }
+      if (same && observationPick) {
+        viewer.observations.select(null);
+      }
     } catch (e) {
       // Context only: the scene keeps working without it, and says nothing it cannot show.
       shownObservations = [];
@@ -541,6 +634,7 @@
     // Whatever is shown belongs to the previous selection: it goes before anything is fetched, so a vehicle is
     // never drawn from one simulation while another is selected (nor kept when this one's fetch fails).
     ms.vehicles.forEach(id => v.missionState.removeSource(id));
+    v.sensors.remove(OWNER);
     if (!ds || ds.status !== 'success' || !ds.simulation_start_time || !ds.simulation_end_time) {
       // No finished simulation: no vehicle is anywhere (an unsimulated flight is not animated).
       stateMessage = ds
@@ -583,6 +677,46 @@
     stateMessage = problems.length
       ? `Not shown — drone states from simulation ${ds.id} could not be loaded (${problems.join('; ')}).`
       : '';
+    pushSensors(ds, startMs, span.endMs, request, v);
+  }
+
+  /** Instrument activity from the same simulation (e.g. camera on/off): the scene draws a FOV while acquiring. */
+  async function pushSensors(
+    ds: SimulationDataset,
+    startMs: number,
+    endMs: number,
+    request: number,
+    v: CosmolabeViewer,
+  ) {
+    const s = adapter?.sensors;
+    const vehicles = adapter?.missionState?.vehicles ?? [];
+    if (!s || !vehicles.length) {
+      return;
+    }
+    const results = await Promise.allSettled(
+      vehicles.map(id => effects.getProfileSince(ds.dataset_id, s.resource(id), '-00:00:01', user)),
+    );
+    if (request !== stateRequest || viewer !== v) {
+      return;
+    }
+    // A vehicle whose resource could not be read gets no state: the viewer says "unknown", never "acquiring".
+    const specs = vehicles.flatMap((id, i) => {
+      const r = results[i];
+      const segments =
+        r.status === 'fulfilled'
+          ? (r.value?.profile_segments ?? []).map(seg => ({
+              startMs: startMs + getIntervalInMs(seg.start_offset),
+              value: seg.is_gap ? null : seg.dynamics,
+            }))
+          : [];
+      const intervals = sensorIntervals(segments, endMs, s.state);
+      return intervals.length ? [{ intervals, sensor: s.sensor(id) }] : [];
+    });
+    try {
+      v.sensors.replace(OWNER, specs);
+    } catch (e) {
+      console.warn('[3D Mission View] sensor states could not be shown:', e);
+    }
   }
 
   function safeRead(a: CosmolabeAdapter, args: unknown) {
@@ -590,6 +724,41 @@
       return a.targets?.read(args) ?? [];
     } catch {
       return [];
+    }
+  }
+
+  /** PlanDev's view window onto Cosmolabe's timeline (no clock change). */
+  function pushTimeWindow(range: { end: number; start: number }) {
+    if (viewer && Number.isFinite(range.start) && range.end > range.start) {
+      viewer.setTimeWindow({ end: new Date(range.end).toISOString(), start: new Date(range.start).toISOString() });
+    }
+  }
+
+  async function copyPoint() {
+    if (pickedPoint) {
+      await navigator.clipboard?.writeText(formatLatLon(pickedPoint)).catch(() => {});
+      destinationNote = `Copied “${formatLatLon(pickedPoint)}” (planetocentric lat, east lon, ${pickedPoint.frame}).`;
+    }
+  }
+
+  /** Fill the goal's destination arguments with the picked point. Nothing is scheduled: the operator runs Schedule. */
+  async function useAsDestination() {
+    const d = adapter?.destination;
+    if (!d || !destinationGoal?.goal_metadata || !pickedPoint || !$plan || pickedProblems.length) {
+      return;
+    }
+    destinationBusy = true;
+    try {
+      await effects.updateSchedulingGoalPlanSpecification(
+        $plan,
+        { ...destinationGoal, arguments: withDestination(d, destinationGoal.arguments, pickedPoint) },
+        destinationGoal.goal_metadata.versions[0]?.parameter_schema as never,
+        [],
+        user,
+      );
+      destinationNote = `${d.goal} ${d.arguments.latitude}/${d.arguments.longitude} set to ${formatLatLon(pickedPoint)}. Run Schedule to evaluate it.`;
+    } finally {
+      destinationBusy = false;
     }
   }
 
@@ -767,6 +936,22 @@
     <span class="truncate text-xs text-muted-foreground" title={mission?.catalogUrl}>
       {mission?.label ?? ''}
     </span>
+    {#if ready}
+      <span class="cosmolabe-toggles">
+        <label
+          title="Cosmolabe's own timeline (activities, events, profiles). Its window follows PlanDev's; the time cursor is shared."
+        >
+          <input type="checkbox" checked={showTimeline} on:change={e => (timelineChoice = e.currentTarget.checked)} />
+          Timeline
+        </label>
+        {#if adapter?.sensors}
+          <label title="Draw instrument fields of view even while the simulation says the instrument is not acquiring.">
+            <input type="checkbox" bind:checked={showIdleFov} />
+            Show FOV
+          </label>
+        {/if}
+      </span>
+    {/if}
   </svelte:fragment>
 
   <svelte:fragment slot="body">
@@ -801,12 +986,49 @@
               {#each adapter?.observations?.legend ?? [] as item}
                 <span class="legend"><i style:background={item.color} />{item.text}</span>
               {/each}
-              <span class="muted">Mission evaluation (read-only). Click a footprint or the target in 3D for details.</span>
+              <span class="muted"
+                >Mission evaluation (read-only). Click a footprint or the target in 3D for details.</span
+              >
             </div>
             {#each shownObservations as o}
               {#if o.region}<div class="muted">{o.region.title}</div>{/if}
             {/each}
           {/if}
+        </div>
+      {/if}
+      {#if ready && adapter?.destination}
+        <div class="cosmolabe-proposal" data-testid="cosmolabe-destination">
+          <div class="step">
+            <b>{adapter.destination.label}</b>
+            {#if destination}
+              <span>{formatLatLon(destination)}</span>
+              <span class="muted">in the {adapter.destination.goal} goal</span>
+            {:else}
+              <span class="muted"
+                >{destinationGoal ? 'not set in the goal' : `no ${adapter.destination.goal} goal in this plan`}</span
+              >
+            {/if}
+          </div>
+          <div class="step">
+            <b>Picked point</b>
+            {#if pickedPoint}
+              <span data-testid="cosmolabe-picked-point">{formatLatLon(pickedPoint)}</span>
+              <span class="muted">planetocentric lat, east lon (°), {pickedPoint.frame}</span>
+              <button class="link" on:click={copyPoint}>Copy</button>
+              <button
+                class="st-button secondary"
+                disabled={destinationBusy || pickedProblems.length > 0}
+                on:click={useAsDestination}
+              >
+                Use as {adapter.destination.label.toLowerCase()}
+              </button>
+            {:else}
+              <span class="muted">Pick a point on {adapter.destination.body} with the point probe in the 3D view.</span>
+            {/if}
+          </div>
+          {#each pickedProblems as p}<div class="warn">{p}</div>{/each}
+          {#if destinationNote}<div class="muted">{destinationNote}</div>{/if}
+          <div class="muted">{adapter.destination.conventions}. Nothing is scheduled until you run Schedule.</div>
         </div>
       {/if}
       {#if ready && adapter?.targets}
@@ -1037,6 +1259,18 @@
     display: inline-block;
     height: 3px;
     width: 14px;
+  }
+  .cosmolabe-toggles {
+    display: inline-flex;
+    font-size: 12px;
+    gap: 8px;
+    margin-left: auto;
+    white-space: nowrap;
+  }
+  .cosmolabe-toggles label {
+    align-items: center;
+    display: inline-flex;
+    gap: 3px;
   }
   .cosmolabe-proposal {
     border-top: 1px solid var(--st-gray-20, #ddd);

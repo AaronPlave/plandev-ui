@@ -8,7 +8,7 @@ import {
 import jsonSchema from '../schemas';
 import type { ExternalEventType } from '../types/external-event';
 import type { ResourceType } from '../types/simulation';
-import type { View, ViewDefinition, ViewGridColumns, ViewGridRows } from '../types/view';
+import type { View, ViewDefinition, ViewGrid, ViewGridColumns, ViewGridComponent, ViewGridRows } from '../types/view';
 import {
   createRow,
   createTimeline,
@@ -699,4 +699,46 @@ export function migrateViewDefinitionV2toV3(viewDefinition: ViewDefinition) {
     },
     version: 3,
   };
+}
+
+/**
+ * Panels that only show the current selection/time (detail views PlanDev opens on its own).
+ * An implicit reveal may swap one of these for another; every other panel is the user's and is never displaced.
+ */
+const IMPLICITLY_REPLACEABLE_PANELS: ViewGridComponent[] = [
+  'ActivityDirectivesTablePanel',
+  'ActivityFormPanel',
+  'ActivitySpansTablePanel',
+  'ExternalEventFormPanel',
+  'ExternalEventsTablePanel',
+  'PlanMetadataPanel',
+  'TimeCursorPanel',
+  'TimelineEditorPanel',
+];
+
+/**
+ * Decides how an implicit panel reveal (a side effect of selecting/inspecting something) applies to the grid:
+ * 'none' when the component is already visible or its slot shows a user panel,
+ * 'swap' to replace a replaceable panel in a visible slot in place, 'show' when the target slot is hidden.
+ */
+export function getGridReveal(grid: ViewGrid, update: Partial<ViewGrid>): 'none' | 'show' | 'swap' {
+  const slotVisible: Partial<Record<keyof ViewGrid, boolean>> = {
+    leftComponentBottom: !grid.leftHidden && grid.leftSplit,
+    leftComponentTop: !grid.leftHidden,
+    middleComponentBottom: grid.middleSplit,
+    rightComponentBottom: !grid.rightHidden && grid.rightSplit,
+    rightComponentTop: !grid.rightHidden,
+  };
+  const slots = Object.keys(slotVisible) as (keyof ViewGrid)[];
+  const visibleComponents = slots.filter(slot => slotVisible[slot]).map(slot => grid[slot]);
+  const targets = slots.filter(slot => update[slot] !== undefined);
+
+  if (targets.every(slot => visibleComponents.includes(update[slot] as ViewGridComponent))) {
+    return 'none';
+  }
+  const visibleTargets = targets.filter(slot => slotVisible[slot]);
+  if (visibleTargets.some(slot => !IMPLICITLY_REPLACEABLE_PANELS.includes(grid[slot] as ViewGridComponent))) {
+    return 'none';
+  }
+  return visibleTargets.length ? 'swap' : 'show';
 }

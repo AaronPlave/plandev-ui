@@ -10,7 +10,7 @@
   import { plan, planModelActivityTypes } from '../../stores/plan';
   import { plugins } from '../../stores/plugins';
   import { initialSpansLoading, selectedSpanId, spans } from '../../stores/simulation';
-  import { view, viewTogglePanel, viewUpdateActivitySpansTable } from '../../stores/views';
+  import { view, viewRevealPanel, viewUpdateActivitySpansTable } from '../../stores/views';
   import type { Span } from '../../types/simulation';
   import type { AutoSizeColumns, ViewGridSection, ViewTable } from '../../types/view';
   import { filterEmpty } from '../../utilities/generic';
@@ -299,7 +299,7 @@
   }
 
   function onRowDoubleClicked() {
-    viewTogglePanel({ state: true, type: 'right', update: { rightComponentTop: 'ActivityFormPanel' } });
+    viewRevealPanel({ rightComponentTop: 'ActivityFormPanel' }, 'right');
   }
 
   function onShowHideAllColumns({ detail: { hide } }: CustomEvent<{ hide: boolean }>) {

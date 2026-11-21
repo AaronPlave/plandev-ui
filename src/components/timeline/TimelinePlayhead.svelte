@@ -37,7 +37,7 @@
   const MERGED_WIDTH = 226;
 
   const dispatch = createEventDispatcher<{
-    openInspector: void;
+    openInspector: { explicit?: boolean } | undefined;
     updateVerticalGuides: VerticalGuide[];
     viewTimeRangeChanged: TimeRange;
   }>();
@@ -544,7 +544,9 @@
 </div>
 
 <ContextMenuInternal bind:this={contextMenuComponent}>
-  <ContextMenu.Item size="sm" on:click={() => dispatch('openInspector')}>Open Time Cursor Inspector</ContextMenu.Item>
+  <ContextMenu.Item size="sm" on:click={() => dispatch('openInspector', { explicit: true })}
+    >Open Time Cursor Inspector</ContextMenu.Item
+  >
   <ContextMenu.Item size="sm" on:click={toggleCompare}>
     {comparing ? 'Exit Comparison Mode' : 'Compare With Another Time'}
   </ContextMenu.Item>

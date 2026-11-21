@@ -2,7 +2,7 @@
 
 <script lang="ts">
   import { selectedExternalEventId, selectedExternalEvents, selectExternalEvent } from '../../stores/external-event';
-  import { viewTogglePanel } from '../../stores/views';
+  import { viewRevealPanel } from '../../stores/views';
   import type { TRowData } from '../../types/data-grid';
   import type { ExternalEvent } from '../../types/external-event';
   import type { ViewGridSection } from '../../types/view';
@@ -16,7 +16,7 @@
   let filterExpression: string = '';
 
   function onRowDoubleClicked() {
-    viewTogglePanel({ state: true, type: 'right', update: { rightComponentTop: 'ExternalEventFormPanel' } });
+    viewRevealPanel({ rightComponentTop: 'ExternalEventFormPanel' }, 'right');
   }
 
   function onSelectionChanged(e: CustomEvent<TRowData[]>) {

@@ -30,6 +30,7 @@
     timelineLockStatus,
     view,
     viewSetSelectedRow,
+    viewRevealPanel,
     viewTogglePanel,
     viewUpdateRow,
     viewUpdateTimeline,
@@ -88,9 +89,9 @@
       detail: { selectedActivityDirectiveId, selectedSpanId, selectedExternalEventId },
     } = event;
     if (selectedActivityDirectiveId !== undefined || selectedSpanId !== undefined) {
-      viewTogglePanel({ state: true, type: 'right', update: { rightComponentTop: 'ActivityFormPanel' } });
+      viewRevealPanel({ rightComponentTop: 'ActivityFormPanel' }, 'right');
     } else if (selectedExternalEventId !== undefined) {
-      viewTogglePanel({ state: true, type: 'right', update: { rightComponentTop: 'ExternalEventFormPanel' } });
+      viewRevealPanel({ rightComponentTop: 'ExternalEventFormPanel' }, 'right');
     }
   }
 
@@ -142,8 +143,13 @@
     viewSetSelectedRow(row.id);
   }
 
-  function openTimeCursorPanel() {
-    viewTogglePanel({ state: true, type: 'right', update: { rightComponentTop: 'TimeCursorPanel' } });
+  function openTimeCursorPanel(event: CustomEvent<{ explicit?: boolean } | undefined>) {
+    const update = { rightComponentTop: 'TimeCursorPanel' } as const;
+    if (event.detail?.explicit) {
+      viewTogglePanel({ state: true, type: 'right', update });
+    } else {
+      viewRevealPanel(update, 'right');
+    }
   }
 
   function onEditRow(event: CustomEvent<Row>) {

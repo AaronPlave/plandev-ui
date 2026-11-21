@@ -54,6 +54,7 @@ import {
   planModelActivityTypes as planModelActivityTypesStore,
 } from '../stores/plan';
 import {
+  schedulingPlanSpecification as schedulingPlanSpecificationStore,
   schedulingRequests as schedulingRequestsStore,
   selectedSchedulingSpecId as selectedSpecIdStore,
 } from '../stores/scheduling';
@@ -69,6 +70,7 @@ import {
   selectedSpanId as selectedSpanIdStore,
   simulationDatasetId as simulationDatasetIdStore,
   simulationDataset as simulationDatasetStore,
+  simulation as simulationStore,
   spansMap,
   spanUtilityMaps,
 } from '../stores/simulation';
@@ -8111,6 +8113,26 @@ const effects = {
       );
 
       if (updateSchedulingGoalPlanSpecification !== null) {
+        // Apply the saved values locally now. The spec subscription lags behind (live-query polling), and the
+        // goal form merges the next edit into the stored arguments, so a stale copy would revert this edit.
+        schedulingPlanSpecificationStore.updateValue(spec =>
+          spec?.goals
+            ? {
+                ...spec,
+                goals: spec.goals.map(goal =>
+                  goal.goal_invocation_id === goal_invocation_id
+                    ? {
+                        ...goal,
+                        arguments: goalArguments,
+                        enabled,
+                        goal_revision: revision,
+                        simulate_after: simulateAfter,
+                      }
+                    : goal,
+                ),
+              }
+            : spec,
+        );
         showSuccessToast(`Scheduling Goal Plan Specification Updated Successfully`);
         logMessage('log', `Updated scheduling goal plan specification for plan "${plan.name}" (ID=${plan.id}).`);
       } else {
@@ -8236,12 +8258,13 @@ const effects = {
 
       const generatedFilenames = await effects.uploadFiles(newFiles, user);
 
+      const simulationArguments = replacePaths(modelParameters, simulationSetInput.arguments, generatedFilenames);
       const data = await reqHasura<Pick<Simulation, 'id'>>(
         gql.UPDATE_SIMULATION,
         {
           id: simulationSetInput.id,
           simulation: {
-            arguments: replacePaths(modelParameters, simulationSetInput.arguments, generatedFilenames),
+            arguments: simulationArguments,
             simulation_end_time: simulationSetInput?.simulation_end_time ?? null,
             simulation_start_time: simulationSetInput?.simulation_start_time ?? null,
             simulation_template_id: simulationSetInput?.template?.id ?? null,
@@ -8250,6 +8273,10 @@ const effects = {
         user,
       );
       if (data.updateSimulation !== null) {
+        // As for goal arguments: don't let the next argument edit merge into a stale (not yet re-polled) copy.
+        simulationStore.updateValue(sim =>
+          sim?.id === simulationSetInput.id ? { ...sim, arguments: simulationArguments } : sim,
+        );
         logMessage('log', `Updated simulation ID=${simulationSetInput.id}.`);
         showSuccessToast('Simulation Updated Successfully');
       } else {

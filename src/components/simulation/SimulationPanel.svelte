@@ -19,7 +19,7 @@
     simulationDatasetsPlan,
     simulationStatus,
   } from '../../stores/simulation';
-  import { viewTogglePanel } from '../../stores/views';
+  import { viewRevealPanel } from '../../stores/views';
   import type { User } from '../../types/app';
   import type { FieldStore } from '../../types/form';
   import type { ArgumentsMap, FormParameter, ParametersMap } from '../../types/parameter';
@@ -515,7 +515,7 @@
                 on:click={() => {
                   simulationDatasetId.set(simDataset.id);
                   setQueryParam(SearchParameters.SIMULATION_DATASET_ID, `${$simulationDatasetId}`);
-                  viewTogglePanel({ state: true, type: 'right', update: { rightComponentTop: 'PlanMetadataPanel' } });
+                  viewRevealPanel({ rightComponentTop: 'PlanMetadataPanel' }, 'right');
                 }}
                 on:cancel={onCancelSimulation}
               />

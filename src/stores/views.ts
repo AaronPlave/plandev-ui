@@ -12,7 +12,15 @@ import type {
   TimelineItemMetadata,
   TimelineItemType,
 } from '../types/timeline';
-import type { View, ViewGrid, ViewGridSection, ViewSlim, ViewTable, ViewToggleEvent } from '../types/view';
+import type {
+  View,
+  ViewGrid,
+  ViewGridSection,
+  ViewSlim,
+  ViewTable,
+  ViewToggleEvent,
+  ViewToggleType,
+} from '../types/view';
 import { getTarget } from '../utilities/generic';
 import gql from '../utilities/gql';
 import {
@@ -30,7 +38,7 @@ import {
   isLineLayer,
   isXRangeLayer,
 } from '../utilities/timeline';
-import { createColumnSizes, createRowSizes, parseColumnSizes } from '../utilities/view';
+import { createColumnSizes, createRowSizes, getGridReveal, parseColumnSizes } from '../utilities/view';
 import { gqlSubscribable } from './subscribable';
 
 /* Subscriptions. */
@@ -252,6 +260,25 @@ export function viewTogglePanel(event: ViewToggleEvent) {
         break;
       }
     }
+  }
+}
+
+/**
+ * Implicit navigation, for side effects of selecting/inspecting something (as opposed to an explicit
+ * "open this panel" action, which uses viewTogglePanel). Never displaces a panel the user has in the layout:
+ * no-op if the component is already visible or its slot holds a user panel; swaps a detail panel in place;
+ * shows a hidden slot only when a toggle `type` is given.
+ */
+export function viewRevealPanel(update: Partial<ViewGrid>, type?: ViewToggleType) {
+  const grid = get(view)?.definition?.plan?.grid;
+  if (!grid) {
+    return;
+  }
+  const reveal = getGridReveal(grid, update);
+  if (reveal === 'show' && type) {
+    viewTogglePanel({ state: true, type, update });
+  } else if (reveal !== 'none') {
+    viewUpdateGrid(update);
   }
 }
 
